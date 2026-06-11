@@ -467,10 +467,20 @@ def _serialize_payload(event: str, kwargs: Dict[str, Any]) -> str:
     """Render the stdin JSON payload.  Unserialisable values are
     stringified via ``default=str`` rather than dropped."""
     extras = {k: v for k, v in kwargs.items() if k not in _TOP_LEVEL_PAYLOAD_KEYS}
+    # Carry the agent's LOGICAL session cwd (session contextvar -> TERMINAL_CWD ->
+    # os.getcwd()), not the process launch dir.  resolve_agent_cwd() runs in-context
+    # here -- synchronously inside invoke_hook, before any hook subprocess is spawned
+    # -- so the per-session _SESSION_CWD contextvar is still in scope (a spawned
+    # subprocess could never see it).  Fail-safe: any failure falls back to the prior
+    # Path.cwd() behavior so a hook payload is always produced.
     try:
-        cwd = str(Path.cwd())
-    except OSError:
-        cwd = ""
+        from agent.runtime_cwd import resolve_agent_cwd
+        cwd = str(resolve_agent_cwd())
+    except Exception:
+        try:
+            cwd = str(Path.cwd())
+        except OSError:
+            cwd = ""
     payload = {
         "hook_event_name": event,
         "tool_name": kwargs.get("tool_name"),
