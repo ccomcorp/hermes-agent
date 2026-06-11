@@ -8,6 +8,7 @@ export const ARTIFACTS_ROUTE = '/artifacts'
 export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
+export const KANBAN_ROUTE = '/kanban'
 
 export type AppView =
   | 'agents'
@@ -15,6 +16,7 @@ export type AppView =
   | 'chat'
   | 'command-center'
   | 'cron'
+  | 'kanban'
   | 'messaging'
   | 'profiles'
   | 'settings'
@@ -25,6 +27,7 @@ export type AppRouteId =
   | 'artifacts'
   | 'command-center'
   | 'cron'
+  | 'kanban'
   | 'messaging'
   | 'new'
   | 'profiles'
@@ -45,6 +48,7 @@ export const APP_ROUTES = [
   { id: 'messaging', path: MESSAGING_ROUTE, view: 'messaging' },
   { id: 'artifacts', path: ARTIFACTS_ROUTE, view: 'artifacts' },
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
+  { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' }
 ] as const satisfies readonly AppRoute[]

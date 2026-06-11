@@ -278,16 +278,49 @@ export const slateTheme: DesktopTheme = {
   }
 }
 
+/** Warm paper and ink -- editorial minimalism with terracotta accents. */
+export const editorialTheme: DesktopTheme = {
+  name: 'editorial',
+  label: 'Editorial',
+  description: 'Warm paper and ink with terracotta accents',
+  colors: {
+    background: '#F5F1EA', foreground: '#161513', card: '#FFFFFF', cardForeground: '#161513',
+    muted: '#EBE5D8', mutedForeground: '#87867F', popover: '#FFFFFF', popoverForeground: '#161513',
+    primary: '#B3471A', primaryForeground: '#F5F1EA', secondary: '#F0D8C5', secondaryForeground: '#3A3833',
+    accent: '#E3DACC', accentForeground: '#3D3D3A', border: '#D1CFC5', input: '#F0EEE6',
+    ring: '#B3471A', midground: '#B3471A', composerRing: '#B3471A',
+    destructive: '#B04A4A', destructiveForeground: '#FFFFFF',
+    sidebarBackground: '#EBE5D8', sidebarBorder: '#D1CFC5',
+    userBubble: '#F0D8C5', userBubbleBorder: '#D1CFC5'
+  },
+  darkColors: {
+    background: '#161513', foreground: '#F5F1EA', card: '#1F1D1B', cardForeground: '#F5F1EA',
+    muted: '#2A2825', mutedForeground: '#87867F', popover: '#1F1D1B', popoverForeground: '#F5F1EA',
+    primary: '#D97757', primaryForeground: '#161513', secondary: '#3A3833', secondaryForeground: '#D1CFC5',
+    accent: '#2A2825', accentForeground: '#EBE5D8', border: '#3A3833', input: '#2A2825',
+    ring: '#D97757', midground: '#D97757', composerRing: '#D97757',
+    destructive: '#B04A4A', destructiveForeground: '#F5F1EA',
+    sidebarBackground: '#121110', sidebarBorder: '#2A2825',
+    userBubble: '#2A2825', userBubbleBorder: '#3A3833'
+  },
+  typography: {
+    fontSans: SYSTEM_SANS,
+    fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+    fontUrl: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap'
+  }
+}
+
 export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   nous: nousTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,
   cyberpunk: cyberpunkTheme,
-  slate: slateTheme
+  slate: slateTheme,
+  editorial: editorialTheme
 }
 
 export const BUILTIN_THEME_LIST = Object.values(BUILTIN_THEMES)
 
 /** Skin used when nothing is persisted or the persisted name is retired. */
-export const DEFAULT_SKIN_NAME = 'nous'
+export const DEFAULT_SKIN_NAME = 'editorial'
