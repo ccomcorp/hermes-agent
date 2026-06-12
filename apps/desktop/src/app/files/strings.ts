@@ -1,8 +1,11 @@
 // Local, English-only user-facing strings for the Files view.
 //
-// Per the parallel-port contract these stay LOCAL to the feature dir — the
-// wiring step folds them into the shared locale files. Keep them here so this
-// feature never edits `src/i18n/*`.
+// DECISION (2026-06-11): kept LOCAL on purpose — do NOT fold into the shared
+// i18n locales (src/i18n/*). English-only deployment, so the multi-language
+// catalog adds nothing here; keeping this text out of the shared locale files
+// (which upstream hermes-agent edits constantly) keeps the AIOS fork delta
+// shallow and avoids merge conflicts on upstream updates. Fold into useI18n()
+// only if real multi-language support is needed.
 
 export const FILES_STRINGS = {
   title: 'Files',

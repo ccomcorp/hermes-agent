@@ -1,10 +1,12 @@
 /**
  * Local, English-only strings for the Channels feature.
  *
- * Per the desktop port convention these live beside the feature instead of in
- * the shared i18n locale files (touching those serially conflicts with parallel
- * ports). The wiring step can fold these into `useI18n()` later; the keys here
- * are the canonical source for that migration.
+ * DECISION (2026-06-11): kept LOCAL on purpose — do NOT fold into the shared
+ * i18n locales (src/i18n/*). This is an English-only deployment, so the
+ * multi-language catalog adds nothing here, and keeping this text out of the
+ * shared locale files (which upstream hermes-agent edits constantly) keeps the
+ * AIOS fork delta shallow and avoids merge conflicts when pulling upstream
+ * updates. Only fold into useI18n() if real multi-language support is needed.
  */
 export const channelsStrings = {
   title: 'Channels',

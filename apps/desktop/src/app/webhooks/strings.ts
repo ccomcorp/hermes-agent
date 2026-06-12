@@ -1,6 +1,11 @@
-// Local English strings for the Webhooks feature. Per the desktop port rules we
-// keep these in-feature (not in the shared i18n locales) so parallel ports don't
-// collide on locale files. The wiring step can lift these into i18n later.
+// Local, English-only strings for the Webhooks feature.
+//
+// DECISION (2026-06-11): kept LOCAL on purpose — do NOT fold into the shared
+// i18n locales (src/i18n/*). English-only deployment, so the multi-language
+// catalog adds nothing here; keeping this text out of the shared locale files
+// (which upstream hermes-agent edits constantly) keeps the AIOS fork delta
+// shallow and avoids merge conflicts on upstream updates. Fold into useI18n()
+// only if real multi-language support is needed.
 export const WEBHOOKS_STRINGS = {
   title: 'Webhooks',
   search: 'Search subscriptions',
