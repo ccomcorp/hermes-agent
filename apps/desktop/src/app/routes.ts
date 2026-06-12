@@ -9,30 +9,48 @@ export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
 export const KANBAN_ROUTE = '/kanban'
+export const PAIRING_ROUTE = '/pairing'
+export const WEBHOOKS_ROUTE = '/webhooks'
+export const PLUGINS_ROUTE = '/plugins'
+export const FILES_ROUTE = '/files'
+export const CHANNELS_ROUTE = '/channels'
+export const SYSTEM_ROUTE = '/system'
 
 export type AppView =
   | 'agents'
   | 'artifacts'
+  | 'channels'
   | 'chat'
   | 'command-center'
   | 'cron'
+  | 'files'
   | 'kanban'
   | 'messaging'
+  | 'pairing'
+  | 'plugins'
   | 'profiles'
   | 'settings'
   | 'skills'
+  | 'system'
+  | 'webhooks'
 
 export type AppRouteId =
   | 'agents'
   | 'artifacts'
+  | 'channels'
   | 'command-center'
   | 'cron'
+  | 'files'
   | 'kanban'
   | 'messaging'
   | 'new'
+  | 'pairing'
+  | 'plugins'
   | 'profiles'
   | 'settings'
   | 'skills'
+  | 'system'
+  | 'webhooks'
 
 export interface AppRoute {
   id: AppRouteId
@@ -50,7 +68,13 @@ export const APP_ROUTES = [
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
   { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
-  { id: 'agents', path: AGENTS_ROUTE, view: 'agents' }
+  { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },
+  { id: 'pairing', path: PAIRING_ROUTE, view: 'pairing' },
+  { id: 'webhooks', path: WEBHOOKS_ROUTE, view: 'webhooks' },
+  { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
+  { id: 'files', path: FILES_ROUTE, view: 'files' },
+  { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
+  { id: 'system', path: SYSTEM_ROUTE, view: 'system' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))
