@@ -130,6 +130,9 @@ const PluginsView = lazy(async () => ({ default: (await import('./plugins')).Plu
 const FilesView = lazy(async () => ({ default: (await import('./files')).FilesView }))
 const ChannelsView = lazy(async () => ({ default: (await import('./channels')).ChannelsView }))
 const SystemView = lazy(async () => ({ default: (await import('./system')).SystemView }))
+const ConfigView = lazy(async () => ({ default: (await import('./config')).ConfigView }))
+const LogsView = lazy(async () => ({ default: (await import('./logs')).LogsView }))
+const ModelsView = lazy(async () => ({ default: (await import('./models')).ModelsView }))
 const MessagingView = lazy(async () => ({ default: (await import('./messaging')).MessagingView }))
 const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
@@ -1102,6 +1105,30 @@ export function DesktopController() {
               </Suspense>
             }
             path="system"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <ConfigView setStatusbarItemGroup={setStatusbarItemGroup} />
+              </Suspense>
+            }
+            path="config"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <LogsView setStatusbarItemGroup={setStatusbarItemGroup} />
+              </Suspense>
+            }
+            path="logs"
+          />
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <ModelsView setStatusbarItemGroup={setStatusbarItemGroup} />
+              </Suspense>
+            }
+            path="models"
           />
           <Route element={null} path="cron" />
           <Route element={null} path="profiles" />

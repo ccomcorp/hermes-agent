@@ -15,6 +15,10 @@ export const PLUGINS_ROUTE = '/plugins'
 export const FILES_ROUTE = '/files'
 export const CHANNELS_ROUTE = '/channels'
 export const SYSTEM_ROUTE = '/system'
+// AIOS Track-B panels (Wave 2b)
+export const CONFIG_ROUTE = '/config'
+export const LOGS_ROUTE = '/logs'
+export const MODELS_ROUTE = '/models'
 
 export type AppView =
   | 'agents'
@@ -22,10 +26,13 @@ export type AppView =
   | 'channels'
   | 'chat'
   | 'command-center'
+  | 'config'
   | 'cron'
   | 'files'
   | 'kanban'
+  | 'logs'
   | 'messaging'
+  | 'models'
   | 'pairing'
   | 'plugins'
   | 'profiles'
@@ -39,10 +46,13 @@ export type AppRouteId =
   | 'artifacts'
   | 'channels'
   | 'command-center'
+  | 'config'
   | 'cron'
   | 'files'
   | 'kanban'
+  | 'logs'
   | 'messaging'
+  | 'models'
   | 'new'
   | 'pairing'
   | 'plugins'
@@ -74,7 +84,10 @@ export const APP_ROUTES = [
   { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
   { id: 'files', path: FILES_ROUTE, view: 'files' },
   { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
-  { id: 'system', path: SYSTEM_ROUTE, view: 'system' }
+  { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
+  { id: 'config', path: CONFIG_ROUTE, view: 'config' },
+  { id: 'logs', path: LOGS_ROUTE, view: 'logs' },
+  { id: 'models', path: MODELS_ROUTE, view: 'models' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))

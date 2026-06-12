@@ -1,0 +1,124 @@
+/**
+ * Config — full-width main-pane view for Hermes agent configuration.
+ *
+ * Chassis-fidelity port (AIOS `aios` fork): this is the standalone, full-width
+ * pane counterpart to the existing Settings → Config tabs. It does NOT
+ * re-implement config logic — it REUSES the settings feature's `SECTIONS`
+ * (section/keys map) and `ConfigSettings` (load → edit → debounced autosave via
+ * the `getHermesConfig*`/`saveHermesConfig` IPC) so there is a single source of
+ * truth for config behaviour. This pane only owns the full-width chrome and the
+ * in-pane section tab nav.
+ *
+ * Skeleton/props mirror `app/system/index.tsx` (the canonical full-width pane):
+ *  - same `{ setStatusbarItemGroup }` prop signature (system/index.tsx:139-143)
+ *  - same root `<section className="flex h-full min-w-0 flex-col overflow-hidden
+ *    bg-(--ui-chat-surface-background)">` shell (system/index.tsx:524-529)
+ *  - same `PAGE_INSET_X` gutter + titlebar-offset scroll body.
+ *
+ * Section selection is persisted in the URL via `useRouteEnumParam` (the chassis
+ * convention used by Settings, so the active section survives a refresh).
+ */
+import type * as React from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+
+import { Codicon } from '@/components/ui/codicon'
+import { cn } from '@/lib/utils'
+
+import { useRouteEnumParam } from '../hooks/use-route-enum-param'
+import { PAGE_INSET_X } from '../layout-constants'
+import { ConfigSettings } from '../settings/config-settings'
+import { SECTIONS } from '../settings/constants'
+import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
+
+import { configStrings as s } from './strings'
+
+interface ConfigViewProps extends React.ComponentProps<'section'> {
+  setStatusbarItemGroup?: SetStatusbarItemGroup
+  /** Re-fetch config-dependent chrome (e.g. model badges) after an autosave. */
+  onConfigSaved?: () => void
+  /** Notify the host when the main model changes (mirrors Settings wiring). */
+  onMainModelChanged?: (provider: string, model: string) => void
+}
+
+export function ConfigView({
+  setStatusbarItemGroup,
+  onConfigSaved,
+  onMainModelChanged,
+  className,
+  ...props
+}: ConfigViewProps) {
+  const sectionIds = useMemo(() => SECTIONS.map(section => section.id), [])
+  const [activeSectionId, setActiveSectionId] = useRouteEnumParam(
+    'section',
+    sectionIds,
+    sectionIds[0] ?? 'model'
+  )
+
+  // ConfigSettings owns a hidden file input for config import; this pane has no
+  // import affordance, but the prop is required, so pass a real ref.
+  const importInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    setStatusbarItemGroup?.('config', [])
+
+    return () => setStatusbarItemGroup?.('config', [])
+  }, [setStatusbarItemGroup])
+
+  return (
+    <section
+      {...props}
+      className={cn('flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)', className)}
+    >
+      {/* ── Header / section tab nav ─────────────────────────────────── */}
+      <div
+        className={cn(
+          'shrink-0 border-b border-(--ui-stroke-tertiary) pt-[calc(var(--titlebar-height)+0.75rem)]',
+          PAGE_INSET_X
+        )}
+      >
+        <div className="mx-auto w-full max-w-4xl">
+          <div className="flex items-center gap-2 pb-3">
+            <Codicon className="text-muted-foreground" name="settings-gear" size="1rem" />
+            <h1 className="text-[length:var(--conversation-text-font-size)] font-medium text-foreground">
+              {s.title}
+            </h1>
+            <span className="text-xs text-muted-foreground">{s.subtitle}</span>
+          </div>
+          <nav aria-label={s.sectionNavLabel} className="-mb-px flex flex-wrap gap-1 pb-1">
+            {SECTIONS.map(section => {
+              const Icon = section.icon
+              const active = section.id === activeSectionId
+
+              return (
+                <button
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[length:var(--conversation-text-font-size)] transition',
+                    active
+                      ? 'bg-(--ui-bg-tertiary) text-foreground'
+                      : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
+                  )}
+                  key={section.id}
+                  onClick={() => setActiveSectionId(section.id)}
+                  type="button"
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span className="min-w-0 truncate">{section.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+        </div>
+      </div>
+
+      {/* ── Scrollable section body (reused ConfigSettings) ──────────── */}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <ConfigSettings
+          activeSectionId={activeSectionId}
+          importInputRef={importInputRef}
+          onConfigSaved={onConfigSaved}
+          onMainModelChanged={onMainModelChanged}
+        />
+      </div>
+    </section>
+  )
+}
