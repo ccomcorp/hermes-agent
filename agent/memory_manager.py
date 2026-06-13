@@ -412,6 +412,27 @@ class MemoryManager:
 
         self._submit_background(_run)
 
+    def confirm_prefetch_consumed(self, session_id: str = "") -> None:
+        """Tell providers the prefetched context was actually injected into the dispatched
+        prompt this turn (D4-A consumed-at-injection).
+
+        Capability-guarded and provider-agnostic: only providers exposing
+        ``confirm_prefetch_consumed`` are notified (the composite); builtin/honcho and any
+        other provider without the method are a clean no-op. Runs inline on the turn thread
+        right after injection — it is a fast local mark, not network work.
+        """
+        for provider in self._providers:
+            fn = getattr(provider, "confirm_prefetch_consumed", None)
+            if not callable(fn):
+                continue
+            try:
+                fn(session_id=session_id)
+            except Exception as e:
+                logger.debug(
+                    "Memory provider '%s' confirm_prefetch_consumed failed: %s",
+                    provider.name, e,
+                )
+
     # -- Sync ----------------------------------------------------------------
 
     @staticmethod

@@ -1967,6 +1967,41 @@ def _recover_tasks_from_json_string(
     return parsed, None
 
 
+def _apply_predelegation_recall(parent_agent, task_list):
+    """D3b (C2 knowledge-gate): recall pre-delegation lessons for each task via the PARENT's
+    composite provider. Returns ``(augmented_contexts, receipts, comp)``:
+      - augmented_contexts: {task_index: context_with_block_prepended}
+      - receipts:           {task_index: receipt_id}
+      - comp:               the composite provider (or None)
+
+    Does NOT mutate ``task_list`` (R2-7 — avoids double-prepend on list reuse) and does NOT
+    mark consumed (R2-2 — the caller confirms AFTER the child is successfully built, so a
+    build failure cannot over-count AC1). Clean no-op (``{}, {}, None``) unless a 'composite'
+    provider exposing ``recall_for`` is registered (builtin/honcho/none/Mock-without-recall →
+    skipped). Robust against odd parent shapes: a recall that raises (e.g. a Mock returning a
+    non-tuple) is logged and skipped, never crashes the delegation.
+    """
+    mgr = getattr(parent_agent, "_memory_manager", None)
+    comp = mgr.get_provider("composite") if (mgr is not None and hasattr(mgr, "get_provider")) else None
+    if comp is None or not hasattr(comp, "recall_for"):
+        return {}, {}, None
+    augmented, receipts = {}, {}
+    for i, t in enumerate(task_list):
+        if not isinstance(t, dict):
+            continue
+        try:
+            block, rid = comp.recall_for("pre-delegation", t.get("goal", ""))
+        except Exception as exc:
+            logger.debug("pre-delegation recall failed: %s", exc)
+            continue
+        if not block:
+            continue  # miss: a kind='miss' receipt was already written; nothing to inject
+        existing = t.get("context") or ""
+        augmented[i] = (block + "\n\n" + existing) if existing else block
+        receipts[i] = rid
+    return augmented, receipts, comp
+
+
 def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
@@ -2087,6 +2122,13 @@ def delegate_task(
         if not task.get("goal", "").strip():
             return tool_error(f"Task {i} is missing a 'goal'.")
 
+    # D3b: C2 pre-delegation knowledge-gate. Recall lessons per task into a per-index map
+    # (NOT mutating task_list — R2-7) WITHOUT consuming. The receipt is confirmed AFTER the
+    # child is successfully built (R2-2), so a build failure does not over-count AC1.
+    _predeleg_ctx, _predeleg_receipts, _predeleg_comp = _apply_predelegation_recall(
+        parent_agent, task_list
+    )
+
     overall_start = time.monotonic()
     results = []
 
@@ -2114,7 +2156,7 @@ def delegate_task(
             child = _build_child_agent(
                 task_index=i,
                 goal=t["goal"],
-                context=t.get("context"),
+                context=_predeleg_ctx.get(i, t.get("context")),
                 toolsets=t.get("toolsets") or toolsets,
                 model=creds["model"],
                 max_iterations=effective_max_iter,
@@ -2137,6 +2179,15 @@ def delegate_task(
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
             children.append((i, t, child))
+            # D3b (R2-2): the recalled block is now baked into this child's prompt — confirm
+            # consumption AFTER a successful build, not at recall time. A build that raised
+            # above would skip this, leaving the lesson un-consumed (no AC1 over-count).
+            _rid = _predeleg_receipts.pop(i, None)
+            if _rid is not None and _predeleg_comp is not None:
+                try:
+                    _predeleg_comp.confirm_consumed(_rid)
+                except Exception as exc:
+                    logger.debug("pre-delegation confirm_consumed failed: %s", exc)
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
         _model_tools._last_resolved_tool_names = _parent_tool_names

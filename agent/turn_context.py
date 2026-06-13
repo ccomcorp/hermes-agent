@@ -369,7 +369,14 @@ def build_turn_context(
     if agent._memory_manager:
         try:
             _query = original_user_message if isinstance(original_user_message, str) else ""
-            ext_prefetch_cache = agent._memory_manager.prefetch_all(_query) or ""
+            # Pass the real session_id (R2-1/AC-R1): the composite stashes the prefetch
+            # receipt under this key and conversation_loop's confirm_prefetch_consumed pops
+            # under the SAME key (agent.session_id). Omitting it made prefetch key on the
+            # provider's last-initialized self._session_id while confirm keyed on the real id
+            # -> gateway cross-session receipt corruption + AC1=0 on a shared cached provider.
+            ext_prefetch_cache = agent._memory_manager.prefetch_all(
+                _query, session_id=getattr(agent, "session_id", "") or ""
+            ) or ""
         except Exception:
             pass
 

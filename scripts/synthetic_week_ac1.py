@@ -193,15 +193,22 @@ def run_synthetic_week(db_path: str = ":memory:") -> dict:
     # Days 3-7 — work turns recall the fork lessons at a real call site (prefetch =
     # recall + receipt + mark_consumed). Each hits exactly one distinct fork lesson.
     fork_hits = 0
+    # D4-A: prefetch no longer self-marks consumed — it stashes the receipt and the chassis
+    # confirms AFTER injecting the block. Model that here: prefetch (stash) -> confirm
+    # (inject), once per "turn", so circulation counts only blocks that reached the prompt.
     for _name, _args, query in _FORK_WRITES:
         ctx = comp.prefetch(query)
         if ctx:
             fork_hits += 1
+            comp.confirm_prefetch_consumed()  # block injected into this turn's prompt
 
     # Negative control: a turn recalls ONLY the migrated seed (consumed, but excluded).
     seed_ctx = comp.prefetch(_SEED_QUERY)
+    if seed_ctx:
+        comp.confirm_prefetch_consumed()
 
     # A turn whose query matches nothing — the miss must be recorded, not swallowed.
+    # (No confirm: a miss stashes no receipt and injects nothing.)
     miss_ctx = comp.prefetch(_MISS_QUERY)
 
     report = ExperienceHealth(store).circulation_report()

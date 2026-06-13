@@ -327,16 +327,123 @@ visible vs. a genuinely tool-less fork.
 - ✅ **D4 Option B (honest naming) DONE:** dev-instance docstrings + harness now state
   "consumed == recalled-block-injected, NOT read-by-model" (the model-influence measure is
   deferred). No dev-instance code claims "consumed = used".
-- ⏸️ **D4 Option A + D3b — DEFERRED with gate-backed rationale (recommend a separate scoped change):**
-  The elicitation reframed both. D3b (pre-delegation hook) is the C2 knowledge-gate *feature*, NOT
-  an AC1 prerequisite — D3a proved AC1 moves via the built `prefetch`. D4 Option A (defer
-  `mark_consumed` to a post-injection `confirm_consumed`) is, per First-Principles, a *marginally
-  better proxy* (injected ≠ read), and per Pre-Mortem/Assumption it requires a NEW call site in
-  `conversation_loop.py` that runs for **ALL** providers (builtin/honcho), capability-guarded —
-  i.e. a shared-chassis change shipped for a feature that is **dormant** until the config flip.
-  Recommendation: build D3b + D4-A as a dedicated, separately-reviewed change (with the integration
-  test driving a *dropped* injection), not folded into this close-out — the risk/payoff while
-  dormant does not justify bundling them with the low-risk remediations above.
+- ✅ **D4 Option A + D3b — BUILT (round 2, 2026-06-13) to the REMEDIATION SPEC + ACs, after a
+  post-implementation `/advanced-elicitation` gate (4 agents) caught the draft's defects.** Carrier =
+  Option A (real `session_id` passed at `turn_context.py:372`; user-approved). Reconciled the draft to
+  AC-R1..R7:
+  - **AC-R1 / R2-1 / R2-6:** `prefetch_all` now receives the real `session_id`; stash key == confirm key.
+  - **AC-R2 / R2-2:** D3b confirms AFTER successful child build (`delegate_tool.py` build loop), not at
+    recall time → no over-count on build failure.
+  - **AC-R3:** D4-A inject->confirm extracted to the testable `conversation_loop.inject_turn_context`;
+    integration test `tests/run_agent/test_inject_turn_context.py` drives the REAL seam (injected→moves;
+    assemble-but-drop→no move) via the live manager->provider path, no direct `confirm_*` call.
+  - **AC-R4 / R2-7 / R2-6:** D3b hook extracted to `delegate_tool._apply_predelegation_recall` (no
+    task_list mutation, no double-prepend); tested in `tests/tools/test_predelegation_recall.py`
+    (augment, no-composite no-op, Mock-parent robustness).
+  - **AC-R5 / R2-9:** `_pending_prefetch` freed on `on_session_switch`/`on_session_end`; per-turn
+    overwrite bounds within a session.
+  - **AC-R7 / R2-11 / R2-12:** semantic-fork note in `prefetch` docstring; this status reconciled.
+  - **Residual (documented, not blocking):** R2-8 (recall under the store RLock + rerank on the
+    delegation hot path) is AIOS-engine behavior (read-only) — accepted; pre-delegation recall is
+    bounded (limit + one query/task). R2-10 (under-count via an alternate injection route) is latent
+    and documented as a single-route invariant in `inject_turn_context`.
+  - **STILL RUNG-2 ONLY:** all of the above is verified by component + real-chassis-seam tests, NOT a
+    live agent run. The config flip + a live session (rung 3) remain the true end-to-end proof.
+- ⛔ **#7 (surface `last_reward_dW_total`): BLOCKED-ON-TASK-3 + NEEDS-AIOS.** No reward path exists
+  (brain=None) so there is nothing to surface, and the health-view surface lives in the read-only AIOS
+  package. NOT doable this cycle; NOT a pre-flip item (it gates on the Task-3 brain adapter).
+- ⛔ **AC6 (NeuroLinked recall byte-identical with composite in front): VACUOUS under brain=None** —
+  the composite does not front the NeuroLinked MCP server in this build. Re-activate as a real
+  assertion when the Task-3 brain adapter lands.
+
+---
+
+## ROUND-2 ELICITATION (post-implementation, 2026-06-13) — REMEDIATION SPEC (awaiting sign-off)
+
+The D3b/D4-A draft was implemented THEN reviewed (wrong order). A 4-agent `/advanced-elicitation`
+(Dependency-Chain, Failure-Mode, Knowledge-Gap, Pre-Mortem) found the issues below. The draft code is
+UNCOMMITTED — treat it as a draft to reconcile against THIS spec after sign-off. **No further code until
+acceptance criteria are signed off.**
+
+### Meta-finding (why this matters)
+The original POST-ELICITATION DECISIONS already prescribed (a) the carrier = `TurnContext.ext_prefetch_receipt_id`
+and (b) an INTEGRATION test through `turn_context -> conversation_loop`. The draft deviated on BOTH —
+provider-stash carrier + provider-level test only — and those exact deviations are findings R2-1 and R2-3/4.
+Spec-first would have prevented them.
+
+### Findings ledger (severity-ordered; convergence in parens)
+- **R2-1 [Sev2, primary, Pre-Mortem+Failure-Mode] Session-key mismatch.** `turn_context.py:372` calls
+  `prefetch_all(_query)` with NO `session_id` -> provider stashes under `self._session_id`; confirm
+  (`conversation_loop.py:638`) uses the real `agent.session_id`. Gateway (shared cached composite) ->
+  cross-session receipt corruption + AC1 reads 0. Root = the carrier spec-drift (R2-6).
+- **R2-2 [Sev2, Failure-Mode] D3b confirm-before-build over-count.** `delegate_tool.py:2113` confirms the
+  receipt BEFORE `_build_child_agent` (`:2141`); if the build raises (bad creds/model/toolset), the lesson
+  is consumed but never dispatched -> AC1 over-count (the "looks like it worked" failure D4-A exists to
+  prevent, re-introduced on the D3b path).
+- **R2-3 [Sev2, Knowledge-Gap] D4-A acceptance unmet.** The chassis injection->confirm gate
+  (`conversation_loop.py:615-640`) is covered by code-reading only; the existing test calls
+  `confirm_prefetch_consumed` directly, which the D4 acceptance explicitly forbids. ZERO tests execute the
+  real gate (esp. the assemble-but-drop case ii).
+- **R2-4 [Sev2, Knowledge-Gap] D3b acceptance unmet.** The `delegate_tool.py` hook (context augmentation,
+  capability-guard, miss-skip) has NO test. Provider primitives are tested, the hook is not.
+- **R2-5 [Sev2, Knowledge-Gap] Flip-risk: real chain untested.** Tests inject a `:memory:` store; the real
+  `prefetch_all -> conversation_loop confirm` chain and the on-disk lazy `initialize()` open are unexercised
+  at the flip. Riskiest unexercised path.
+- **R2-6 [Sev3, Knowledge-Gap] Carrier spec-drift.** Stash is on the provider dict (`provider.py:122/232/239`),
+  not the spec's `TurnContext` carrier. Enabler of R2-1.
+- **R2-7 [Sev3, Pre-Mortem] D3b in-place `task["context"]` mutation.** `delegate_tool.py:2111` mutates the
+  caller's task dict -> double-prepend if the same `task_list` is reused/retried.
+- **R2-8 [Sev3, Pre-Mortem] recall_for under the store RLock on the delegation hot path** (FTS + embedder
+  rerank inside `store.recall`'s lock) -> latency / contention with mem-sync writes.
+- **R2-9 [Sev4 bounded, Failure-Mode] Stash has no eviction / session-end cleanup.** Bounded by distinct
+  session_ids (not per-turn), but grows monotonically over a long-lived gateway.
+- **R2-10 [Sev3, Failure-Mode latent] Under-count via alternate injection route** (`_mem_injected` tracks
+  only `_fenced`). Latent today; document the single-route invariant.
+- **R2-11 [Sev3, Dependency-Chain] Semantic-fork doc gap.** Hermes `prefetch` defers consume; AIOS base
+  self-consumes (and AIOS tests assert that). Document the divergence Hermes-side (no AIOS edit).
+- **R2-12 [Sev3, Knowledge-Gap] Spec-status drift.** This spec marked D3b "DEFERRED" but it was built — reconcile.
+- **#7 (last_reward_dW_total): [Sev3] BLOCKED-ON-TASK-3 + NEEDS-AIOS** — no reward path exists (brain=None),
+  and the surface lives in read-only AIOS health. NOT doable this cycle; NOT pre-flip. Mark blocked.
+- **AC6: [Sev4] vacuous under brain=None** (composite does not front the NeuroLinked MCP). Re-activate at Task-3.
+- **FALSE ALARMS (no action):** every-turn regression (double-guarded); multi-call confirm (idempotent +
+  DISTINCT dedup); lazy-store None-deref (init precedes turn); compression/branch re-inject.
+
+### Contract / seam map (the cross-seam invariants that MUST hold — the part the draft skipped)
+1. The prefetch STASH key and the confirm POP key MUST be the SAME identifier, sourced from the SAME place
+   (the per-turn session id), so they never diverge across the single shared (gateway-cached) provider.
+2. A receipt is consumed IFF its recalled block actually reached a DISPATCHED prompt — for D4-A (main turn)
+   that is post-injection in `conversation_loop`; for D3b that is AFTER the child is successfully built.
+3. The pre-delegation hook MUST NOT mutate the caller's task objects in a way that compounds on reuse.
+4. Any new per-turn/per-session state MUST have a defined lifecycle (created where, freed where).
+5. The chassis confirm call MUST be a clean no-op for non-composite providers (capability-guard) — verified.
+
+### Acceptance criteria (sign-off targets; tests assert these BEFORE the code is considered done)
+- **AC-R1 (session key):** in a simulated two-session shared-provider scenario, session A's confirm marks
+  ONLY A's receipt and B's marks ONLY B's; with the fix, `circulation()` is deterministic. A test drives
+  the REAL `prefetch_all(query, session_id=...)` -> confirm path (not a direct `confirm_*` call).
+- **AC-R2 (D3b build-fail):** if `_build_child_agent` raises for a task whose pre-delegation recall hit, that
+  lesson's receipt is NOT consumed (circulation does not move for the failed child).
+- **AC-R3 (D4-A integration, both cases):** a `run_conversation`-level test: (i) a normal str/user-idx turn
+  with a seeded fork lesson -> `circulation()` moves; (ii) a forced drop branch (non-str content /
+  non-current-user-idx) -> `_mem_injected` False, NO confirm, `circulation()` does NOT move. No direct
+  `confirm_*`/`mark_consumed` call in the test.
+- **AC-R4 (D3b hook):** a delegation with a composite + seeded lesson augments the child `context` AND moves
+  circulation (after build); a no-composite parent is a clean no-op leaving `context` unchanged.
+- **AC-R5 (lifecycle):** `_pending_prefetch` is freed on session end / next-turn-for-session (no monotonic
+  growth across a session's turns); a dropped/aborted turn leaves no orphaned mark.
+- **AC-R6 (no-double-prepend):** re-running the hook over the same `task_list` does not prepend the block twice.
+- **AC-R7 (docs/status):** the semantic-fork note exists Hermes-side; spec status reconciled (D3b = built);
+  #7/AC6 marked BLOCKED-ON-TASK-3.
+
+### OPEN DECISION (needs sign-off) — the R2-1/R2-6 carrier
+- **Option A (minimal, recommended):** pass `session_id=agent.session_id` at `turn_context.py:372` so stash
+  and confirm key on the SAME real session id; keep the provider dict; add session-end cleanup (R2-9). Correct
+  for the real concurrency model (distinct session_ids); does NOT change the `prefetch_all` return contract.
+- **Option B (spec-faithful):** carry the receipt id on `TurnContext` per turn (immune to any shared-state
+  race). More invasive — the receipt id must travel from prefetch back onto the TurnContext and into
+  conversation_loop; risks touching the manager/provider return contract used by all providers.
+
+---
 
 ### Implementation order (autonomous)
 1. R-batch (R1, R2, R4, R9, R3, R8, R5+R5+, R6+R6b) — low-risk cleanup + guards, TDD where it adds signal.

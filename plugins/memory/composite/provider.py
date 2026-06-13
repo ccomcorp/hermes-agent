@@ -73,7 +73,10 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
 # When the chassis is on the path, composite_provider binds the REAL
 # agent.memory_provider.MemoryProvider automatically (not the _base_shim).
 from store import ExperienceStore  # noqa: E402  (path inserted above)
-from composite_provider import CompositeMemoryProvider  # noqa: E402
+from composite_provider import (  # noqa: E402
+    CompositeMemoryProvider,
+    SESSION_START_CALL_SITE,
+)
 from backends import BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
 
 # Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
@@ -114,6 +117,9 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         )
         self._db_path = db_path
         self._agent_context = "primary"
+        # D4-A carrier: receipt id stashed by prefetch (per session), marked consumed only
+        # after the chassis confirms the block was injected into the dispatched prompt.
+        self._pending_prefetch: Dict[str, str] = {}
 
     def is_available(self) -> bool:
         """Available if a store already exists OR we know how to build one — WITHOUT opening
@@ -200,6 +206,79 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             "migrated": False,  # fork-authored — the AC1-eligible band
         }
         return self._store.append(record)
+
+    # ----- D4-A: consumed-at-injection (defer mark_consumed off prefetch) -----
+
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        """Like the base session-start prefetch, but does NOT mark the receipt consumed
+        inline (D4-A). The base marks consumed the instant prefetch returns non-empty —
+        "returned" != "the model saw it". Here we stash the receipt id (per session) and
+        the chassis calls ``confirm_prefetch_consumed`` only AFTER the block is actually
+        injected into the dispatched prompt (conversation_loop). A recalled block that is
+        assembled-but-dropped therefore never counts toward AC1.
+
+        Reuses the inherited merge/format so recall output is identical to the base — only
+        the mark timing changes. If no chassis ever confirms (e.g. a direct caller that does
+        not inject), the receipt simply stays unconsumed — recall is still recorded.
+
+        SEMANTIC FORK (R2-11): the AIOS base ``CompositeMemoryProvider.prefetch`` self-consumes
+        on return (and AIOS's own tests assert that for the base). This Hermes subclass
+        intentionally diverges to consume-at-injection, so ``circulation()`` timing differs
+        between a bare AIOS composite (recall-time) and this subclass (injection-time). Do not
+        compare circulation across the two as if identical. This is the C4/Sev-2-#8 fix.
+        """
+        store_records, receipt = self._store.recall(
+            query, call_site=SESSION_START_CALL_SITE, limit=self._recall_limit
+        )
+        merged = self._merge_dedup(
+            store_records, self._warm_cache["vault"], self._warm_cache["brain"]
+        )
+        if not merged:
+            return ""
+        self._pending_prefetch[session_id or self._session_id] = receipt["id"]
+        return self._format_context(merged)
+
+    def confirm_prefetch_consumed(self, session_id: str = "") -> bool:
+        """Mark the stashed session-start receipt consumed — called by the chassis after the
+        recalled block reaches the dispatched prompt. No-op (returns False) if there is no
+        pending receipt (e.g. the block was dropped, or already confirmed this turn)."""
+        rid = self._pending_prefetch.pop(session_id or self._session_id, None)
+        if rid is None:
+            return False
+        return bool(self._store.mark_consumed(rid))
+
+    def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, **kwargs):
+        """Free the LEAVING session's un-confirmed prefetch receipt (R2-9/AC-R5) before
+        rotating the cached id — so a session that prefetched but never confirmed (dropped
+        injection / aborted turn) does not orphan a _pending_prefetch entry."""
+        if parent_session_id:
+            self._pending_prefetch.pop(parent_session_id, None)
+        super().on_session_switch(
+            new_session_id, parent_session_id=parent_session_id, reset=reset, **kwargs
+        )
+
+    def on_session_end(self, messages) -> None:
+        """Free the current session's un-confirmed prefetch receipt at session end (R2-9)."""
+        self._pending_prefetch.pop(self._session_id, None)
+
+    # ----- D3b: pre-delegation knowledge-gate recall -----
+
+    def recall_for(self, call_site: str, query: str, *, limit: Optional[int] = None):
+        """Recall for a non-session-start call site (e.g. ``"pre-delegation"``). Returns
+        ``(formatted_block, receipt_id)``. Always emits a receipt (a miss writes a
+        ``kind='miss'`` receipt — never silent). Does NOT mark consumed; the caller confirms
+        via :meth:`confirm_consumed` once the block is placed in the dispatched prompt.
+        """
+        records, receipt = self._store.recall(
+            query, call_site=call_site, limit=limit or self._recall_limit
+        )
+        if not records:
+            return "", receipt["id"]
+        return self._format_context(self._merge_dedup(records, [], [])), receipt["id"]
+
+    def confirm_consumed(self, receipt_id: str) -> bool:
+        """Mark a specific receipt consumed (D3b: after its block reached the child prompt)."""
+        return bool(self._store.mark_consumed(receipt_id))
 
 
 def build_provider(hermes_home: str) -> HermesCompositeProvider:

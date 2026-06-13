@@ -36,8 +36,12 @@ def test_ac1_moves_via_session_start_prefetch_without_any_hook():
     )
     assert store.circulation() == 0
     ctx = comp.prefetch("zorblat lock retry")  # the REAL session-start call site
-    assert ctx  # non-empty -> hit; prefetch marked the receipt consumed
-    assert store.circulation() == 1  # numerator moved through prefetch alone
+    assert ctx  # non-empty -> hit
+    # D4-A: prefetch stashes the receipt but does NOT consume until the chassis confirms
+    # the block was injected. Model that confirm here.
+    assert store.circulation() == 0
+    comp.confirm_prefetch_consumed()
+    assert store.circulation() == 1  # numerator moved once the block was injected
 
 
 def _oracle(store):
@@ -67,13 +71,15 @@ def test_distinct_dedup_and_tombstone_after_consumption():
         "Plover cache invalidation needs an explicit flush.",
         provenance="fork:background_review:s", task_type="implementation-pattern",
     )
-    # One prefetch on the shared token hits both -> consumed -> 2 distinct.
+    # One prefetch on the shared token hits both -> inject (confirm) -> 2 distinct.
     assert comp.prefetch("plover")
+    comp.confirm_prefetch_consumed()
     assert store.circulation() == 2
     assert _oracle(store) == 2
 
-    # Re-query: same refs, no double-count (DISTINCT set over consumed hit receipts).
+    # Re-query + re-inject: same refs, no double-count (DISTINCT set over consumed hits).
     assert comp.prefetch("plover")
+    comp.confirm_prefetch_consumed()
     assert store.circulation() == 2
 
     # Tombstone one AFTER it was consumed: still counted (historical receipt; no tombstoned
@@ -82,3 +88,79 @@ def test_distinct_dedup_and_tombstone_after_consumption():
     store.forget(a)
     assert store.circulation() == 2
     assert _oracle(store) == 2
+
+
+# --- D4-A: consumed only at injection (assemble-but-drop must not count) -----------------
+
+def test_prefetch_without_confirm_does_not_consume():
+    """A recalled block that prefetch returns but the chassis NEVER injects (the
+    assemble-but-drop path) must NOT count toward circulation — that is the gameable-count
+    fix (Sev-2 #8)."""
+    store, comp = _comp()
+    comp.record_fork_lesson(
+        "Clear the zorblat lock before retrying the deploy.",
+        provenance="fork:background_review:s", task_type="workflow",
+    )
+    ctx = comp.prefetch("zorblat lock retry")  # stashes the receipt; does NOT consume
+    assert ctx
+    assert store.circulation() == 0  # not injected -> not consumed -> not counted
+
+    assert comp.confirm_prefetch_consumed() is True  # chassis injected the block
+    assert store.circulation() == 1
+    # idempotent within a turn: a second confirm finds nothing pending
+    assert comp.confirm_prefetch_consumed() is False
+    assert store.circulation() == 1
+
+
+# --- D3b: pre-delegation recall mechanism (provider methods) -----------------------------
+
+def test_recall_for_pre_delegation_then_confirm():
+    store, comp = _comp()
+    comp.record_fork_lesson(
+        "Run the grommet calibration before the swizzle stage.",
+        provenance="fork:background_review:s", task_type="implementation-pattern",
+    )
+    block, receipt_id = comp.recall_for("pre-delegation", "grommet calibration swizzle")
+    assert block and "grommet" in block.lower()
+    assert store.circulation() == 0  # recall_for does not consume on its own
+    assert comp.confirm_consumed(receipt_id) is True  # block placed in child prompt
+    assert store.circulation() == 1
+
+
+def test_recall_for_miss_writes_receipt_and_returns_empty():
+    store, comp = _comp()
+    block, receipt_id = comp.recall_for("pre-delegation", "nothing matches flibbertigibbet")
+    assert block == ""           # nothing to inject
+    assert receipt_id            # but a (miss) receipt was still written — never silent
+    rec = store.get_receipt(receipt_id)
+    assert rec is not None and rec["kind"] == "miss"
+
+
+# --- D4-A: MemoryManager delegation is capability-guarded -------------------------------
+
+def test_manager_confirm_prefetch_consumed_capability_guard():
+    from agent.memory_manager import MemoryManager
+
+    store, comp = _comp()
+    comp.record_fork_lesson(
+        "Always read a file before editing it.",
+        provenance="fork:background_review:s", task_type="workflow",
+    )
+    mgr = MemoryManager()
+    mgr.add_provider(comp)
+    comp.prefetch("read file before editing")  # stash via the provider
+
+    # A provider WITHOUT confirm_prefetch_consumed must be a clean no-op (no crash).
+    class _Dumb:
+        name = "dumb"
+
+        def is_available(self):
+            return True
+
+        def get_tool_schemas(self):
+            return []
+
+    mgr._providers.append(_Dumb())  # exercise the getattr guard over a mixed provider set
+
+    mgr.confirm_prefetch_consumed(session_id="s")  # delegates; guard skips _Dumb
+    assert store.circulation() == 1
