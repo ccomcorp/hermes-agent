@@ -1,0 +1,219 @@
+"""Composite memory provider plugin — dev-instance wiring for the AIOS experience store.
+
+This is the thin chassis-side binding described in
+``packages/memory/composite-provider/INTEGRATION.md`` (AIOS repo). The routing /
+composition engine and the store engine both live in the AIOS repo and are unit-tested
+there; nothing here re-implements them. This module only:
+
+  1. Puts the two AIOS packages on ``sys.path`` so the chassis can import them.
+  2. Subclasses ``CompositeMemoryProvider`` with ``record_fork_lesson()`` — the
+     fork-authored append seam consumed by ``agent/background_review.py`` (M1 Task 2
+     BLOCKER #2: without a fork→store write, ``store.circulation()`` has no
+     ``migrated=0`` rows to count and AC1's numerator is structurally 0).
+  3. Builds the provider with ``owns_brain=False`` — shutdown() must never close a
+     shared HTTP client it did not create.
+  4. DEFERS the ``ExperienceStore`` open to ``initialize()`` so a read-only discovery probe
+     creates no sqlite connection / no ``experience.db`` (D1).
+
+For M1 the brain and vault legs are intentionally absent (``brain=None``/``vault=None``).
+The ``sync_turn`` ack reports an absent leg as ``"skipped"`` (R9 — never a healthy-looking
+status for a leg that was never constructed). The ``"degraded"`` state applies once a real
+brain adapter is wired but NeuroLinked still returns ``dW=0`` (pre-Task-3); the real
+brain/vault adapters are a separate wiring item.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# --- 1. Put the AIOS packages on the chassis path -------------------------------------
+def _resolve_aios_package_dirs():
+    """Return ``(experience-store dir, composite-provider dir)`` or raise an ACTIONABLE
+    ``ImportError`` naming ``AIOS_PACKAGES_DIR`` when the sibling AIOS checkout is missing (R8).
+
+    Repos are siblings: ``<AIOS>/hermes-agent`` and ``<AIOS>/aios``; resolve relative to this
+    file (``parents[3]`` == hermes-agent), overridable via ``AIOS_PACKAGES_DIR`` for a deeper
+    checkout / symlink. A bare ``ModuleNotFoundError`` with no hint is the failure mode we
+    refuse to ship — without this, an absent or mis-located AIOS dir surfaces only as an
+    opaque import error.
+    """
+    env = os.environ.get("AIOS_PACKAGES_DIR")
+    root = (
+        Path(env)
+        if env
+        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "memory"
+    )
+    store_dir = root / "experience-store"
+    composite_dir = root / "composite-provider"
+    missing = [str(d) for d in (store_dir, composite_dir) if not d.is_dir()]
+    if missing:
+        raise ImportError(
+            "composite memory provider requires the AIOS packages, not found at: "
+            f"{missing}. Set AIOS_PACKAGES_DIR to the directory containing "
+            "'composite-provider' and 'experience-store' (a sibling AIOS checkout beside "
+            f"hermes-agent). AIOS_PACKAGES_DIR={env or 'unset (used sibling-path default)'}"
+        )
+    return store_dir, composite_dir
+
+
+_STORE_DIR, _COMPOSITE_DIR = _resolve_aios_package_dirs()
+for _d in (_STORE_DIR, _COMPOSITE_DIR):
+    _s = str(_d)
+    if _s not in sys.path:
+        sys.path.insert(0, _s)
+
+# Flat imports (the AIOS packages live in hyphenated dirs, so the package dir itself is
+# placed on sys.path and the modules import flat — the convention their own tests use).
+# When the chassis is on the path, composite_provider binds the REAL
+# agent.memory_provider.MemoryProvider automatically (not the _base_shim).
+from store import ExperienceStore  # noqa: E402  (path inserted above)
+from composite_provider import CompositeMemoryProvider  # noqa: E402
+from backends import BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
+
+# Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
+# keeps a full SKILL.md body from bloating the FTS index while preserving recall keys.
+_LESSON_MAX_CHARS = 2000
+
+
+class HermesCompositeProvider(CompositeMemoryProvider):
+    """CompositeMemoryProvider + the dev-instance fork-authored append seam.
+
+    ``record_fork_lesson`` is the ONLY addition. It writes a deliberately-reviewed,
+    fork-authored lesson (``source='reviewed'``, ``migrated=False``) to the experience
+    store so it becomes eligible for the AC1 circulation numerator once recalled into a
+    consumed context. It is distinct from ``sync_turn``/``on_delegation`` (observe-only,
+    ``source='auto'``) — those are the noisy per-turn write side AC1 deliberately excludes.
+    """
+
+    def __init__(
+        self,
+        store=None,
+        *,
+        db_path: Optional[str] = None,
+        brain=None,
+        vault=None,
+        owns_brain: bool = False,
+        recall_limit: int = 5,
+    ) -> None:
+        """Accept EITHER a live ``store`` (tests/harness) OR a ``db_path`` for DEFERRED
+        construction (D1).
+
+        With a ``db_path`` the ``ExperienceStore`` is NOT opened until ``initialize()`` — so
+        the read-only discovery probe (which calls ``is_available`` but never ``initialize``)
+        creates no sqlite connection and no ``experience.db``. The eager-store form is kept
+        for unit tests / the synthetic-week harness that pass a ``:memory:`` store directly.
+        """
+        super().__init__(
+            store, brain=brain, vault=vault, owns_brain=owns_brain, recall_limit=recall_limit
+        )
+        self._db_path = db_path
+        self._agent_context = "primary"
+
+    def is_available(self) -> bool:
+        """Available if a store already exists OR we know how to build one — WITHOUT opening
+        it (D1: discovery must not construct the store; it is built in ``initialize``)."""
+        return self._store is not None or self._db_path is not None
+
+    def initialize(self, session_id: str, **kwargs) -> None:
+        """Build the store lazily on activation (D1) and capture ``agent_context`` (#5).
+
+        D1: the ``ExperienceStore`` is constructed here — on the ACTIVE provider — not in
+        ``build_provider``/``register`` (which the loader re-runs per discovery probe). The
+        build is idempotent (only when no store was injected).
+
+        #5 (latent guard): the chassis currently hardcodes ``agent_context="primary"`` at its
+        single ``initialize_all`` call site (agent_init.py), so the non-primary skip in
+        ``sync_turn`` does not yet fire in practice. It is kept as future-proofing AND because
+        ``sync_turn`` performs no store append regardless — the store stays clean either way.
+        """
+        if self._store is None and self._db_path is not None:
+            self._store = ExperienceStore(db_path=self._db_path)
+        super().initialize(session_id, **kwargs)
+        self._agent_context = str(kwargs.get("agent_context") or "primary")
+
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> dict:
+        """Observe-only, but with NO store append (#5 — dev-instance corpus policy).
+
+        The base composite appends every turn as a ``source=auto, migrated=0`` lesson;
+        that is the *write* side of the predecessor's "write-only memory" death — raw
+        conversational turns compete in FTS top-5 with deliberately-authored lessons and
+        would inflate AC1's ``migrated=0`` band with non-deliberate content. Here the
+        store corpus is deliberately-authored only (fork-review lessons + delegation
+        observations via ``on_delegation``); ``sync_turn`` keeps just the fire-and-forget
+        brain observation. Non-primary contexts are skipped entirely.
+        """
+        if getattr(self, "_agent_context", "primary") != "primary":
+            return {"store": "skipped", "brain": "skipped", "vault": "skipped"}
+
+        # R9: report each leg by ACTUAL presence — never claim "ok"/"degraded" for a leg
+        # that was never constructed (the silent-degradation the agent_init warning fixes,
+        # one layer down). brain=None/vault=None -> "skipped", not a healthy-looking status.
+        ack = {
+            "store": "skipped",
+            "brain": BRAIN_DEGRADED if self._brain is not None else "skipped",
+            "vault": "ok" if self._vault is not None else "skipped",
+        }
+        if self._brain is not None:
+            try:
+                ok = self._brain.observe(
+                    {"type": "context", "content": (assistant_content or "")[:_LESSON_MAX_CHARS]}
+                )
+                ack["brain"] = BRAIN_DEGRADED if ok else BRAIN_FAIL
+            except Exception as exc:  # best-effort; degrade, never crash
+                logger.debug("brain observe failed: %s", exc)
+                ack["brain"] = BRAIN_FAIL
+        return ack
+
+    def record_fork_lesson(
+        self,
+        lesson: str,
+        *,
+        provenance: str,
+        task_type: str = "workflow",
+        tags: Optional[List[str]] = None,
+        source: str = "reviewed",
+    ) -> str:
+        """Append a fork-authored lesson; returns the store ref (uuid hex).
+
+        Raises the store's own validation errors (bad ``task_type``/``source``, empty
+        lesson, missing provenance) — the caller treats a failure as best-effort and logs.
+        """
+        record = {
+            "lesson": str(lesson)[:_LESSON_MAX_CHARS],
+            "task_type": task_type,
+            "tags": list(tags or ["fork", "background_review"]),
+            "provenance": provenance,
+            "source": source,
+            "migrated": False,  # fork-authored — the AC1-eligible band
+        }
+        return self._store.append(record)
+
+
+def build_provider(hermes_home: str) -> HermesCompositeProvider:
+    """Construct the composite over a profile-scoped experience store.
+
+    ``owns_brain=False`` is load-bearing (INTEGRATION.md §2): the composite must never
+    close a brain client it did not create. ``brain``/``vault`` are None for M1 (see the
+    module docstring) — the brain leg correctly reports ``degraded`` until Task 3.
+    """
+    db_path = os.path.join(hermes_home, "experience.db")
+    # D1: pass db_path (DEFERRED) — the ExperienceStore opens in initialize(), not here, so
+    # constructing the provider during a read-only discovery probe creates no sqlite
+    # connection / no experience.db. The active provider's initialize() opens it exactly once.
+    return HermesCompositeProvider(db_path=db_path, brain=None, vault=None, owns_brain=False)
+
+
+__all__ = ["HermesCompositeProvider", "build_provider", "ExperienceStore"]
