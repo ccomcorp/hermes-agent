@@ -324,6 +324,205 @@ def build_memory_write_metadata(
     return {k: v for k, v in metadata.items() if v not in {None, ""}}
 
 
+# Tools whose successful writes the fork "authors" as durable lessons. Both are
+# mirrored into the experience store (M1 Task 2 BLOCKER #2): skill_manage carries
+# task how-to, memory carries durable user facts/preferences. Tagged distinctly so a
+# curator can filter; both land as source='reviewed', migrated=False (AC1-eligible).
+_FORK_LESSON_TOOLS = {"memory", "skill_manage"}
+
+
+def _lesson_from_tool_call(
+    tool_name: str,
+    args: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Map one successful fork tool call to an experience-store lesson dict, or None.
+
+    Deletions/removals carry no durable lesson content and are skipped. The returned
+    dict is ``{lesson, task_type, tags}``; provenance/source are stamped by the caller.
+    This is the lesson-shaping seam — tune the task_type mapping or text framing here
+    without touching the extraction/append plumbing.
+    """
+    # A write that was only STAGED (memory.write_approval gate, background origin) is not
+    # yet committed to disk and may be rejected at approve-time. Mirroring it as a lesson
+    # would diverge the experience store from the actual memory/skill content — skip it.
+    if isinstance(result, dict) and result.get("staged"):
+        return None
+
+    action = str(args.get("action") or "").lower()
+
+    if tool_name == "memory":
+        if action == "remove":
+            return None
+        content = str(args.get("content") or "").strip()
+        if not content:
+            return None
+        target = str(args.get("target") or "memory")
+        return {
+            "lesson": content,
+            "task_type": "workflow",
+            "tags": ["fork", "background_review", "memory", target],
+        }
+
+    if tool_name == "skill_manage":
+        if action in {"delete", "remove_file"}:
+            return None
+        content = str(
+            args.get("content")
+            or args.get("file_content")
+            or args.get("new_string")
+            or ""
+        ).strip()
+        if not content:
+            return None
+        skill = str(args.get("name") or "").strip()
+        lesson = f"[skill:{skill}] {content}" if skill else content
+        tags = ["fork", "background_review", "skill"]
+        if skill:
+            tags.append(skill)
+        return {"lesson": lesson, "task_type": "implementation-pattern", "tags": tags}
+
+    return None
+
+
+def _iter_new_successful_tool_results(review_messages, prior_snapshot):
+    """Yield ``(tool_call_id, parsed_result)`` for NEW, successful ``role=='tool'`` results.
+
+    "New" = the result's ``tool_call_id`` is not present in ``prior_snapshot`` — the fork
+    inherits the prior conversation, and stale results must not be re-surfaced/re-mirrored
+    (issue #14944). ID-STRICT: a result without a ``tool_call_id`` is NOT yielded — an
+    id-less result cannot be deduped against prior, so the experience-store mirror must
+    never act on it. (``summarize_background_review_actions`` deliberately keeps its own
+    id-less content-equality fallback for the user-facing summary; it is intentionally not
+    routed through this helper, which omits the id-less path by design.)
+    """
+    prior_ids = {
+        m.get("tool_call_id")
+        for m in (prior_snapshot or [])
+        if isinstance(m, dict) and m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        tcid = msg.get("tool_call_id")
+        if not tcid or tcid in prior_ids:
+            continue
+        try:
+            data = json.loads(msg.get("content", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("success"):
+            yield tcid, data
+
+
+def _matched_fork_tool_calls(review_messages, prior_snapshot):
+    """Yield ``(tool_name, call_args, result)`` for NEW successful ``memory``/``skill_manage``
+    calls, pairing each assistant tool_call to its result by id (id-strict, via
+    :func:`_iter_new_successful_tool_results`). The single source of "which fork writes
+    happened this pass" — both lesson extraction and the R6b walker-regression signal use it.
+    """
+    successful = dict(_iter_new_successful_tool_results(review_messages, prior_snapshot))
+    if not successful:
+        return
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") or {}
+            name = fn.get("name")
+            cid = call.get("id")
+            if name not in _FORK_LESSON_TOOLS or cid not in successful:
+                continue
+            try:
+                call_args = json.loads(fn.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                call_args = {}
+            if not isinstance(call_args, dict):
+                continue
+            yield name, call_args, successful[cid]
+
+
+def extract_fork_authored_lessons(
+    review_messages: List[Dict],
+    prior_snapshot: List[Dict],
+) -> List[Dict[str, Any]]:
+    """Collect lesson dicts for the experience store from a review pass's tool calls.
+
+    Pairs each NEW, successful ``memory``/``skill_manage`` tool result with its originating
+    assistant ``tool_calls`` arguments (id-strict) and shapes a lesson via
+    :func:`_lesson_from_tool_call`. Stale writes inherited from ``prior_snapshot`` are
+    skipped (issue #14944).
+    """
+    lessons: List[Dict[str, Any]] = []
+    for name, call_args, result in _matched_fork_tool_calls(review_messages, prior_snapshot):
+        lesson = _lesson_from_tool_call(name, call_args, result)
+        if lesson:
+            lessons.append(lesson)
+    return lessons
+
+
+def record_fork_authored_lessons(
+    agent: Any,
+    review_messages: List[Dict],
+    prior_snapshot: List[Dict],
+) -> int:
+    """Mirror the fork's authored writes into the parent's composite experience store.
+
+    The review fork runs ``skip_memory=True`` (no provider of its own), so the write must
+    route through the PARENT agent's composite — the only path by which a fork-authored
+    ``migrated=False`` lesson reaches the store and un-zeroes AC1's numerator. Best-effort:
+    a missing/incompatible provider is a clean no-op (builtin-only or non-composite
+    configs); a per-lesson append failure is logged, never raised. Returns the count
+    written.
+    """
+    manager = getattr(agent, "_memory_manager", None)
+    if manager is None or not hasattr(manager, "get_provider"):
+        return 0
+    comp = manager.get_provider("composite")
+    if comp is None or not hasattr(comp, "record_fork_lesson"):
+        return 0
+
+    lessons = extract_fork_authored_lessons(review_messages, prior_snapshot)
+    if not lessons:
+        # R6b: distinguish a genuinely tool-less review (no fork writes — silent-ok) from a
+        # mapping/walker regression (writes happened but none mapped to lessons). The latter
+        # is a silent-AC1-zero risk, so make it visible.
+        if any(True for _ in _matched_fork_tool_calls(review_messages, prior_snapshot)):
+            logger.info(
+                "background review: fork tool writes seen but 0 mapped to lessons "
+                "(all staged/empty/removals, or a mapping regression)"
+            )
+        return 0
+
+    session_id = getattr(agent, "session_id", "") or ""
+    provenance = f"fork:background_review:{session_id}"
+    written = 0
+    for lesson in lessons:
+        try:
+            comp.record_fork_lesson(
+                lesson["lesson"],
+                provenance=provenance,
+                task_type=lesson.get("task_type", "workflow"),
+                tags=lesson.get("tags"),
+            )
+            written += 1
+        except Exception as exc:
+            logger.warning("fork experience-store append failed: %s", exc)
+
+    # R6: lessons were extracted but the store rejected every append (e.g. a task_type/source
+    # version skew between this chassis and the AIOS store) — AC1's numerator will not move.
+    # Never silent: a green review summary must not mask a dead write leg.
+    if written == 0:
+        logger.warning(
+            "background review: extracted %d fork lesson(s) but wrote 0 — the experience "
+            "store rejected every append; AC1 numerator will not move",
+            len(lessons),
+        )
+    return written
+
+
 def _run_review_in_thread(
     agent: Any,
     messages_snapshot: List[Dict],
@@ -524,6 +723,14 @@ def _run_review_in_thread(
             messages_snapshot,
         )
 
+        # Mirror the fork's authored writes into the composite experience store so
+        # they become AC1-eligible (migrated=False) circulation candidates. No-op when
+        # the parent has no composite provider (builtin-only / non-composite configs).
+        try:
+            record_fork_authored_lessons(agent, review_messages, messages_snapshot)
+        except Exception as exc:  # best-effort; never break the review summary
+            logger.warning("fork-authored lesson recording failed: %s", exc)
+
         if actions:
             summary = " · ".join(dict.fromkeys(actions))
             agent._safe_print(
@@ -605,4 +812,6 @@ __all__ = [
     "spawn_background_review_thread",
     "summarize_background_review_actions",
     "build_memory_write_metadata",
+    "extract_fork_authored_lessons",
+    "record_fork_authored_lessons",
 ]

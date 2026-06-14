@@ -1,0 +1,216 @@
+/**
+ * Local, English-only strings for the System feature.
+ *
+ * DECISION (2026-06-11): kept LOCAL on purpose — do NOT fold into the shared
+ * i18n locales (src/i18n/*). This is an English-only deployment, so the
+ * multi-language catalog adds nothing here, and keeping this text out of the
+ * shared locale files (which upstream hermes-agent edits constantly) keeps the
+ * AIOS fork delta shallow and avoids merge conflicts when pulling upstream
+ * updates. Only fold into useI18n() if real multi-language support is needed.
+ */
+export const systemStrings = {
+  title: 'System',
+  loading: 'Loading system status',
+  loadFailed: 'Failed to load system status',
+  refresh: 'Refresh',
+  refreshing: 'Refreshing',
+  search: 'Search system',
+  cancel: 'Cancel',
+
+  // Host / stats
+  hostHeading: 'Host',
+  statOs: 'OS',
+  statArch: 'Arch',
+  statHost: 'Host',
+  statPython: 'Python',
+  statHermes: 'Hermes',
+  statCpu: 'CPU',
+  statMemory: 'Memory',
+  statDisk: 'Disk',
+  statUptime: 'Uptime',
+  statLoad: 'Load avg',
+  cores: (n: number | string) => `${n} cores`,
+  psutilHint: 'Install the psutil extra for CPU / memory / disk metrics.',
+
+  // Update
+  updateBehind: (n: number) => `${n} behind`,
+  updateAvailable: 'update available',
+  updateLatest: 'latest',
+  checkForUpdates: 'Check for updates',
+  updateNow: 'Update now',
+  updateWith: (cmd: string) => `Update with ${cmd}`,
+  updateTitle: 'Update Hermes?',
+  updateDescCommits: (cmd: string, n: number) =>
+    `This runs '${cmd}' and pulls ${n} new commit${n === 1 ? '' : 's'}. The gateway restarts when the update finishes.`,
+  updateDescGeneric: (cmd: string) => `This runs '${cmd}' and restarts the gateway when it finishes.`,
+  updateConfirm: 'Update now',
+  updateStarted: 'Update started',
+  updateCheckFailed: 'Update check failed',
+  updateFailed: 'Update failed',
+  updateUpToDate: "You're on the latest version",
+  updateFoundBehind: (n: number) => `Update available — ${n} commit${n === 1 ? '' : 's'} behind`,
+  updateFound: 'Update available',
+
+  // Portal
+  portalHeading: 'Nous Portal',
+  portalLoggedIn: 'logged in',
+  portalLoggedOut: 'not logged in',
+  portalProvider: (p: string) => `inference provider: ${p}`,
+  portalManage: 'Manage subscription',
+  portalRouting: 'Tool Gateway routing',
+  portalLoginHint: 'Log in with hermes portal.',
+
+  // Curator
+  curatorHeading: 'Skill curator',
+  curatorPaused: 'paused',
+  curatorActive: 'active',
+  curatorDisabled: 'disabled',
+  curatorEvery: (h: number) => `every ${h}h`,
+  curatorLastRun: (when: string) => `last run ${when}`,
+  curatorNeverRun: 'never run',
+  curatorPause: 'Pause',
+  curatorResume: 'Resume',
+  curatorRunNow: 'Run now',
+  curatorPausedToast: 'Curator paused',
+  curatorResumedToast: 'Curator resumed',
+  curatorToggleFailed: 'Curator toggle failed',
+  curatorRunLabel: 'Curator review',
+
+  // Gateway
+  gatewayHeading: 'Gateway',
+  gatewayRunning: 'running',
+  gatewayStopped: 'stopped',
+  gatewayStart: 'Start',
+  gatewayRestart: 'Restart',
+  gatewayStop: 'Stop',
+  gatewayStartedToast: (verb: string) => `Gateway ${verb} started`,
+  gatewayFailedToast: (verb: string) => `Gateway ${verb} failed`,
+  pid: (n: number) => `pid ${n}`,
+
+  // Memory
+  memoryHeading: 'Memory',
+  memoryProvider: (active: string) => `External provider: ${active || 'built-in only'}`,
+  memoryBuiltin: (memBytes: string, userBytes: string) =>
+    `Built-in files — MEMORY.md: ${memBytes} · USER.md: ${userBytes}`,
+  memorySetupHint: 'New credentials: hermes memory setup',
+  resetMemoryFile: 'Reset MEMORY.md',
+  resetUserFile: 'Reset USER.md',
+  resetAll: 'Reset all',
+  resetMemoryTitle: 'Reset memory',
+  resetMemoryDesc: 'This permanently erases the selected built-in memory files. This cannot be undone.',
+  resetConfirm: 'Reset',
+  resetting: 'Resetting',
+  resetDone: (what: string) => `Reset: ${what || 'nothing'}`,
+  resetFailed: 'Reset failed',
+
+  // Credential pool
+  credHeading: 'Credential pool',
+  credProvider: 'Provider',
+  credKey: 'API key',
+  credLabel: 'Label',
+  credAdd: 'Add key',
+  credAdding: 'Adding',
+  credEmpty: 'No pooled credentials. Add one above to enable key rotation.',
+  credRequired: 'Provider and API key required',
+  credAddedToast: 'Credential added',
+  credAddFailed: 'Failed to add credential',
+  credRemove: 'Remove credential',
+  credRemovedToast: 'Credential removed',
+  credRemoveFailed: 'Failed to remove credential',
+  credRemoveTitle: 'Remove credential',
+  credRemoveDesc: 'Remove this pooled API key? The agent will no longer rotate through it.',
+  credRemoveConfirm: 'Remove',
+  credRemoving: 'Removing',
+
+  // Operations
+  opsHeading: 'Operations',
+  opRunDoctor: 'Run doctor',
+  opSecurityAudit: 'Security audit',
+  opBackup: 'Create backup',
+  opUpdateSkills: 'Update skills',
+  opPromptSize: 'Prompt size',
+  opSupportDump: 'Support dump',
+  opConfigMigrate: 'Migrate config',
+  opStarted: (label: string) => `${label} started`,
+  opFailed: (label: string) => `${label} failed`,
+  labelDoctor: 'Doctor',
+  labelSecurityAudit: 'Security audit',
+  labelBackup: 'Backup',
+  labelSkillsUpdate: 'Skills update',
+  labelPromptSize: 'Prompt size',
+  labelSupportDump: 'Support dump',
+  labelConfigMigrate: 'Config migrate',
+  labelImport: 'Import',
+
+  importTitle: 'Restore from backup archive',
+  importPlaceholder: '/path/to/hermes-backup.zip',
+  importAction: 'Import',
+
+  // Debug share
+  shareTitle: 'Share debug report',
+  shareDesc: 'Uploads system info + logs to a public paste service and returns links to send the Hermes team. Pastes auto-delete after 6 hours.',
+  shareGenerate: 'Generate share link',
+  shareUploading: 'Uploading',
+  shareRedact: 'Redact credential-shaped tokens before upload (recommended)',
+  shareUploaded: 'uploaded',
+  shareRedacted: 'redacted',
+  shareNotRedacted: 'not redacted',
+  shareAutoDelete: (h: number) => `auto-deletes in ${h}h`,
+  shareCopyAll: 'Copy all',
+  shareCopy: (label: string) => `Copy ${label} link`,
+  shareUploadedToast: (n: number, redacted: boolean) =>
+    `Uploaded ${n} paste${n === 1 ? '' : 's'}${redacted ? ' (redacted)' : ''}`,
+  shareFailed: 'Debug share failed',
+  shareCopyFailed: "Couldn't copy to clipboard",
+  shareFailures: (msg: string) => `Some logs failed to upload: ${msg}`,
+
+  // Checkpoints
+  checkpointsHeading: 'Checkpoints',
+  checkpointsSummary: (sessions: number, bytes: string) => `${sessions} session(s) · ${bytes}`,
+  checkpointsPrune: 'Prune',
+  checkpointsPruneTitle: 'Prune checkpoints',
+  checkpointsPruneDesc: 'Delete the rollback checkpoint shadow store? Existing /rollback points will be lost.',
+  checkpointsPruneConfirm: 'Prune',
+  checkpointsPruning: 'Pruning',
+  checkpointsStarted: 'Checkpoint prune started',
+  checkpointsFailed: 'Prune failed',
+
+  // Shell hooks
+  hooksHeading: 'Shell hooks',
+  hooksNew: 'New hook',
+  hooksEmpty: 'No shell hooks configured.',
+  hookNotExecutable: 'not executable',
+  hookAllowed: 'allowed',
+  hookNotApproved: 'not approved',
+  hookMatcher: (m: string) => `matcher: ${m}`,
+  hookRemove: 'Remove hook',
+  hookRemoveTitle: 'Remove shell hook',
+  hookRemoveDesc: 'Remove this hook from config and revoke its consent? It stops firing on the next restart.',
+  hookRemoveConfirm: 'Remove',
+  hookRemoving: 'Removing',
+  hookRemovedToast: 'Hook removed',
+  hookRemoveFailed: 'Failed to remove hook',
+
+  hookDialogTitle: 'New shell hook',
+  hookEvent: 'Event',
+  hookCommand: 'Command (absolute path)',
+  hookCommandPlaceholder: '/usr/local/bin/my-hook.sh',
+  hookMatcherLabel: 'Matcher (optional)',
+  hookMatcherPlaceholder: 'e.g. terminal',
+  hookTimeout: 'Timeout (s)',
+  hookTimeoutPlaceholder: '10',
+  hookApprove: 'Approve now (grant consent so it fires; otherwise it stays configured but inactive)',
+  hookWarning: 'Shell hooks run arbitrary commands on this host. Only add scripts you trust. Takes effect on the next gateway/session restart.',
+  hookCreate: 'Create hook',
+  hookCreating: 'Creating',
+  hookCommandRequired: 'Command is required',
+  hookCreatedToast: 'Hook created',
+  hookCreateFailed: 'Failed to create hook',
+
+  // Action log viewer
+  actionRunning: 'running',
+  actionDone: 'done',
+  actionExit: (code: number | null) => `exit ${code}`,
+  actionStarting: 'Starting…',
+  actionClose: 'Close log'
+} as const

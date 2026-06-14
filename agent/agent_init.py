@@ -1187,7 +1187,16 @@ def init_agent(
                     agent._memory_manager.initialize_all(**_init_kwargs)
                     _ra().logger.info("Memory provider '%s' activated", _mem_provider_name)
                 else:
-                    _ra().logger.debug("Memory provider '%s' not found or not available", _mem_provider_name)
+                    # The provider was EXPLICITLY configured (memory.provider set) yet
+                    # failed to load/activate — warn, don't whisper. A silent debug here
+                    # let a misconfigured/uninstalled provider (e.g. composite without the
+                    # AIOS packages on path) degrade invisibly to no-memory.
+                    _ra().logger.warning(
+                        "Memory provider '%s' is configured but not found or not "
+                        "available — memory features are OFF this session. Check the "
+                        "plugin is installed and its dependencies import.",
+                        _mem_provider_name,
+                    )
                     agent._memory_manager = None
         except Exception as _mpe:
             _ra().logger.warning("Memory provider plugin init failed: %s", _mpe)

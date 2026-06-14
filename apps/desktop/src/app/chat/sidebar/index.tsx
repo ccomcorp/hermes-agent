@@ -90,7 +90,23 @@ import {
   sessionPinId
 } from '@/store/session'
 
-import { type AppView, ARTIFACTS_ROUTE, MESSAGING_ROUTE, SKILLS_ROUTE } from '../../routes'
+import {
+  type AppView,
+  ARTIFACTS_ROUTE,
+  CHANNELS_ROUTE,
+  CONFIG_ROUTE,
+  FILES_ROUTE,
+  KANBAN_ROUTE,
+  LOGS_ROUTE,
+  MESSAGING_ROUTE,
+  MODELS_ROUTE,
+  PAIRING_ROUTE,
+  PLUGINS_ROUTE,
+  PROFILES_ROUTE,
+  SKILLS_ROUTE,
+  SYSTEM_ROUTE,
+  WEBHOOKS_ROUTE
+} from '../../routes'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import type { SidebarNavItem } from '../../types'
 
@@ -128,7 +144,18 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
     route: SKILLS_ROUTE
   },
   { id: 'messaging', label: '', icon: props => <Codicon name="comment" {...props} />, route: MESSAGING_ROUTE },
-  { id: 'artifacts', label: '', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE }
+  { id: 'artifacts', label: '', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE },
+  { id: 'kanban', label: 'Kanban', icon: props => <Codicon name="project" {...props} />, route: KANBAN_ROUTE },
+  { id: 'channels', label: 'Channels', icon: props => <Codicon name="broadcast" {...props} />, route: CHANNELS_ROUTE },
+  { id: 'pairing', label: 'Pairing', icon: props => <Codicon name="shield" {...props} />, route: PAIRING_ROUTE },
+  { id: 'webhooks', label: 'Webhooks', icon: props => <Codicon name="radio-tower" {...props} />, route: WEBHOOKS_ROUTE },
+  { id: 'plugins', label: 'Plugins', icon: props => <Codicon name="extensions" {...props} />, route: PLUGINS_ROUTE },
+  { id: 'files', label: 'Files', icon: props => <Codicon name="file-directory" {...props} />, route: FILES_ROUTE },
+  { id: 'system', label: 'System', icon: props => <Codicon name="pulse" {...props} />, route: SYSTEM_ROUTE },
+  { id: 'config', label: 'Config', icon: props => <Codicon name="settings-gear" {...props} />, route: CONFIG_ROUTE },
+  { id: 'logs', label: 'Logs', icon: props => <Codicon name="output" {...props} />, route: LOGS_ROUTE },
+  { id: 'models', label: 'Models', icon: props => <Codicon name="server-process" {...props} />, route: MODELS_ROUTE },
+  { id: 'profiles', label: 'Profiles', icon: props => <Codicon name="organization" {...props} />, route: PROFILES_ROUTE }
 ]
 
 const WORKSPACE_PAGE = 5
@@ -788,7 +815,18 @@ export function ChatSidebar({
                 const active =
                   (item.id === 'skills' && currentView === 'skills') ||
                   (item.id === 'messaging' && currentView === 'messaging') ||
-                  (item.id === 'artifacts' && currentView === 'artifacts')
+                  (item.id === 'artifacts' && currentView === 'artifacts') ||
+                  (item.id === 'kanban' && currentView === 'kanban') ||
+                  (item.id === 'channels' && currentView === 'channels') ||
+                  (item.id === 'pairing' && currentView === 'pairing') ||
+                  (item.id === 'webhooks' && currentView === 'webhooks') ||
+                  (item.id === 'plugins' && currentView === 'plugins') ||
+                  (item.id === 'files' && currentView === 'files') ||
+                  (item.id === 'system' && currentView === 'system') ||
+                  (item.id === 'config' && currentView === 'config') ||
+                  (item.id === 'logs' && currentView === 'logs') ||
+                  (item.id === 'models' && currentView === 'models') ||
+                  (item.id === 'profiles' && currentView === 'profiles')
 
                 const isNewSession = item.id === 'new-session'
 

@@ -71,6 +71,42 @@ logger = logging.getLogger(__name__)
 INTERRUPT_WAITING_FOR_MODEL_PREFIX = "Operation interrupted: waiting for model response ("
 
 
+def inject_turn_context(api_msg, ext_prefetch_cache, plugin_user_context, agent) -> bool:
+    """Inject prefetched memory + plugin context into the current-turn user message AND
+    confirm prefetch consumption (D4-A) — the single testable seam for both (AC-R3).
+
+    Mutates ``api_msg["content"]`` in place (append-only). Confirms prefetch consumption via
+    the agent's memory manager ONLY when the recalled memory block actually reached the
+    prompt — i.e. the content was a ``str`` AND ``build_memory_context_block`` produced a
+    fenced block. The assemble-but-drop path (non-``str`` content) leaves the receipt
+    unconfirmed, so a never-injected recall never counts toward AC1. Returns True iff the
+    memory block was injected. Confirm is capability-guarded in the manager (no-op for
+    providers without ``confirm_prefetch_consumed``).
+    """
+    injections = []
+    fenced = ""
+    if ext_prefetch_cache:
+        fenced = build_memory_context_block(ext_prefetch_cache)
+        if fenced:
+            injections.append(fenced)
+    if plugin_user_context:
+        injections.append(plugin_user_context)
+    mem_injected = False
+    if injections:
+        base = api_msg.get("content", "")
+        if isinstance(base, str):
+            api_msg["content"] = base + "\n\n" + "\n\n".join(injections)
+            mem_injected = bool(fenced)
+    if mem_injected:
+        mm = getattr(agent, "_memory_manager", None)
+        if mm is not None:
+            try:
+                mm.confirm_prefetch_consumed(getattr(agent, "session_id", "") or "")
+            except Exception:
+                pass
+    return mem_injected
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -613,17 +649,12 @@ def run_conversation(
             # API-call-time only — the original message in `messages` is
             # never mutated, so nothing leaks into session persistence.
             if idx == current_turn_user_idx and msg.get("role") == "user":
-                _injections = []
-                if _ext_prefetch_cache:
-                    _fenced = build_memory_context_block(_ext_prefetch_cache)
-                    if _fenced:
-                        _injections.append(_fenced)
-                if _plugin_user_context:
-                    _injections.append(_plugin_user_context)
-                if _injections:
-                    _base = api_msg.get("content", "")
-                    if isinstance(_base, str):
-                        api_msg["content"] = _base + "\n\n" + "\n\n".join(_injections)
+                # D4-A: inject prefetched memory + plugin context, and confirm prefetch
+                # consumption only if the memory block actually reached the prompt. Single
+                # testable seam (see inject_turn_context + tests/.../test_inject_turn_context).
+                inject_turn_context(
+                    api_msg, _ext_prefetch_cache, _plugin_user_context, agent
+                )
 
             # For ALL assistant messages, pass reasoning back to the API
             # This ensures multi-turn reasoning context is preserved

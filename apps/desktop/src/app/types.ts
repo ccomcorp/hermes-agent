@@ -108,7 +108,24 @@ export type CommandDispatchResponse =
   | SkillCommandDispatchResponse
   | SendCommandDispatchResponse
 
-export type SidebarNavId = 'artifacts' | 'command-center' | 'messaging' | 'new-session' | 'settings' | 'skills'
+export type SidebarNavId =
+  | 'artifacts'
+  | 'channels'
+  | 'command-center'
+  | 'config'
+  | 'files'
+  | 'kanban'
+  | 'logs'
+  | 'messaging'
+  | 'models'
+  | 'new-session'
+  | 'pairing'
+  | 'plugins'
+  | 'profiles'
+  | 'settings'
+  | 'skills'
+  | 'system'
+  | 'webhooks'
 
 export interface SidebarNavItem {
   id: SidebarNavId
