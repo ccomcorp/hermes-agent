@@ -1,0 +1,71 @@
+name: loop-liveness
+
+# AC-PX6 (spec-loop-plugin-extraction §8): re-prove the self-improvement loop on every PR that
+# touches a loop seam. Path-filtered on the four seam files + the composite plugin so it fires
+# exactly when a refactor could move/drop a seam.
+#
+# Scope note: the CI job runs the STATIC seam-fingerprint check only (verify_seam_fingerprint —
+# pure stdlib, greps the chassis files for the `# AIOS-LOOP-SEAM:<id>` sentinels). The full
+# circulation regression (scripts/loop_liveness.py == synthetic_week_ac1 --fingerprint) needs the
+# sibling AIOS packages (experience-store / composite-provider) which are NOT checked out in this
+# fork's CI; per AIOS_RULE_3 the full loop-liveness run is the LOCAL post-merge gate
+# (docs/Update-Instructions/loop-liveness-gate.md). CI is the seam-fingerprint backstop for PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/background_review.py'
+      - 'tools/delegate_tool.py'
+      - 'agent/conversation_loop.py'
+      - 'agent/memory_provider.py'
+      - 'agent/memory_manager.py'
+      - 'plugins/memory/composite/**'
+      - '.github/workflows/loop-liveness.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/background_review.py'
+      - 'tools/delegate_tool.py'
+      - 'agent/conversation_loop.py'
+      - 'agent/memory_provider.py'
+      - 'agent/memory_manager.py'
+      - 'plugins/memory/composite/**'
+      - '.github/workflows/loop-liveness.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loop-liveness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  seam-fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Verify loop-seam fingerprint (AC-PX5 #1 / AC-PX6)
+        # Pure stdlib: asserts every `# AIOS-LOOP-SEAM:<id>` sentinel still resolves at its
+        # expected call-site. A god-file refactor that moved/dropped a seam fails here.
+        run: |
+          python - <<'PY'
+          import sys
+          from plugins.memory.composite.loop_guard import verify_seam_fingerprint
+          ok, missing = verify_seam_fingerprint()
+          if ok:
+              print("loop-seam fingerprint OK — all sentinels present")
+              sys.exit(0)
+          print(f"loop-seam fingerprint FAILED — missing sentinel(s): {missing}")
+          print("A chassis refactor moved or dropped a loop call-site; re-home the seam and "
+                "re-plant its '# AIOS-LOOP-SEAM:<id>' comment before merging (AC-PX5 #1).")
+          sys.exit(1)
+          PY

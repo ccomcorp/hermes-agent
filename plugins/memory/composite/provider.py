@@ -72,6 +72,27 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
     if _s not in sys.path:
         sys.path.insert(0, _s)
 
+
+def _resolve_aios_health_dir() -> Optional[str]:
+    """Return the AIOS ``packages/health`` dir (for ``ExperienceHealth``), or ``None``.
+
+    Mirrors ``synthetic_week_ac1.py``: ``AIOS_HEALTH_DIR`` override, else sibling
+    ``<AIOS>/aios/packages/health`` resolved from this file. The loop self-check (AC-PX5 #3)
+    reads ``ExperienceHealth.circulation_report``; an absent health package degrades that
+    check to a quiet no-op (best-effort — it never blocks session-end)."""
+    env = os.environ.get("AIOS_HEALTH_DIR")
+    cand = (
+        Path(env)
+        if env
+        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "health"
+    )
+    return str(cand) if cand.is_dir() else None
+
+
+_HEALTH_DIR = _resolve_aios_health_dir()
+if _HEALTH_DIR and _HEALTH_DIR not in sys.path:
+    sys.path.insert(0, _HEALTH_DIR)
+
 # Flat imports (the AIOS packages live in hyphenated dirs, so the package dir itself is
 # placed on sys.path and the modules import flat — the convention their own tests use).
 # When the chassis is on the path, composite_provider binds the REAL
@@ -79,7 +100,6 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
 from store import ExperienceStore  # noqa: E402  (path inserted above)
 from composite_provider import (  # noqa: E402
     CompositeMemoryProvider,
-    SESSION_START_CALL_SITE,
     TOOL_SIGNAL,
 )
 from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
@@ -118,14 +138,22 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         creates no sqlite connection and no ``experience.db``. The eager-store form is kept
         for unit tests / the synthetic-week harness that pass a ``:memory:`` store directly.
         """
+        # S2 (loop-plugin-extraction STEP 1): always run the BASE consume-at-injection path
+        # (consume_on_inject=True) instead of a forked prefetch override. The base prefetch
+        # then stashes the receipt in _pending_prefetch and confirm_prefetch_consumed marks
+        # it — behaviorally identical to the removed subclass overrides. Every construction
+        # site (build_provider + tests/harness) inherits defer mode this way.
         super().__init__(
-            store, brain=brain, vault=vault, owns_brain=owns_brain, recall_limit=recall_limit
+            store,
+            brain=brain,
+            vault=vault,
+            owns_brain=owns_brain,
+            recall_limit=recall_limit,
+            consume_on_inject=True,
         )
         self._db_path = db_path
         self._agent_context = "primary"
-        # D4-A carrier: receipt id stashed by prefetch (per session), marked consumed only
-        # after the chassis confirms the block was injected into the dispatched prompt.
-        self._pending_prefetch: Dict[str, str] = {}
+        # _pending_prefetch (the D4-A receipt carrier) is owned by the base now.
         # Brain activation stage: 0=off, 1=observe+recall, 2=+paired reward (flip as verified).
         self._brain_stage = int(brain_stage)
         # Brain observation handles captured by sync_turn (per session), popped one-shot by the
@@ -140,6 +168,23 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         self._last_brain_reward: Optional[Dict[str, Any]] = None
         self._reward_dW_total: float = 0.0
         self._reward_count: int = 0
+        # AC-PX5 #3 (present-but-unproductive backstop): a small consecutive-counter over
+        # session-end self-checks. K consecutive write-only checks (circulation==0 with a
+        # corpus above the recall floor) flips the loop-health status from passive report to
+        # an ERROR. K is configurable via HERMES_LOOP_WRITEONLY_K (default 2); the lesson floor
+        # via HERMES_LOOP_WRITEONLY_FLOOR (default 0 — any non-empty write-only corpus counts;
+        # a fresh/foreign store with 0 lessons never trips because WRITE_ONLY_MEMORY needs
+        # total_lessons>0). Tracked here so the ERROR fires only on a SUSTAINED dead loop.
+        self._writeonly_streak: int = 0
+        self._loop_writeonly_alarm: bool = False
+        try:
+            self._loop_writeonly_k = max(1, int(os.environ.get("HERMES_LOOP_WRITEONLY_K", "2")))
+        except (TypeError, ValueError):
+            self._loop_writeonly_k = 2
+        try:
+            self._loop_writeonly_floor = max(0, int(os.environ.get("HERMES_LOOP_WRITEONLY_FLOOR", "0")))
+        except (TypeError, ValueError):
+            self._loop_writeonly_floor = 0
 
     def is_available(self) -> bool:
         """Available if a store already exists OR we know how to build one — WITHOUT opening
@@ -158,6 +203,23 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         ``sync_turn`` does not yet fire in practice. It is kept as future-proofing AND because
         ``sync_turn`` performs no store append regardless — the store stays clean either way.
         """
+        # AC-PX5 #2 (boot wiring assertion, OWN PROVIDER ONLY): refuse to boot a silently-dead
+        # loop. Assert the chassis still exposes the MemoryManager fan-out dispatch AND the seam
+        # sentinels resolve; a lost patch RAISES LoopWiringError here (re-raised by
+        # initialize_all), never warn-and-continue. The live config MUST pass (no false positive
+        # — a raise here would prevent the desktop from starting; covered by a live-boot test).
+        # The manager is threaded from initialize_all when available; otherwise the class-level
+        # dispatch surface is verified via the MemoryManager class.
+        try:
+            from .loop_guard import assert_loop_wired
+        except ImportError:  # loaded flat (plugin dir not a package on this path)
+            from loop_guard import assert_loop_wired  # type: ignore
+        manager = kwargs.get("memory_manager")
+        if manager is None:
+            from agent.memory_manager import MemoryManager
+            manager = MemoryManager
+        assert_loop_wired(manager)
+
         if self._store is None and self._db_path is not None:
             self._store = ExperienceStore(db_path=self._db_path)
         super().initialize(session_id, **kwargs)
@@ -233,61 +295,137 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         }
         return self._store.append(record)
 
-    # ----- D4-A: consumed-at-injection (defer mark_consumed off prefetch) -----
-
-    def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Like the base session-start prefetch, but does NOT mark the receipt consumed
-        inline (D4-A). The base marks consumed the instant prefetch returns non-empty —
-        "returned" != "the model saw it". Here we stash the receipt id (per session) and
-        the chassis calls ``confirm_prefetch_consumed`` only AFTER the block is actually
-        injected into the dispatched prompt (conversation_loop). A recalled block that is
-        assembled-but-dropped therefore never counts toward AC1.
-
-        Reuses the inherited merge/format so recall output is identical to the base — only
-        the mark timing changes. If no chassis ever confirms (e.g. a direct caller that does
-        not inject), the receipt simply stays unconsumed — recall is still recorded.
-
-        SEMANTIC FORK (R2-11): the AIOS base ``CompositeMemoryProvider.prefetch`` self-consumes
-        on return (and AIOS's own tests assert that for the base). This Hermes subclass
-        intentionally diverges to consume-at-injection, so ``circulation()`` timing differs
-        between a bare AIOS composite (recall-time) and this subclass (injection-time). Do not
-        compare circulation across the two as if identical. This is the C4/Sev-2-#8 fix.
-        """
-        store_records, receipt = self._store.recall(
-            query, call_site=SESSION_START_CALL_SITE, limit=self._recall_limit
-        )
-        merged = self._merge_dedup(
-            store_records, self._warm_cache["vault"], self._warm_cache["brain"]
-        )
-        if not merged:
-            return ""
-        self._pending_prefetch[session_id or self._session_id] = receipt["id"]
-        return self._format_context(merged)
-
-    def confirm_prefetch_consumed(self, session_id: str = "") -> bool:
-        """Mark the stashed session-start receipt consumed — called by the chassis after the
-        recalled block reaches the dispatched prompt. No-op (returns False) if there is no
-        pending receipt (e.g. the block was dropped, or already confirmed this turn)."""
-        rid = self._pending_prefetch.pop(session_id or self._session_id, None)
-        if rid is None:
-            return False
-        return bool(self._store.mark_consumed(rid))
+    # ----- D4-A: consumed-at-injection -----
+    #
+    # ``prefetch`` and ``confirm_prefetch_consumed`` are now SERVED BY THE BASE
+    # (``CompositeMemoryProvider`` with ``consume_on_inject=True``, set in __init__). The base
+    # path is behaviorally identical to the removed subclass overrides: same store.recall on the
+    # session-start call site, same _merge_dedup over store/vault/brain warm-cache, same
+    # _pending_prefetch stash keyed by session, same _format_context output, same
+    # mark_consumed-on-confirm timing. STEP 1 / S2 of loop-plugin-extraction removed the fork.
+    #
+    # SEMANTIC FORK NOTE (R2-11) still applies at the *configuration* level: this subclass
+    # always constructs the base in consume-at-injection mode, so circulation() timing differs
+    # from a bare AIOS composite built with the default consume-on-return — do not compare
+    # circulation across the two as if identical. (C4 / Sev-2-#8 fix.)
 
     def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, **kwargs):
-        """Free the LEAVING session's un-confirmed prefetch receipt (R2-9/AC-R5) before
-        rotating the cached id — so a session that prefetched but never confirmed (dropped
-        injection / aborted turn) does not orphan a _pending_prefetch entry."""
+        """Thin subclass override: free the LEAVING session's brain ``_last_observation`` (a
+        subclass-only field the base does not know about), THEN delegate to the base — which
+        frees the base-owned ``_pending_prefetch`` receipt and rotates the cached id. Retained
+        per STEP 1 / S2: the base cannot clean a field it does not own (AC-PX3b guard)."""
         if parent_session_id:
-            self._pending_prefetch.pop(parent_session_id, None)
             self._last_observation.pop(parent_session_id, None)
         super().on_session_switch(
             new_session_id, parent_session_id=parent_session_id, reset=reset, **kwargs
         )
 
     def on_session_end(self, messages) -> None:
-        """Free the current session's un-confirmed prefetch receipt at session end (R2-9)."""
-        self._pending_prefetch.pop(self._session_id, None)
+        """Thin subclass override: free the current session's ``_last_observation`` (subclass-
+        only), run the AC-PX5 #3 loop self-check (present-but-unproductive backstop), THEN
+        delegate to the base to free the base-owned ``_pending_prefetch``."""
         self._last_observation.pop(self._session_id, None)
+        # Reuse the existing session-end hook as the runtime tripwire (spec §8 AC-PX5 #3).
+        try:
+            self.loop_self_check()
+        except Exception as exc:  # best-effort; a health-read failure never breaks session-end
+            logger.debug("loop_self_check failed: %s", exc)
+        super().on_session_end(messages)
+
+    # ----- AC-PX5 #3: present-but-unproductive (runtime backstop) -----
+
+    def loop_self_check(self) -> Dict[str, Any]:
+        """Read ``ExperienceHealth(store).circulation_report()`` and detect a SUSTAINED
+        write-only loop (the predecessor's "lessons written, never read" death).
+
+        A check is "write-only" when the ``WRITE_ONLY_MEMORY`` flag is active (circulation==0
+        with total_lessons>0) AND the corpus exceeds the configured recall floor. K consecutive
+        write-only checks emit a ``logger.ERROR`` and flip ``_loop_writeonly_alarm`` (surfaced
+        by :meth:`loop_health`). A circulating check (or a fresh/foreign store below the floor)
+        resets the streak and clears the alarm — so noise from a cold or non-loop store stays
+        quiet. Returns the structured self-check result (also useful to tests/health callers).
+
+        Best-effort: with no store yet, or the AIOS health package absent, returns a quiet
+        ``{"checked": False, ...}`` and changes no state.
+        """
+        result: Dict[str, Any] = {
+            "checked": False,
+            "write_only": False,
+            "streak": self._writeonly_streak,
+            "alarm": self._loop_writeonly_alarm,
+            "circulation": None,
+            "total_lessons": None,
+        }
+        if self._store is None:
+            return result
+        try:
+            from experience_health import ExperienceHealth  # AIOS health pkg (path inserted)
+        except ImportError:
+            logger.debug("loop_self_check: AIOS health package not importable; skipping")
+            return result
+
+        report = ExperienceHealth(self._store).circulation_report()
+        circulation = report.get("circulation", 0)
+        total = report.get("total_lessons", 0)
+        write_only_flag = next(
+            (f for f in report.get("flags", []) if f.get("name") == "WRITE_ONLY_MEMORY"),
+            None,
+        )
+        flag_active = bool(write_only_flag and write_only_flag.get("active"))
+        # Above-floor guard: a corpus at/below the floor is too small to call a pathology.
+        write_only = flag_active and total > self._loop_writeonly_floor
+
+        result.update(
+            checked=True,
+            write_only=write_only,
+            circulation=circulation,
+            total_lessons=total,
+        )
+
+        if not write_only:
+            # Circulating, or below floor / fresh store -> reset and stay quiet.
+            self._writeonly_streak = 0
+            self._loop_writeonly_alarm = False
+            result["streak"] = 0
+            result["alarm"] = False
+            return result
+
+        self._writeonly_streak += 1
+        result["streak"] = self._writeonly_streak
+        if self._writeonly_streak >= self._loop_writeonly_k:
+            self._loop_writeonly_alarm = True
+            logger.error(
+                "LOOP WRITE-ONLY: %d consecutive session-end checks with circulation=0 and "
+                "%d lesson(s) stored (the predecessor death — fork-authored lessons written but "
+                "never reaching a consumed recall). The self-improvement loop is wired but dead: "
+                "check the recall/consume seams (delegation-recall / injection-confirm) and the "
+                "store recall path. (AC-PX5 #3, K=%d)",
+                self._writeonly_streak, total, self._loop_writeonly_k,
+            )
+        result["alarm"] = self._loop_writeonly_alarm
+        return result
+
+    def loop_health(self) -> Dict[str, Any]:
+        """Status surface for the AC-PX5 #3 runtime backstop (parallels :meth:`brain_health`).
+
+        ``status``:
+          * ``write-only-alarm`` — K consecutive write-only checks tripped (loop wired but dead).
+          * ``write-only`` — a write-only check fired but the K streak is not yet reached.
+          * ``ok`` — last check saw circulation (or a below-floor/fresh store).
+        """
+        if self._loop_writeonly_alarm:
+            status = "write-only-alarm"
+        elif self._writeonly_streak > 0:
+            status = "write-only"
+        else:
+            status = "ok"
+        return {
+            "status": status,
+            "write_only_streak": self._writeonly_streak,
+            "write_only_alarm": self._loop_writeonly_alarm,
+            "write_only_k": self._loop_writeonly_k,
+            "write_only_floor": self._loop_writeonly_floor,
+        }
 
     # ----- D3b: pre-delegation knowledge-gate recall -----
 
@@ -307,6 +445,38 @@ class HermesCompositeProvider(CompositeMemoryProvider):
     def confirm_consumed(self, receipt_id: str) -> bool:
         """Mark a specific receipt consumed (D3b: after its block reached the child prompt)."""
         return bool(self._store.mark_consumed(receipt_id))
+
+    # ----- loop-seam bridges (spec-loop-plugin-extraction §3.2) -----
+    #
+    # THIN bridges to the existing methods above so the chassis can route the loop's seams
+    # through generic MemoryManager fan-out instead of by-name get_provider("composite")
+    # lookups. No behavior change — same storage/recall as the prior direct calls.
+
+    def on_background_review(self, lesson_candidates, *, session_id: str = "") -> int:
+        """Store each neutral lesson candidate via :meth:`record_fork_lesson`; return the count
+        written. The chassis has already extracted the candidates (neutral
+        ``{lesson, task_type, tags, provenance}`` shape) — this is the storage-policy entry.
+        A per-lesson append failure is logged, never raised (best-effort, matches the prior
+        in-chassis loop)."""
+        written = 0
+        for cand in lesson_candidates or []:
+            try:
+                self.record_fork_lesson(
+                    cand["lesson"],
+                    provenance=cand["provenance"],
+                    task_type=cand.get("task_type", "workflow"),
+                    tags=cand.get("tags"),
+                )
+                written += 1
+            except Exception as exc:
+                logger.warning("fork experience-store append failed: %s", exc)
+        return written
+
+    def recall_for_delegation(self, goal: str, *, session_id: str = ""):
+        """Pre-delegation knowledge-gate recall — delegate to the existing
+        :meth:`recall_for` primitive with the ``"pre-delegation"`` call site. Returns
+        ``(block, receipt_id)``."""
+        return self.recall_for("pre-delegation", goal)
 
     # ----- brain reward leg (stage 2): outcome-gated + BACKGROUNDED (R4) -----
 

@@ -28,6 +28,10 @@ Optional hooks (override to opt in):
   on_pre_compress(messages) -> str       — extract before context compression
   on_memory_write(action, target, content, metadata=None) — mirror built-in memory writes
   on_delegation(task, result, **kwargs)  — parent-side observation of subagent work
+  confirm_prefetch_consumed(session_id)  — mark this turn's prefetch actually injected
+  on_background_review(lesson_candidates, *, session_id="") — store reviewed fork lessons
+  recall_for_delegation(goal, *, session_id="") -> (block, receipt_id) — pre-delegation recall
+  confirm_consumed(receipt_id)            — mark a recall receipt consumed
 """
 
 from __future__ import annotations
@@ -293,4 +297,60 @@ class MemoryProvider(ABC):
           ``parent_session_id``, ``platform``, and ``tool_name``.
 
         Use to mirror built-in memory writes to your backend.
+        """
+
+    # -- Loop seams (capability-guarded fan-out; see spec-loop-plugin-extraction §3.2) ----
+    #
+    # These four hooks let the agent loop route its provider-specific seams through generic
+    # MemoryManager fan-out instead of by-name ``get_provider("composite")`` lookups. They are
+    # optional: a provider that does not implement them is a clean no-op (the manager's
+    # capability guard skips it), so foreign providers are unaffected (backward compat).
+
+    def confirm_prefetch_consumed(self, session_id: str = "") -> bool:
+        """Tell the provider the prefetched context was actually injected into the dispatched
+        prompt this turn (consumed-at-injection timing).
+
+        Default no-op returns ``False`` (nothing consumed). Providers that stash a pending
+        prefetch receipt should override to mark it consumed and return ``True``.
+        """
+        return False
+
+    def on_background_review(
+        self,
+        lesson_candidates: List[Dict[str, Any]],
+        *,
+        session_id: str = "",
+    ) -> int:
+        """Persist deliberately-reviewed lessons extracted by a background review pass.
+
+        ``lesson_candidates`` is a NEUTRAL list of dicts, each shaped
+        ``{"lesson", "task_type", "tags", "provenance"}`` — already extracted from the
+        review fork's tool calls by the chassis (NOT raw messages). The provider decides
+        storage policy only. Returns the number of lessons stored.
+
+        Default no-op returns ``0``.
+        """
+        return 0
+
+    def recall_for_delegation(
+        self,
+        goal: str,
+        *,
+        session_id: str = "",
+    ) -> "tuple[str, Optional[str]]":
+        """Recall lessons for an upcoming delegated task (pre-delegation knowledge gate).
+
+        Returns ``(formatted_block, receipt_id)``. A miss returns an empty block (the
+        provider may still emit a receipt so the consumption can be confirmed). The caller
+        injects the block into the child prompt and confirms via :meth:`confirm_consumed`
+        AFTER the child is successfully built.
+
+        Default no-op returns ``("", None)``.
+        """
+        return ("", None)
+
+    def confirm_consumed(self, receipt_id: str) -> None:
+        """Mark a recall receipt consumed (after its block reached the dispatched prompt).
+
+        Pairs with :meth:`recall_for_delegation`. Default no-op.
         """

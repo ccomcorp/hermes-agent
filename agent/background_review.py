@@ -478,10 +478,7 @@ def record_fork_authored_lessons(
     written.
     """
     manager = getattr(agent, "_memory_manager", None)
-    if manager is None or not hasattr(manager, "get_provider"):
-        return 0
-    comp = manager.get_provider("composite")
-    if comp is None or not hasattr(comp, "record_fork_lesson"):
+    if manager is None or not hasattr(manager, "on_background_review"):
         return 0
 
     lessons = extract_fork_authored_lessons(review_messages, prior_snapshot)
@@ -496,20 +493,25 @@ def record_fork_authored_lessons(
             )
         return 0
 
+    # Map the chassis-extracted lessons to the NEUTRAL candidate shape and hand them to the
+    # provider via generic, capability-guarded fan-out (spec-loop-plugin-extraction §3.1):
+    # any provider implementing on_background_review stores them; builtin-only / non-composite
+    # configs are a clean no-op. The chassis keeps the volatile message-list extraction.
     session_id = getattr(agent, "session_id", "") or ""
     provenance = f"fork:background_review:{session_id}"
-    written = 0
-    for lesson in lessons:
-        try:
-            comp.record_fork_lesson(
-                lesson["lesson"],
-                provenance=provenance,
-                task_type=lesson.get("task_type", "workflow"),
-                tags=lesson.get("tags"),
-            )
-            written += 1
-        except Exception as exc:
-            logger.warning("fork experience-store append failed: %s", exc)
+    candidates = [
+        {
+            "lesson": lesson["lesson"],
+            "task_type": lesson.get("task_type", "workflow"),
+            "tags": lesson.get("tags"),
+            "provenance": provenance,
+        }
+        for lesson in lessons
+    ]
+    # AIOS-LOOP-SEAM:background-review-write — fork-authored lessons enter the experience
+    # store here (loop write leg). Fail-loud fingerprint anchor (AC-PX5 #1); do not relocate
+    # without updating plugins/memory/composite/loop_guard.py:SEAM_SITES.
+    written = manager.on_background_review(candidates, session_id=session_id)
 
     # R6: lessons were extracted but the store rejected every append (e.g. a task_type/source
     # version skew between this chassis and the AIOS store) — AC1's numerator will not move.

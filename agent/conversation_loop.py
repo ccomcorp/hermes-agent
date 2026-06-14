@@ -101,6 +101,10 @@ def inject_turn_context(api_msg, ext_prefetch_cache, plugin_user_context, agent)
         mm = getattr(agent, "_memory_manager", None)
         if mm is not None:
             try:
+                # AIOS-LOOP-SEAM:injection-confirm — confirm the prefetched memory block was
+                # injected into this turn's prompt (loop consume leg, D4-A). Fail-loud
+                # fingerprint anchor (AC-PX5 #1); do not relocate without updating
+                # plugins/memory/composite/loop_guard.py:SEAM_SITES.
                 mm.confirm_prefetch_consumed(getattr(agent, "session_id", "") or "")
             except Exception:
                 pass
