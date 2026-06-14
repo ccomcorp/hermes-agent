@@ -79,7 +79,6 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
 from store import ExperienceStore  # noqa: E402  (path inserted above)
 from composite_provider import (  # noqa: E402
     CompositeMemoryProvider,
-    SESSION_START_CALL_SITE,
     TOOL_SIGNAL,
 )
 from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
@@ -118,14 +117,22 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         creates no sqlite connection and no ``experience.db``. The eager-store form is kept
         for unit tests / the synthetic-week harness that pass a ``:memory:`` store directly.
         """
+        # S2 (loop-plugin-extraction STEP 1): always run the BASE consume-at-injection path
+        # (consume_on_inject=True) instead of a forked prefetch override. The base prefetch
+        # then stashes the receipt in _pending_prefetch and confirm_prefetch_consumed marks
+        # it — behaviorally identical to the removed subclass overrides. Every construction
+        # site (build_provider + tests/harness) inherits defer mode this way.
         super().__init__(
-            store, brain=brain, vault=vault, owns_brain=owns_brain, recall_limit=recall_limit
+            store,
+            brain=brain,
+            vault=vault,
+            owns_brain=owns_brain,
+            recall_limit=recall_limit,
+            consume_on_inject=True,
         )
         self._db_path = db_path
         self._agent_context = "primary"
-        # D4-A carrier: receipt id stashed by prefetch (per session), marked consumed only
-        # after the chassis confirms the block was injected into the dispatched prompt.
-        self._pending_prefetch: Dict[str, str] = {}
+        # _pending_prefetch (the D4-A receipt carrier) is owned by the base now.
         # Brain activation stage: 0=off, 1=observe+recall, 2=+paired reward (flip as verified).
         self._brain_stage = int(brain_stage)
         # Brain observation handles captured by sync_turn (per session), popped one-shot by the
@@ -233,61 +240,36 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         }
         return self._store.append(record)
 
-    # ----- D4-A: consumed-at-injection (defer mark_consumed off prefetch) -----
-
-    def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Like the base session-start prefetch, but does NOT mark the receipt consumed
-        inline (D4-A). The base marks consumed the instant prefetch returns non-empty —
-        "returned" != "the model saw it". Here we stash the receipt id (per session) and
-        the chassis calls ``confirm_prefetch_consumed`` only AFTER the block is actually
-        injected into the dispatched prompt (conversation_loop). A recalled block that is
-        assembled-but-dropped therefore never counts toward AC1.
-
-        Reuses the inherited merge/format so recall output is identical to the base — only
-        the mark timing changes. If no chassis ever confirms (e.g. a direct caller that does
-        not inject), the receipt simply stays unconsumed — recall is still recorded.
-
-        SEMANTIC FORK (R2-11): the AIOS base ``CompositeMemoryProvider.prefetch`` self-consumes
-        on return (and AIOS's own tests assert that for the base). This Hermes subclass
-        intentionally diverges to consume-at-injection, so ``circulation()`` timing differs
-        between a bare AIOS composite (recall-time) and this subclass (injection-time). Do not
-        compare circulation across the two as if identical. This is the C4/Sev-2-#8 fix.
-        """
-        store_records, receipt = self._store.recall(
-            query, call_site=SESSION_START_CALL_SITE, limit=self._recall_limit
-        )
-        merged = self._merge_dedup(
-            store_records, self._warm_cache["vault"], self._warm_cache["brain"]
-        )
-        if not merged:
-            return ""
-        self._pending_prefetch[session_id or self._session_id] = receipt["id"]
-        return self._format_context(merged)
-
-    def confirm_prefetch_consumed(self, session_id: str = "") -> bool:
-        """Mark the stashed session-start receipt consumed — called by the chassis after the
-        recalled block reaches the dispatched prompt. No-op (returns False) if there is no
-        pending receipt (e.g. the block was dropped, or already confirmed this turn)."""
-        rid = self._pending_prefetch.pop(session_id or self._session_id, None)
-        if rid is None:
-            return False
-        return bool(self._store.mark_consumed(rid))
+    # ----- D4-A: consumed-at-injection -----
+    #
+    # ``prefetch`` and ``confirm_prefetch_consumed`` are now SERVED BY THE BASE
+    # (``CompositeMemoryProvider`` with ``consume_on_inject=True``, set in __init__). The base
+    # path is behaviorally identical to the removed subclass overrides: same store.recall on the
+    # session-start call site, same _merge_dedup over store/vault/brain warm-cache, same
+    # _pending_prefetch stash keyed by session, same _format_context output, same
+    # mark_consumed-on-confirm timing. STEP 1 / S2 of loop-plugin-extraction removed the fork.
+    #
+    # SEMANTIC FORK NOTE (R2-11) still applies at the *configuration* level: this subclass
+    # always constructs the base in consume-at-injection mode, so circulation() timing differs
+    # from a bare AIOS composite built with the default consume-on-return — do not compare
+    # circulation across the two as if identical. (C4 / Sev-2-#8 fix.)
 
     def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, **kwargs):
-        """Free the LEAVING session's un-confirmed prefetch receipt (R2-9/AC-R5) before
-        rotating the cached id — so a session that prefetched but never confirmed (dropped
-        injection / aborted turn) does not orphan a _pending_prefetch entry."""
+        """Thin subclass override: free the LEAVING session's brain ``_last_observation`` (a
+        subclass-only field the base does not know about), THEN delegate to the base — which
+        frees the base-owned ``_pending_prefetch`` receipt and rotates the cached id. Retained
+        per STEP 1 / S2: the base cannot clean a field it does not own (AC-PX3b guard)."""
         if parent_session_id:
-            self._pending_prefetch.pop(parent_session_id, None)
             self._last_observation.pop(parent_session_id, None)
         super().on_session_switch(
             new_session_id, parent_session_id=parent_session_id, reset=reset, **kwargs
         )
 
     def on_session_end(self, messages) -> None:
-        """Free the current session's un-confirmed prefetch receipt at session end (R2-9)."""
-        self._pending_prefetch.pop(self._session_id, None)
+        """Thin subclass override: free the current session's ``_last_observation`` (subclass-
+        only), THEN delegate to the base to free the base-owned ``_pending_prefetch``."""
         self._last_observation.pop(self._session_id, None)
+        super().on_session_end(messages)
 
     # ----- D3b: pre-delegation knowledge-gate recall -----
 
