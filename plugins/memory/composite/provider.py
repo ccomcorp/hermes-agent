@@ -290,6 +290,38 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         """Mark a specific receipt consumed (D3b: after its block reached the child prompt)."""
         return bool(self._store.mark_consumed(receipt_id))
 
+    # ----- loop-seam bridges (spec-loop-plugin-extraction §3.2) -----
+    #
+    # THIN bridges to the existing methods above so the chassis can route the loop's seams
+    # through generic MemoryManager fan-out instead of by-name get_provider("composite")
+    # lookups. No behavior change — same storage/recall as the prior direct calls.
+
+    def on_background_review(self, lesson_candidates, *, session_id: str = "") -> int:
+        """Store each neutral lesson candidate via :meth:`record_fork_lesson`; return the count
+        written. The chassis has already extracted the candidates (neutral
+        ``{lesson, task_type, tags, provenance}`` shape) — this is the storage-policy entry.
+        A per-lesson append failure is logged, never raised (best-effort, matches the prior
+        in-chassis loop)."""
+        written = 0
+        for cand in lesson_candidates or []:
+            try:
+                self.record_fork_lesson(
+                    cand["lesson"],
+                    provenance=cand["provenance"],
+                    task_type=cand.get("task_type", "workflow"),
+                    tags=cand.get("tags"),
+                )
+                written += 1
+            except Exception as exc:
+                logger.warning("fork experience-store append failed: %s", exc)
+        return written
+
+    def recall_for_delegation(self, goal: str, *, session_id: str = ""):
+        """Pre-delegation knowledge-gate recall — delegate to the existing
+        :meth:`recall_for` primitive with the ``"pre-delegation"`` call site. Returns
+        ``(block, receipt_id)``."""
+        return self.recall_for("pre-delegation", goal)
+
     # ----- brain reward leg (stage 2): outcome-gated + BACKGROUNDED (R4) -----
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:

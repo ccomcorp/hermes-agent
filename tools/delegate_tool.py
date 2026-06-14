@@ -1969,28 +1969,29 @@ def _recover_tasks_from_json_string(
 
 def _apply_predelegation_recall(parent_agent, task_list):
     """D3b (C2 knowledge-gate): recall pre-delegation lessons for each task via the PARENT's
-    composite provider. Returns ``(augmented_contexts, receipts, comp)``:
+    memory manager fan-out. Returns ``(augmented_contexts, receipts, manager)``:
       - augmented_contexts: {task_index: context_with_block_prepended}
       - receipts:           {task_index: receipt_id}
-      - comp:               the composite provider (or None)
+      - manager:            the memory manager (or None) — used to confirm consumption
 
-    Does NOT mutate ``task_list`` (R2-7 — avoids double-prepend on list reuse) and does NOT
-    mark consumed (R2-2 — the caller confirms AFTER the child is successfully built, so a
-    build failure cannot over-count AC1). Clean no-op (``{}, {}, None``) unless a 'composite'
-    provider exposing ``recall_for`` is registered (builtin/honcho/none/Mock-without-recall →
-    skipped). Robust against odd parent shapes: a recall that raises (e.g. a Mock returning a
-    non-tuple) is logged and skipped, never crashes the delegation.
+    Provider-agnostic (spec-loop-plugin-extraction §3.1): dispatch routes through generic,
+    capability-guarded ``MemoryManager.recall_for_delegation`` fan-out — no by-name provider
+    lookup. Does NOT mutate ``task_list`` (R2-7 — avoids
+    double-prepend on list reuse) and does NOT mark consumed (R2-2 — the caller confirms
+    AFTER the child is successfully built, so a build failure cannot over-count AC1). Clean
+    no-op (``{}, {}, None``) unless a manager exposing ``recall_for_delegation`` is present
+    (none/Mock-without-recall → skipped). Robust against odd parent shapes: a recall that
+    raises (e.g. a Mock returning a non-tuple) is logged and skipped, never crashes delegation.
     """
     mgr = getattr(parent_agent, "_memory_manager", None)
-    comp = mgr.get_provider("composite") if (mgr is not None and hasattr(mgr, "get_provider")) else None
-    if comp is None or not hasattr(comp, "recall_for"):
+    if mgr is None or not hasattr(mgr, "recall_for_delegation"):
         return {}, {}, None
     augmented, receipts = {}, {}
     for i, t in enumerate(task_list):
         if not isinstance(t, dict):
             continue
         try:
-            block, rid = comp.recall_for("pre-delegation", t.get("goal", ""))
+            block, rid = mgr.recall_for_delegation(t.get("goal", ""))
         except Exception as exc:
             logger.debug("pre-delegation recall failed: %s", exc)
             continue
@@ -1999,7 +2000,7 @@ def _apply_predelegation_recall(parent_agent, task_list):
         existing = t.get("context") or ""
         augmented[i] = (block + "\n\n" + existing) if existing else block
         receipts[i] = rid
-    return augmented, receipts, comp
+    return augmented, receipts, mgr
 
 
 def delegate_task(
@@ -2125,7 +2126,7 @@ def delegate_task(
     # D3b: C2 pre-delegation knowledge-gate. Recall lessons per task into a per-index map
     # (NOT mutating task_list — R2-7) WITHOUT consuming. The receipt is confirmed AFTER the
     # child is successfully built (R2-2), so a build failure does not over-count AC1.
-    _predeleg_ctx, _predeleg_receipts, _predeleg_comp = _apply_predelegation_recall(
+    _predeleg_ctx, _predeleg_receipts, _predeleg_mgr = _apply_predelegation_recall(
         parent_agent, task_list
     )
 
@@ -2183,9 +2184,9 @@ def delegate_task(
             # consumption AFTER a successful build, not at recall time. A build that raised
             # above would skip this, leaving the lesson un-consumed (no AC1 over-count).
             _rid = _predeleg_receipts.pop(i, None)
-            if _rid is not None and _predeleg_comp is not None:
+            if _rid is not None and _predeleg_mgr is not None:
                 try:
-                    _predeleg_comp.confirm_consumed(_rid)
+                    _predeleg_mgr.confirm_consumed(_rid)
                 except Exception as exc:
                     logger.debug("pre-delegation confirm_consumed failed: %s", exc)
     finally:

@@ -433,6 +433,78 @@ class MemoryManager:
                     provider.name, e,
                 )
 
+    # -- Loop seams (capability-guarded fan-out; spec-loop-plugin-extraction §3.1) -------
+
+    def on_background_review(
+        self,
+        lesson_candidates: List[Dict[str, Any]],
+        *,
+        session_id: str = "",
+    ) -> int:
+        """Hand the neutral lesson-candidate list to each provider that implements it; sum
+        the per-provider counts. Provider-agnostic: only providers exposing
+        ``on_background_review`` are notified (the composite); builtin/honcho and any provider
+        without the method are a clean no-op. Mirrors the ``confirm_prefetch_consumed`` guard.
+        """
+        total = 0
+        for provider in self._providers:
+            fn = getattr(provider, "on_background_review", None)
+            if not callable(fn):
+                continue
+            try:
+                total += int(fn(lesson_candidates, session_id=session_id) or 0)
+            except Exception as e:
+                logger.warning(
+                    "Memory provider '%s' on_background_review failed: %s",
+                    provider.name, e,
+                )
+        return total
+
+    def recall_for_delegation(
+        self,
+        goal: str,
+        *,
+        session_id: str = "",
+    ) -> "tuple[str, Optional[str]]":
+        """Return the first implementing provider's ``(block, receipt_id)`` for a delegated
+        task's pre-delegation recall, else ``("", None)``.
+
+        Single-active-provider is an explicit assumption of record (§3.1): with one recall
+        provider this is unambiguous. Capability-guarded — providers without
+        ``recall_for_delegation`` are skipped.
+        """
+        for provider in self._providers:
+            fn = getattr(provider, "recall_for_delegation", None)
+            if not callable(fn):
+                continue
+            try:
+                block, receipt_id = fn(goal, session_id=session_id)
+            except Exception as e:
+                logger.debug(
+                    "Memory provider '%s' recall_for_delegation failed: %s",
+                    provider.name, e,
+                )
+                continue
+            return block, receipt_id
+        return "", None
+
+    def confirm_consumed(self, receipt_id: str) -> None:
+        """Tell each implementing provider a recall receipt was consumed (its block reached
+        the dispatched prompt). Capability-guarded fan-out; providers without
+        ``confirm_consumed`` are a clean no-op.
+        """
+        for provider in self._providers:
+            fn = getattr(provider, "confirm_consumed", None)
+            if not callable(fn):
+                continue
+            try:
+                fn(receipt_id)
+            except Exception as e:
+                logger.debug(
+                    "Memory provider '%s' confirm_consumed failed: %s",
+                    provider.name, e,
+                )
+
     # -- Sync ----------------------------------------------------------------
 
     @staticmethod

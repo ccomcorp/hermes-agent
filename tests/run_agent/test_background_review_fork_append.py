@@ -47,12 +47,15 @@ def _tool_result(call_id: str, success: bool = True, **extra) -> dict:
     return {"role": "tool", "tool_call_id": call_id, "content": json.dumps(payload)}
 
 
-class _StubManager:
-    def __init__(self, comp):
-        self._comp = comp
+from agent.memory_manager import MemoryManager  # noqa: E402
 
-    def get_provider(self, name):
-        return self._comp if name == "composite" else None
+
+def _manager_with(comp):
+    """A real MemoryManager wrapping the given provider — the chassis routes fork lessons
+    through generic ``MemoryManager.on_background_review`` fan-out (no get_provider lookup)."""
+    mgr = MemoryManager()
+    mgr.add_provider(comp)
+    return mgr
 
 
 class _FakeAgent:
@@ -109,7 +112,7 @@ def test_extract_pairs_new_writes_and_skips_prior_and_removals():
 def test_fork_lessons_write_migrated_false_and_circulate():
     store = ExperienceStore(db_path=":memory:")
     comp = HermesCompositeProvider(store, brain=None, vault=None, owns_brain=False)
-    agent = _FakeAgent(_StubManager(comp))
+    agent = _FakeAgent(_manager_with(comp))
 
     review = [
         _assistant_call(
@@ -139,18 +142,16 @@ def test_fork_lessons_write_migrated_false_and_circulate():
 
 
 def test_record_is_noop_without_composite_provider():
-    # builtin-only / non-composite config: no manager, or manager without composite.
+    # builtin-only / non-composite config: no manager at all, or a real manager with no
+    # provider implementing on_background_review -> fan-out writes nothing.
     assert bg.record_fork_authored_lessons(_FakeAgent(None), [], []) == 0
-
-    class _EmptyManager:
-        def get_provider(self, name):
-            return None
 
     review = [
         _assistant_call("c1", "memory", {"action": "add", "content": "x"}),
         _tool_result("c1"),
     ]
-    assert bg.record_fork_authored_lessons(_FakeAgent(_EmptyManager()), review, []) == 0
+    # Real manager, no recall/storage provider registered: clean no-op.
+    assert bg.record_fork_authored_lessons(_FakeAgent(MemoryManager()), review, []) == 0
 
 
 # --- R3: staged writes must not be mirrored ---------------------------------------------
@@ -187,11 +188,27 @@ def test_r6_warns_when_lessons_extracted_but_none_written(caplog):
     """Store rejects every append (version skew) → written 0 → WARNING, never silent."""
     import logging
 
-    class _RejectingComposite:
-        def record_fork_lesson(self, *a, **k):
-            raise ValueError("task_type rejected")
+    from agent.memory_provider import MemoryProvider
 
-    agent = _FakeAgent(_StubManager(_RejectingComposite()))
+    class _RejectingComposite(MemoryProvider):
+        @property
+        def name(self):
+            return "composite"
+
+        def is_available(self):
+            return True
+
+        def initialize(self, session_id, **kwargs):
+            pass
+
+        def get_tool_schemas(self):
+            return []
+
+        def on_background_review(self, candidates, *, session_id=""):
+            # Store rejects every append (version skew) -> 0 written.
+            return 0
+
+    agent = _FakeAgent(_manager_with(_RejectingComposite()))
     review = [
         _assistant_call("c1", "memory", {"action": "add", "content": "a real lesson"}),
         _tool_result("c1"),
@@ -209,7 +226,7 @@ def test_r6b_info_when_writes_seen_but_none_mapped(caplog):
 
     store = ExperienceStore(db_path=":memory:")
     comp = HermesCompositeProvider(store, brain=None, vault=None, owns_brain=False)
-    agent = _FakeAgent(_StubManager(comp))
+    agent = _FakeAgent(_manager_with(comp))
     review = [
         _assistant_call("c1", "memory", {"action": "add", "content": "X"}),
         _tool_result("c1", staged=True),

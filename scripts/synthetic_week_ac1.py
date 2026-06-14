@@ -152,16 +152,6 @@ def _review_messages(writes):
     return msgs
 
 
-class _Manager:
-    """Minimal stand-in for the chassis MemoryManager: only get_provider is needed."""
-
-    def __init__(self, comp):
-        self._comp = comp
-
-    def get_provider(self, name):
-        return self._comp if name == "composite" else None
-
-
 class _ForkAgent:
     """Minimal parent-agent surface the fork-append path reaches into."""
 
@@ -176,10 +166,16 @@ def run_synthetic_week(db_path: str = ":memory:") -> dict:
     Does NOT assert — the script ``main()`` and the pytest both consume this and apply
     their own checks, keeping the replay logic single-sourced.
     """
+    from agent.memory_manager import MemoryManager
+
     store = ExperienceStore(db_path=db_path)
     comp = HermesCompositeProvider(store, brain=None, vault=None, owns_brain=False)
     comp.initialize("synthetic-week")
-    agent = _ForkAgent(_Manager(comp))
+    # Drive the fork-append leg through a REAL MemoryManager so AC1 exercises the generic,
+    # capability-guarded on_background_review fan-out end-to-end (no get_provider lookup).
+    manager = MemoryManager()
+    manager.add_provider(comp)
+    agent = _ForkAgent(manager)
 
     # Days 1-2 — the background-review fork authors lessons through the composite.
     fork_written = record_fork_authored_lessons(agent, _review_messages(_FORK_WRITES), [])

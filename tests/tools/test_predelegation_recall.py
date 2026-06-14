@@ -1,9 +1,11 @@
 """AC-R4 / AC-R2 / AC-R6 — the REAL D3b pre-delegation recall hook
 (`tools.delegate_tool._apply_predelegation_recall`).
 
-Asserts: it augments the child context from a live composite, does NOT mutate task_list
-(no double-prepend on reuse), defers consumption to after-build (the helper never marks
-consumed), and is a clean no-op without a composite or against a Mock parent.
+Asserts: it augments the child context via generic MemoryManager fan-out
+(``recall_for_delegation`` / ``confirm_consumed`` — no by-name ``get_provider("composite")``),
+does NOT mutate task_list (no double-prepend on reuse), defers consumption to after-build
+(the helper never marks consumed), and is a clean no-op without a recall provider or against
+a Mock parent.
 """
 
 from __future__ import annotations
@@ -38,29 +40,29 @@ def _parent_with_lesson():
         "Run the grommet calibration before the swizzle stage.",
         provenance="fork:background_review:p", task_type="implementation-pattern",
     )
-    return store, comp, _Parent(mgr)
+    return store, comp, mgr, _Parent(mgr)
 
 
 def test_augments_context_without_mutation_and_defers_consume():
-    store, comp, parent = _parent_with_lesson()
+    store, comp, mgr, parent = _parent_with_lesson()
     task_list = [{"goal": "grommet calibration swizzle"}]
 
-    augmented, receipts, c = _apply_predelegation_recall(parent, task_list)
+    augmented, receipts, m = _apply_predelegation_recall(parent, task_list)
 
     assert 0 in augmented and "grommet" in augmented[0].lower()
-    assert 0 in receipts and c is comp
+    assert 0 in receipts and m is mgr             # fan-out returns the manager, not the provider
     assert "context" not in task_list[0]          # R2-7: task_list NOT mutated
     assert store.circulation() == 0               # R2-2: not consumed at recall time
 
-    # "after successful build" -> confirm -> circulation moves
-    assert comp.confirm_consumed(receipts[0]) is True
+    # "after successful build" -> confirm via the manager fan-out -> circulation moves
+    mgr.confirm_consumed(receipts[0])
     assert store.circulation() == 1
 
 
 def test_build_failure_does_not_overcount():
     """R2-2/AC-R2: if the child build fails (modeled here by NOT confirming), the lesson is
     never marked consumed -> no AC1 over-count."""
-    store, comp, parent = _parent_with_lesson()
+    store, comp, mgr, parent = _parent_with_lesson()
     augmented, receipts, _ = _apply_predelegation_recall(parent, [{"goal": "grommet swizzle"}])
     assert receipts                                # a hit receipt exists
     assert store.circulation() == 0               # build "failed" (no confirm) -> not counted
@@ -69,7 +71,7 @@ def test_build_failure_does_not_overcount():
 def test_no_double_prepend_on_reuse():
     """R2-6/AC-R6: re-running the hook over the same task_list yields identical augmentation
     (one block), never block+block, and never mutates the caller's context."""
-    store, comp, parent = _parent_with_lesson()
+    store, comp, mgr, parent = _parent_with_lesson()
     task_list = [{"goal": "grommet calibration swizzle", "context": "orig"}]
 
     aug1, _, _ = _apply_predelegation_recall(parent, task_list)
@@ -82,10 +84,20 @@ def test_no_double_prepend_on_reuse():
 
 
 def test_noop_without_composite():
+    # A manager with no recall-capable provider: fan-out returns ("", None) per task, so
+    # nothing is augmented/recalled even though the manager itself is present.
     parent = _Parent(MemoryManager())  # no composite registered
     task_list = [{"goal": "anything", "context": "orig"}]
-    augmented, receipts, c = _apply_predelegation_recall(parent, task_list)
-    assert augmented == {} and receipts == {} and c is None
+    augmented, receipts, _ = _apply_predelegation_recall(parent, task_list)
+    assert augmented == {} and receipts == {}
+    assert task_list[0]["context"] == "orig"
+
+
+def test_noop_without_manager():
+    parent = _Parent(None)  # no memory manager at all
+    task_list = [{"goal": "anything", "context": "orig"}]
+    augmented, receipts, m = _apply_predelegation_recall(parent, task_list)
+    assert augmented == {} and receipts == {} and m is None
     assert task_list[0]["context"] == "orig"
 
 
