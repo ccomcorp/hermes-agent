@@ -82,7 +82,7 @@ from composite_provider import (  # noqa: E402
     SESSION_START_CALL_SITE,
     TOOL_SIGNAL,
 )
-from backends import BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
+from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
 
 # Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
 # keeps a full SKILL.md body from bloating the FTS index while preserving recall keys.
@@ -135,7 +135,11 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # Background worker for the paired reward — kept OFF the turn thread (R4). Lazy-built.
         self._reward_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._reward_futures: List["concurrent.futures.Future"] = []
+        # Brain health surface (Task #11): the LAST completed reward + running dW totals, so the
+        # brain ack is HONEST (no hardcoded 'degraded'). Set by the backgrounded reward _run.
         self._last_brain_reward: Optional[Dict[str, Any]] = None
+        self._reward_dW_total: float = 0.0
+        self._reward_count: int = 0
 
     def is_available(self) -> bool:
         """Available if a store already exists OR we know how to build one — WITHOUT opening
@@ -377,10 +381,72 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             except Exception as exc:  # best-effort; never surfaces to the turn
                 logger.debug("brain reward failed: %s", exc)
                 status = BRAIN_FAIL
-            self._last_brain_reward = {"status": status, "observation_id": observation_id}
+            # Record the honest outcome for the health surface: the dW the adapter captured
+            # from THIS reward's response (read off the brain; None if unreported/failed).
+            dw = getattr(self._brain, "_last_reward_dW", None)
+            self._last_brain_reward = {
+                "status": status, "observation_id": observation_id, "dW": dw,
+            }
+            self._reward_count += 1
+            if isinstance(dw, (int, float)):
+                self._reward_dW_total += float(dw)
             return status
 
         self._reward_futures.append(self._reward_pool.submit(_run))
+
+    def brain_health(self) -> Dict[str, Any]:
+        """An HONEST snapshot of the brain reward leg (Task #11) — derived deterministically
+        from the recorded last reward + stage, with NO hardcoded label. The elicitation showed
+        a static 'degraded' is a lie post the .31 dW-fix; here the status reflects the ACTUAL
+        last completed reward.
+
+        ``status`` label table:
+          * ``disabled``     — no brain OR stage < 1 (the leg is not active).
+          * ``observe-only`` — stage == 1 (observe + recall, no reward leg).
+          * ``pending``      — stage >= 2 but no reward has completed yet (or one is in flight).
+          * ``live``         — stage >= 2 and the last reward was BRAIN_OK (a real dW landed).
+          * ``degraded``     — stage >= 2 and the last reward was BRAIN_DEGRADED (dW=0/422/legacy).
+          * ``fail``         — stage >= 2 and the last reward was BRAIN_FAIL (transport error).
+
+        Two distinct dW totals are reported (they are NOT the same number):
+          * ``reward_dW_total``  — LOCAL: the sum of per-reward dW THIS process applied
+            (accumulated in ``_run`` from each feedback response's dW). Zero until a reward runs.
+          * ``brain_dW_total``   — BRAIN-AUTHORITATIVE: the brain's own running total read from
+            ``/api/claude/summary`` (``last_reward_dW_total``, the key the battery reads). This is
+            best-effort — a live HTTP read that is ``None`` on any failure (offline/absent/raise),
+            never raising and never blocking the health call beyond the adapter's short timeout.
+        """
+        last = self._last_brain_reward
+        if self._brain is None or self._brain_stage < 1:
+            status = "disabled"
+        elif self._brain_stage == 1:
+            status = "observe-only"
+        elif last is None:
+            status = "pending"  # stage>=2, no completed reward yet (or in flight)
+        else:
+            status = {
+                BRAIN_OK: "live",
+                BRAIN_DEGRADED: "degraded",
+                BRAIN_FAIL: "fail",
+            }.get(last.get("status"), "pending")
+        # Brain-authoritative total (best-effort; never raises, None on any failure).
+        brain_dW_total: Optional[float] = None
+        if self._brain is not None:
+            try:
+                reader = getattr(self._brain, "brain_dW_total", None)
+                if callable(reader):
+                    brain_dW_total = reader()
+            except Exception as exc:  # noqa: BLE001 - health surface must never raise
+                logger.debug("brain_dW_total read failed: %s", exc)
+        return {
+            "stage": self._brain_stage,
+            "brain_present": self._brain is not None,
+            "status": status,
+            "last_reward": last,
+            "reward_count": self._reward_count,
+            "reward_dW_total": self._reward_dW_total,
+            "brain_dW_total": brain_dW_total,
+        }
 
     def _flush_rewards(self, timeout: float = 5.0) -> None:
         """Wait for outstanding background rewards (used by tests + shutdown)."""

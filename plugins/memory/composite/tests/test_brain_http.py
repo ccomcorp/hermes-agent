@@ -37,6 +37,10 @@ class _BrainState:
         self.observe_payload = {"id": 1, "observation_id": "obs-uuid-1"}
         self.feedback_payload = {"ok": True, "dW": 0.42}
         self.feedback_status = 200    # flip to 422 for the stale-id path
+        # /api/brain/learning-delta: a diagnostic SNAPSHOT (no dW total in the live shape).
+        self.learning_delta_payload = {"nnz_by_region": {"a->b": 3}, "step": 7}
+        # /api/claude/summary: the AUTHORITATIVE brain-side dW total (the key the battery reads).
+        self.summary_payload = {"last_reward_dW_total": 6.59}
         self.last_feedback_body = None
         self.last_observe_body = None
         self.last_recall_query = None
@@ -69,6 +73,10 @@ def _make_handler(state: _BrainState):
                 return self._send(200, state.recall_payload)
             if parsed.path == "/api/claude/status":
                 return self._send(200, {"status": "ok"})
+            if parsed.path == "/api/brain/learning-delta":
+                return self._send(200, state.learning_delta_payload)
+            if parsed.path == "/api/claude/summary":
+                return self._send(200, state.summary_payload)
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
@@ -250,6 +258,70 @@ def test_reward_transport_failure_is_fail(brain):
     client._base_url = "http://127.0.0.1:1"
     assert client.reward("ref", valence=0.5, derivation="d",
                         observation_id="obs-uuid-1") == BRAIN_FAIL
+
+
+def test_reward_captures_last_reward_dw_from_response(brain):
+    # The provider reads brain._last_reward_dW for its honest health surface; the adapter
+    # must capture the dW carried in the feedback response (no second call).
+    client, state = brain
+    assert client._last_reward_dW is None                 # unset before any reward
+    state.feedback_payload = {"ok": True, "dW": 0.42}
+    client.reward("ref", valence=0.5, derivation="d", observation_id="obs-uuid-1")
+    assert client._last_reward_dW == pytest.approx(0.42)
+
+
+def test_reward_last_reward_dw_is_none_when_response_omits_dw(brain):
+    client, state = brain
+    state.feedback_payload = {"ok": True}                  # no dW key
+    client.reward("ref", valence=0.5, derivation="d", observation_id="obs-uuid-1")
+    assert client._last_reward_dW is None
+
+
+# --- learning_delta SNAPSHOT (diagnostic only; carries NO dW total) -----------------
+
+def test_learning_delta_returns_parsed_snapshot_payload(brain):
+    # /api/brain/learning-delta is a diagnostic snapshot (nnz_by_region/step/...), NOT a
+    # dW-total source. The method returns the parsed dict verbatim.
+    client, state = brain
+    state.learning_delta_payload = {"nnz_by_region": {"a->b": 3}, "step": 12}
+    delta = client.learning_delta()
+    assert delta == {"nnz_by_region": {"a->b": 3}, "step": 12}
+
+
+def test_learning_delta_offline_returns_empty_dict(brain):
+    client, _ = brain
+    client._base_url = "http://127.0.0.1:1"
+    assert client.learning_delta() == {}
+
+
+# --- brain_dW_total (AUTHORITATIVE total off /api/claude/summary) -------------------
+
+def test_brain_dW_total_reads_last_reward_dW_total_from_summary(brain):
+    # The authoritative brain-side running total lives on /api/claude/summary under the
+    # EXACT key the battery reads (last_reward_dW_total) -- NOT on learning-delta.
+    client, state = brain
+    state.summary_payload = {"last_reward_dW_total": 6.59}
+    assert client.brain_dW_total() == pytest.approx(6.59)
+
+
+def test_brain_dW_total_offline_returns_none(brain):
+    client, _ = brain
+    client._base_url = "http://127.0.0.1:1"  # nothing listening -> transport error
+    assert client.brain_dW_total() is None
+
+
+def test_brain_dW_total_absent_key_returns_none(brain):
+    # A summary payload without last_reward_dW_total -> None, never a crash.
+    client, state = brain
+    state.summary_payload = {"uptime": 123, "step": 7}
+    assert client.brain_dW_total() is None
+
+
+def test_learning_delta_total_alias_delegates_to_brain_dW_total(brain):
+    # The deprecated alias delegates to brain_dW_total (hits /api/claude/summary).
+    client, state = brain
+    state.summary_payload = {"last_reward_dW_total": 2.5}
+    assert client.learning_delta_total() == pytest.approx(2.5)
 
 
 # --- timeout fail-open (R4) ---------------------------------------------------------

@@ -42,7 +42,8 @@ except ImportError:  # pragma: no cover
 _DEFAULT_TIMEOUT_S = 2.5
 _DEFAULT_MAX_ITEM_CHARS = 2000
 # Response keys that, if present and numeric, report the synaptic change of a reward.
-_DW_KEYS = ("dW", "dw", "reward_dW_total", "weight_delta", "dw_total", "total_dW")
+_DW_KEYS = ("dW", "dw", "reward_dW_total", "last_reward_dW_total", "weight_delta",
+            "dW_total", "dw_total", "total_dW")
 # Response containers a recall payload may use for its item list.
 _RECALL_LIST_KEYS = ("results", "memories", "lessons", "items", "knowledge")
 # Item keys that carry the recalled text, in precedence order (matches _merge_dedup).
@@ -68,6 +69,10 @@ class HttpBrainClient:
         self._domain = domain or ""
         self._recall_limit = int(recall_limit)
         self._max_item_chars = int(max_item_chars)
+        # The synaptic change (dW) the MOST RECENT reward applied, captured from the feedback
+        # response so the composite's health surface can read it without a second call. None
+        # until a reward has run (or when the response carries no dW).
+        self._last_reward_dW: Optional[float] = None
 
     # ----- transport ---------------------------------------------------------------
 
@@ -210,6 +215,7 @@ class HttpBrainClient:
         if not paired:
             return BRAIN_DEGRADED  # legacy freshness-only path is NOT the learning path
         dw = self._extract_dw(body)
+        self._last_reward_dW = dw  # most-recent applied change (None if unreported)
         if dw is not None and dw == 0.0:
             return BRAIN_DEGRADED  # HTTP-200 but no synaptic change (dW=0)
         return BRAIN_OK  # paired + (dW != 0 or dW unreported on a known-live brain)
@@ -223,6 +229,43 @@ class HttpBrainClient:
             if isinstance(v, (int, float)):
                 return float(v)
         return None
+
+    def learning_delta(self) -> dict[str, Any]:
+        """GET ``/api/brain/learning-delta`` — a diagnostic SNAPSHOT of recent learning
+        changes. Returns the parsed dict on 200, else ``{}`` (fail-open; same short-timeout/
+        no-retry discipline as every other call). The LIVE shape reports ``top_20_associations``
+        / ``nnz_by_region`` / ``eligibility_summary`` / ``step`` / ``development_stage`` — it is
+        a snapshot and does NOT carry a dW total. For the authoritative brain-side running total,
+        use :meth:`brain_dW_total` (which reads ``/api/claude/summary``)."""
+        code, body, err = self._request("/api/brain/learning-delta", "GET")
+        if err is not None or code != 200 or not isinstance(body, dict):
+            if err is not None:
+                logger.debug("brain learning_delta failed: %s", err)
+            return {}
+        return body
+
+    def brain_dW_total(self) -> Optional[float]:
+        """GET ``/api/claude/summary`` and return the authoritative brain-side running total
+        ``last_reward_dW_total`` as a float (the EXACT key the experience-contract battery
+        reads — ``scripts/battery-experience-contract.py:dw_total``). Returns ``None`` on
+        offline/transport error, non-200, or when the key is absent. Same short-timeout/
+        no-retry/fail-open discipline as every other call.
+
+        Note this is the brain's OWN running total — distinct from the composite provider's
+        local per-process ``reward_dW_total`` accumulator."""
+        code, body, err = self._request("/api/claude/summary", "GET")
+        if err is not None or code != 200 or not isinstance(body, dict):
+            if err is not None:
+                logger.debug("brain brain_dW_total failed: %s", err)
+            return None
+        v = body.get("last_reward_dW_total")
+        return float(v) if isinstance(v, (int, float)) else None
+
+    def learning_delta_total(self) -> Optional[float]:
+        """DEPRECATED thin alias for :meth:`brain_dW_total`. The dW total does NOT live on
+        ``/api/brain/learning-delta`` (a snapshot) — it lives on ``/api/claude/summary``.
+        Retained so existing callers keep working; new code should call ``brain_dW_total``."""
+        return self.brain_dW_total()
 
     def ping(self) -> dict[str, Any]:
         """Liveness probe (logged at build). Returns ``{"ok": bool, "detail": ...}``."""
