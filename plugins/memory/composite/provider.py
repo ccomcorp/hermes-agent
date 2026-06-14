@@ -15,18 +15,22 @@ there; nothing here re-implements them. This module only:
   4. DEFERS the ``ExperienceStore`` open to ``initialize()`` so a read-only discovery probe
      creates no sqlite connection / no ``experience.db`` (D1).
 
-For M1 the brain and vault legs are intentionally absent (``brain=None``/``vault=None``).
-The ``sync_turn`` ack reports an absent leg as ``"skipped"`` (R9 — never a healthy-looking
-status for a leg that was never constructed). The ``"degraded"`` state applies once a real
-brain adapter is wired but NeuroLinked still returns ``dW=0`` (pre-Task-3); the real
-brain/vault adapters are a separate wiring item.
+The brain leg is now wireable and STAGED via ``HERMES_BRAIN_STAGE`` (0=off default /
+1=observe+recall / 2=+paired reward); stage 0 keeps the live agent byte-for-byte unchanged.
+The vault leg is still absent (``vault=None``). The ``sync_turn`` ack reports a leg by its
+ACTUAL presence/stage (R9 — never a healthy-looking status for a leg that was never
+constructed): an absent leg is ``"skipped"``, the active brain leg is ``"observe-only"``
+(reward is outcome-gated in ``handle_tool_call``, never per-turn).
 """
 
 from __future__ import annotations
 
+import concurrent.futures
+import json
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -76,8 +80,9 @@ from store import ExperienceStore  # noqa: E402  (path inserted above)
 from composite_provider import (  # noqa: E402
     CompositeMemoryProvider,
     SESSION_START_CALL_SITE,
+    TOOL_SIGNAL,
 )
-from backends import BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
+from backends import BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
 
 # Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
 # keeps a full SKILL.md body from bloating the FTS index while preserving recall keys.
@@ -103,6 +108,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         vault=None,
         owns_brain: bool = False,
         recall_limit: int = 5,
+        brain_stage: int = 0,
     ) -> None:
         """Accept EITHER a live ``store`` (tests/harness) OR a ``db_path`` for DEFERRED
         construction (D1).
@@ -120,6 +126,16 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # D4-A carrier: receipt id stashed by prefetch (per session), marked consumed only
         # after the chassis confirms the block was injected into the dispatched prompt.
         self._pending_prefetch: Dict[str, str] = {}
+        # Brain activation stage: 0=off, 1=observe+recall, 2=+paired reward (flip as verified).
+        self._brain_stage = int(brain_stage)
+        # Brain observation handles captured by sync_turn (per session), popped one-shot by the
+        # stage-2 reward leg so an outcome PAIRS against the right observation (reaches dW>0).
+        self._last_observation: Dict[str, str] = {}
+        self._obs_lock = threading.Lock()
+        # Background worker for the paired reward — kept OFF the turn thread (R4). Lazy-built.
+        self._reward_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._reward_futures: List["concurrent.futures.Future"] = []
+        self._last_brain_reward: Optional[Dict[str, Any]] = None
 
     def is_available(self) -> bool:
         """Available if a store already exists OR we know how to build one — WITHOUT opening
@@ -164,20 +180,26 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         if getattr(self, "_agent_context", "primary") != "primary":
             return {"store": "skipped", "brain": "skipped", "vault": "skipped"}
 
-        # R9: report each leg by ACTUAL presence — never claim "ok"/"degraded" for a leg
-        # that was never constructed (the silent-degradation the agent_init warning fixes,
-        # one layer down). brain=None/vault=None -> "skipped", not a healthy-looking status.
+        # R9: report each leg by ACTUAL presence/stage. The brain leg is OBSERVE-ONLY here
+        # (reward lives in handle_tool_call, the outcome-gated path) — sync_turn never reports
+        # a reward state. The observation handle is captured so the stage-2 reward can pair.
         ack = {
             "store": "skipped",
-            "brain": BRAIN_DEGRADED if self._brain is not None else "skipped",
+            "brain": "observe-only" if (self._brain is not None and self._brain_stage >= 1) else "skipped",
             "vault": "ok" if self._vault is not None else "skipped",
         }
-        if self._brain is not None:
+        if self._brain is not None and self._brain_stage >= 1:
+            sid = session_id or self._session_id
             try:
-                ok = self._brain.observe(
+                obs_id = self._brain.observe(
                     {"type": "context", "content": (assistant_content or "")[:_LESSON_MAX_CHARS]}
                 )
-                ack["brain"] = BRAIN_DEGRADED if ok else BRAIN_FAIL
+                if obs_id:
+                    with self._obs_lock:
+                        self._last_observation[sid] = str(obs_id)
+                    ack["brain"] = "observe-only"
+                else:
+                    ack["brain"] = BRAIN_FAIL
             except Exception as exc:  # best-effort; degrade, never crash
                 logger.debug("brain observe failed: %s", exc)
                 ack["brain"] = BRAIN_FAIL
@@ -253,6 +275,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         injection / aborted turn) does not orphan a _pending_prefetch entry."""
         if parent_session_id:
             self._pending_prefetch.pop(parent_session_id, None)
+            self._last_observation.pop(parent_session_id, None)
         super().on_session_switch(
             new_session_id, parent_session_id=parent_session_id, reset=reset, **kwargs
         )
@@ -260,6 +283,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
     def on_session_end(self, messages) -> None:
         """Free the current session's un-confirmed prefetch receipt at session end (R2-9)."""
         self._pending_prefetch.pop(self._session_id, None)
+        self._last_observation.pop(self._session_id, None)
 
     # ----- D3b: pre-delegation knowledge-gate recall -----
 
@@ -280,19 +304,146 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         """Mark a specific receipt consumed (D3b: after its block reached the child prompt)."""
         return bool(self._store.mark_consumed(receipt_id))
 
+    # ----- brain reward leg (stage 2): outcome-gated + BACKGROUNDED (R4) -----
 
-def build_provider(hermes_home: str) -> HermesCompositeProvider:
+    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+        """Route signal/forget to the store (base), THEN — at stage 2 only — fire a PAIRED
+        brain reward for a real outcome (the loop's learning leg).
+
+        This runs on the foreground TURN/tool thread, so the brain reward is SUBMITTED to a
+        background worker and NOT awaited — we return the store ack immediately
+        (ack.brain="pending"); a slow/offline brain can never stall the turn (R4). C3 is
+        preserved: reward fires only here (a deliberate outcome), never per-turn in sync_turn.
+        The SIGNED valence is carried so failures punish; valence==0 is neutral and skips the
+        reward; the captured observation_id is popped one-shot to avoid double-credit.
+
+        The store's ``signal()`` enforces a closed ``VALID_DERIVATIONS`` whitelist (its C5
+        non-constant-by-construction guard), and the ``experience_signal`` tool schema
+        constrains ``derivation`` to that same enum — so a compliant caller can only ever send
+        a whitelist-valid derivation. The args are therefore routed to the store UNMODIFIED:
+        if a caller does send an out-of-set derivation it is a real error and the base correctly
+        surfaces the store's ``ConstantValenceError`` as a clean ``{"error": ...}`` (never a
+        silently-normalized success). The same caller-supplied derivation reaches
+        ``self._brain.reward`` below.
+        """
+        out = super().handle_tool_call(tool_name, args, **kwargs)
+        if tool_name != TOOL_SIGNAL or self._brain is None or self._brain_stage < 2:
+            return out
+        try:
+            parsed = json.loads(out)
+        except (ValueError, TypeError):
+            return out
+        if not isinstance(parsed, dict) or "error" in parsed:
+            return out  # store rejected the signal — do not reward a degenerate outcome
+        try:
+            valence = float(args.get("valence"))
+        except (TypeError, ValueError):
+            return out
+        if valence == 0.0:
+            return out  # neutral is not a reward
+        session_id = kwargs.get("session_id") or self._session_id
+        with self._obs_lock:
+            observation_id = self._last_observation.pop(session_id, None)
+        # DEVIATION (one-shot pairing): fire the reward ONLY when a captured observation is
+        # present to pair against. An un-paired signal (no prior observe, or the stash was
+        # already popped by an earlier signal) is not re-credited — this is the one-shot
+        # guarantee that prevents double-credit on a popped id.
+        if observation_id is None:
+            return out
+        self._submit_reward(
+            ref=str(args.get("ref") or ""),
+            valence=valence,
+            derivation=str(args.get("derivation") or ""),
+            observation_id=observation_id,
+            session_id=session_id,
+        )
+        ack = parsed.get("ack") if isinstance(parsed.get("ack"), dict) else {}
+        ack["brain"] = "pending"  # backgrounded; final dW status recorded async (health view)
+        parsed["ack"] = ack
+        return json.dumps(parsed)
+
+    def _submit_reward(self, *, ref, valence, derivation, observation_id, session_id) -> None:
+        if self._reward_pool is None:
+            self._reward_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="brain-reward"
+            )
+
+        def _run() -> str:
+            try:
+                status = self._brain.reward(
+                    ref, valence=valence, derivation=derivation,
+                    observation_id=observation_id, session_id=session_id,
+                )
+            except Exception as exc:  # best-effort; never surfaces to the turn
+                logger.debug("brain reward failed: %s", exc)
+                status = BRAIN_FAIL
+            self._last_brain_reward = {"status": status, "observation_id": observation_id}
+            return status
+
+        self._reward_futures.append(self._reward_pool.submit(_run))
+
+    def _flush_rewards(self, timeout: float = 5.0) -> None:
+        """Wait for outstanding background rewards (used by tests + shutdown)."""
+        futures, self._reward_futures = self._reward_futures, []
+        for fut in futures:
+            try:
+                fut.result(timeout=timeout)
+            except Exception:  # noqa: BLE001 - best-effort drain
+                pass
+
+    def shutdown(self) -> None:
+        self._flush_rewards(timeout=2.0)
+        if self._reward_pool is not None:
+            self._reward_pool.shutdown(wait=False)
+            self._reward_pool = None
+        super().shutdown()
+
+
+def _resolve_brain_stage() -> int:
+    """Parse HERMES_BRAIN_STAGE safely. Clamps to 0..2; any garbage -> 0 (off). Default 0
+    keeps the LIVE agent byte-for-byte unchanged until a stage is deliberately flipped."""
+    raw = os.environ.get("HERMES_BRAIN_STAGE", "0")
+    try:
+        return max(0, min(2, int(str(raw).strip())))
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_provider(hermes_home: str) -> "HermesCompositeProvider":
     """Construct the composite over a profile-scoped experience store.
 
-    ``owns_brain=False`` is load-bearing (INTEGRATION.md §2): the composite must never
-    close a brain client it did not create. ``brain``/``vault`` are None for M1 (see the
-    module docstring) — the brain leg correctly reports ``degraded`` until Task 3.
+    Brain activation is STAGED via env (flip only after verifying each stage live):
+      * HERMES_BRAIN_STAGE=0 (default) -> brain=None; the live agent is unaffected.
+      * =1 -> observe + recall active (the brain receives experience + supplies recall).
+      * =2 -> + the paired reward (the learning leg; gate on battery D1 PASS on the host).
+    HERMES_BRAIN_URL overrides the endpoint (default http://1.1.11.31:8000). When a brain is
+    constructed the composite OWNS it (owns_brain=True; the urllib adapter's close() is a no-op).
+    A liveness probe is logged at build so a dead endpoint is visible, not silently degraded.
     """
     db_path = os.path.join(hermes_home, "experience.db")
-    # D1: pass db_path (DEFERRED) — the ExperienceStore opens in initialize(), not here, so
-    # constructing the provider during a read-only discovery probe creates no sqlite
-    # connection / no experience.db. The active provider's initialize() opens it exactly once.
-    return HermesCompositeProvider(db_path=db_path, brain=None, vault=None, owns_brain=False)
+    stage = _resolve_brain_stage()
+    brain = None
+    if stage >= 1:
+        url = os.environ.get("HERMES_BRAIN_URL") or "http://1.1.11.31:8000"
+        try:
+            from .brain_http import HttpBrainClient  # type: ignore
+        except ImportError:  # loaded flat (composite dir on sys.path)
+            from brain_http import HttpBrainClient  # type: ignore
+        brain = HttpBrainClient(
+            url, source="hermes-agent",
+            domain=os.environ.get("CLAUDE_ACTIVE_PROJECT") or None,
+        )
+        probe = brain.ping()
+        logger.info(
+            "composite brain leg ACTIVE: stage=%d url=%s reachable=%s",
+            stage, url, probe.get("ok"),
+        )
+    else:
+        logger.debug("composite brain leg disabled (HERMES_BRAIN_STAGE=0)")
+    return HermesCompositeProvider(
+        db_path=db_path, brain=brain, vault=None,
+        owns_brain=brain is not None, brain_stage=stage,
+    )
 
 
 __all__ = ["HermesCompositeProvider", "build_provider", "ExperienceStore"]
