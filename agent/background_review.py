@@ -508,6 +508,9 @@ def record_fork_authored_lessons(
         }
         for lesson in lessons
     ]
+    # AIOS-LOOP-SEAM:background-review-write — fork-authored lessons enter the experience
+    # store here (loop write leg). Fail-loud fingerprint anchor (AC-PX5 #1); do not relocate
+    # without updating plugins/memory/composite/loop_guard.py:SEAM_SITES.
     written = manager.on_background_review(candidates, session_id=session_id)
 
     # R6: lessons were extracted but the store rejected every append (e.g. a task_type/source

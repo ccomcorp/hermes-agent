@@ -1991,6 +1991,9 @@ def _apply_predelegation_recall(parent_agent, task_list):
         if not isinstance(t, dict):
             continue
         try:
+            # AIOS-LOOP-SEAM:delegation-recall — pre-delegation knowledge-gate recall (loop
+            # read leg). Fail-loud fingerprint anchor (AC-PX5 #1); do not relocate without
+            # updating plugins/memory/composite/loop_guard.py:SEAM_SITES.
             block, rid = mgr.recall_for_delegation(t.get("goal", ""))
         except Exception as exc:
             logger.debug("pre-delegation recall failed: %s", exc)
@@ -2186,6 +2189,10 @@ def delegate_task(
             _rid = _predeleg_receipts.pop(i, None)
             if _rid is not None and _predeleg_mgr is not None:
                 try:
+                    # AIOS-LOOP-SEAM:delegation-confirm — mark the recall receipt consumed once
+                    # its block reached the child prompt (loop consume leg). Fail-loud
+                    # fingerprint anchor (AC-PX5 #1); do not relocate without updating
+                    # plugins/memory/composite/loop_guard.py:SEAM_SITES.
                     _predeleg_mgr.confirm_consumed(_rid)
                 except Exception as exc:
                     logger.debug("pre-delegation confirm_consumed failed: %s", exc)

@@ -72,6 +72,27 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
     if _s not in sys.path:
         sys.path.insert(0, _s)
 
+
+def _resolve_aios_health_dir() -> Optional[str]:
+    """Return the AIOS ``packages/health`` dir (for ``ExperienceHealth``), or ``None``.
+
+    Mirrors ``synthetic_week_ac1.py``: ``AIOS_HEALTH_DIR`` override, else sibling
+    ``<AIOS>/aios/packages/health`` resolved from this file. The loop self-check (AC-PX5 #3)
+    reads ``ExperienceHealth.circulation_report``; an absent health package degrades that
+    check to a quiet no-op (best-effort — it never blocks session-end)."""
+    env = os.environ.get("AIOS_HEALTH_DIR")
+    cand = (
+        Path(env)
+        if env
+        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "health"
+    )
+    return str(cand) if cand.is_dir() else None
+
+
+_HEALTH_DIR = _resolve_aios_health_dir()
+if _HEALTH_DIR and _HEALTH_DIR not in sys.path:
+    sys.path.insert(0, _HEALTH_DIR)
+
 # Flat imports (the AIOS packages live in hyphenated dirs, so the package dir itself is
 # placed on sys.path and the modules import flat — the convention their own tests use).
 # When the chassis is on the path, composite_provider binds the REAL
@@ -147,6 +168,23 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         self._last_brain_reward: Optional[Dict[str, Any]] = None
         self._reward_dW_total: float = 0.0
         self._reward_count: int = 0
+        # AC-PX5 #3 (present-but-unproductive backstop): a small consecutive-counter over
+        # session-end self-checks. K consecutive write-only checks (circulation==0 with a
+        # corpus above the recall floor) flips the loop-health status from passive report to
+        # an ERROR. K is configurable via HERMES_LOOP_WRITEONLY_K (default 2); the lesson floor
+        # via HERMES_LOOP_WRITEONLY_FLOOR (default 0 — any non-empty write-only corpus counts;
+        # a fresh/foreign store with 0 lessons never trips because WRITE_ONLY_MEMORY needs
+        # total_lessons>0). Tracked here so the ERROR fires only on a SUSTAINED dead loop.
+        self._writeonly_streak: int = 0
+        self._loop_writeonly_alarm: bool = False
+        try:
+            self._loop_writeonly_k = max(1, int(os.environ.get("HERMES_LOOP_WRITEONLY_K", "2")))
+        except (TypeError, ValueError):
+            self._loop_writeonly_k = 2
+        try:
+            self._loop_writeonly_floor = max(0, int(os.environ.get("HERMES_LOOP_WRITEONLY_FLOOR", "0")))
+        except (TypeError, ValueError):
+            self._loop_writeonly_floor = 0
 
     def is_available(self) -> bool:
         """Available if a store already exists OR we know how to build one — WITHOUT opening
@@ -165,6 +203,23 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         ``sync_turn`` does not yet fire in practice. It is kept as future-proofing AND because
         ``sync_turn`` performs no store append regardless — the store stays clean either way.
         """
+        # AC-PX5 #2 (boot wiring assertion, OWN PROVIDER ONLY): refuse to boot a silently-dead
+        # loop. Assert the chassis still exposes the MemoryManager fan-out dispatch AND the seam
+        # sentinels resolve; a lost patch RAISES LoopWiringError here (re-raised by
+        # initialize_all), never warn-and-continue. The live config MUST pass (no false positive
+        # — a raise here would prevent the desktop from starting; covered by a live-boot test).
+        # The manager is threaded from initialize_all when available; otherwise the class-level
+        # dispatch surface is verified via the MemoryManager class.
+        try:
+            from .loop_guard import assert_loop_wired
+        except ImportError:  # loaded flat (plugin dir not a package on this path)
+            from loop_guard import assert_loop_wired  # type: ignore
+        manager = kwargs.get("memory_manager")
+        if manager is None:
+            from agent.memory_manager import MemoryManager
+            manager = MemoryManager
+        assert_loop_wired(manager)
+
         if self._store is None and self._db_path is not None:
             self._store = ExperienceStore(db_path=self._db_path)
         super().initialize(session_id, **kwargs)
@@ -267,9 +322,110 @@ class HermesCompositeProvider(CompositeMemoryProvider):
 
     def on_session_end(self, messages) -> None:
         """Thin subclass override: free the current session's ``_last_observation`` (subclass-
-        only), THEN delegate to the base to free the base-owned ``_pending_prefetch``."""
+        only), run the AC-PX5 #3 loop self-check (present-but-unproductive backstop), THEN
+        delegate to the base to free the base-owned ``_pending_prefetch``."""
         self._last_observation.pop(self._session_id, None)
+        # Reuse the existing session-end hook as the runtime tripwire (spec §8 AC-PX5 #3).
+        try:
+            self.loop_self_check()
+        except Exception as exc:  # best-effort; a health-read failure never breaks session-end
+            logger.debug("loop_self_check failed: %s", exc)
         super().on_session_end(messages)
+
+    # ----- AC-PX5 #3: present-but-unproductive (runtime backstop) -----
+
+    def loop_self_check(self) -> Dict[str, Any]:
+        """Read ``ExperienceHealth(store).circulation_report()`` and detect a SUSTAINED
+        write-only loop (the predecessor's "lessons written, never read" death).
+
+        A check is "write-only" when the ``WRITE_ONLY_MEMORY`` flag is active (circulation==0
+        with total_lessons>0) AND the corpus exceeds the configured recall floor. K consecutive
+        write-only checks emit a ``logger.ERROR`` and flip ``_loop_writeonly_alarm`` (surfaced
+        by :meth:`loop_health`). A circulating check (or a fresh/foreign store below the floor)
+        resets the streak and clears the alarm — so noise from a cold or non-loop store stays
+        quiet. Returns the structured self-check result (also useful to tests/health callers).
+
+        Best-effort: with no store yet, or the AIOS health package absent, returns a quiet
+        ``{"checked": False, ...}`` and changes no state.
+        """
+        result: Dict[str, Any] = {
+            "checked": False,
+            "write_only": False,
+            "streak": self._writeonly_streak,
+            "alarm": self._loop_writeonly_alarm,
+            "circulation": None,
+            "total_lessons": None,
+        }
+        if self._store is None:
+            return result
+        try:
+            from experience_health import ExperienceHealth  # AIOS health pkg (path inserted)
+        except ImportError:
+            logger.debug("loop_self_check: AIOS health package not importable; skipping")
+            return result
+
+        report = ExperienceHealth(self._store).circulation_report()
+        circulation = report.get("circulation", 0)
+        total = report.get("total_lessons", 0)
+        write_only_flag = next(
+            (f for f in report.get("flags", []) if f.get("name") == "WRITE_ONLY_MEMORY"),
+            None,
+        )
+        flag_active = bool(write_only_flag and write_only_flag.get("active"))
+        # Above-floor guard: a corpus at/below the floor is too small to call a pathology.
+        write_only = flag_active and total > self._loop_writeonly_floor
+
+        result.update(
+            checked=True,
+            write_only=write_only,
+            circulation=circulation,
+            total_lessons=total,
+        )
+
+        if not write_only:
+            # Circulating, or below floor / fresh store -> reset and stay quiet.
+            self._writeonly_streak = 0
+            self._loop_writeonly_alarm = False
+            result["streak"] = 0
+            result["alarm"] = False
+            return result
+
+        self._writeonly_streak += 1
+        result["streak"] = self._writeonly_streak
+        if self._writeonly_streak >= self._loop_writeonly_k:
+            self._loop_writeonly_alarm = True
+            logger.error(
+                "LOOP WRITE-ONLY: %d consecutive session-end checks with circulation=0 and "
+                "%d lesson(s) stored (the predecessor death — fork-authored lessons written but "
+                "never reaching a consumed recall). The self-improvement loop is wired but dead: "
+                "check the recall/consume seams (delegation-recall / injection-confirm) and the "
+                "store recall path. (AC-PX5 #3, K=%d)",
+                self._writeonly_streak, total, self._loop_writeonly_k,
+            )
+        result["alarm"] = self._loop_writeonly_alarm
+        return result
+
+    def loop_health(self) -> Dict[str, Any]:
+        """Status surface for the AC-PX5 #3 runtime backstop (parallels :meth:`brain_health`).
+
+        ``status``:
+          * ``write-only-alarm`` — K consecutive write-only checks tripped (loop wired but dead).
+          * ``write-only`` — a write-only check fired but the K streak is not yet reached.
+          * ``ok`` — last check saw circulation (or a below-floor/fresh store).
+        """
+        if self._loop_writeonly_alarm:
+            status = "write-only-alarm"
+        elif self._writeonly_streak > 0:
+            status = "write-only"
+        else:
+            status = "ok"
+        return {
+            "status": status,
+            "write_only_streak": self._writeonly_streak,
+            "write_only_alarm": self._loop_writeonly_alarm,
+            "write_only_k": self._loop_writeonly_k,
+            "write_only_floor": self._loop_writeonly_floor,
+        }
 
     # ----- D3b: pre-delegation knowledge-gate recall -----
 

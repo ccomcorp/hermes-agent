@@ -35,8 +35,13 @@ WHAT THIS PROVES — and what it does NOT (honest scope, per adversarial review)
   So: this gates the store/health accounting + the fork-write leg. It is NOT a substitute
   for a live, registered-composite run that confirms recalled lessons reach the prompt.
 
-Run:  python scripts/synthetic_week_ac1.py
+Run:  python scripts/synthetic_week_ac1.py [--fingerprint]
 Exit 0 = AC1 holds; 1 = AC1 violated. Pure stdlib + the AIOS packages (sibling repo).
+
+``--fingerprint`` (AC-PX6) ALSO asserts the AC-PX5 #1 seam sentinels resolve — so a chassis
+refactor that moved/dropped a loop call-site fails this regression (non-zero exit), tying the
+static fingerprint to the continuous loop-liveness gate. Run it after every upstream merge
+(see ``docs/Update-Instructions/`` loop-liveness step + ``scripts/loop_liveness.py``).
 """
 
 from __future__ import annotations
@@ -285,11 +290,26 @@ def check_ac1(result: dict) -> list[str]:
     return failures
 
 
+def check_fingerprint() -> list[str]:
+    """AC-PX6: assert the AC-PX5 #1 seam sentinels all resolve. Returns violation strings."""
+    from plugins.memory.composite.loop_guard import verify_seam_fingerprint  # noqa: E402
+
+    ok, missing = verify_seam_fingerprint()
+    if ok:
+        return []
+    return [
+        f"seam fingerprint FAILED — missing loop-seam sentinel(s): {missing}. A chassis "
+        "refactor moved or dropped a loop call-site; re-home before proceeding (AC-PX5 #1)."
+    ]
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+    fingerprint_mode = "--fingerprint" in sys.argv[1:]
 
     result = run_synthetic_week()
     r = result["report"]
@@ -311,14 +331,25 @@ def main() -> int:
         print(f"  [{state}] {f['name']} ({f['severity']}): {f['message']}")
 
     failures = check_ac1(result)
+
+    if fingerprint_mode:
+        fp_failures = check_fingerprint()
+        if fp_failures:
+            failures.extend(fp_failures)
+        else:
+            print("  [ok ] seam fingerprint: all loop-seam sentinels present (AC-PX5 #1)")
+
     if failures:
         print("\nAC1 FAIL:")
         for msg in failures:
             print(f"  - {msg}")
         return 1
+    tail = (
+        " + seam fingerprint OK" if fingerprint_mode else ""
+    )
     print(
         "\nAC1 PASS: fork-authored lessons circulated into consumed recalls; "
-        "migrated reads excluded; misses recorded."
+        f"migrated reads excluded; misses recorded{tail}."
     )
     return 0
 

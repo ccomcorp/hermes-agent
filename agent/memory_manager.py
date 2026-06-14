@@ -37,6 +37,35 @@ from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
 
+
+class LoopHookSignatureError(TypeError):
+    """A present loop-seam hook has an INCOMPATIBLE signature (AC-PX5 #4 — fail-loud).
+
+    Distinct from "hook not implemented" (the capability guard cleanly skips that). A provider
+    that exposes the hook NAME but cannot accept the chassis call is a half-ported provider; the
+    fan-out must surface it loudly (re-raise / ERROR), never silent-no-op into a dead loop.
+    """
+
+
+def _binds_loop_hook(fn, *args, **kwargs) -> bool:
+    """Return whether ``fn``'s signature can accept ``(*args, **kwargs)``.
+
+    A clean signature-only check (``Signature.bind``) that does NOT call the hook — so it
+    distinguishes a wrong-signature hook (bind fails -> AC-PX5 #4 fail-loud) from a hook whose
+    BODY raises (bind ok; the body's error is the provider's own concern, stays best-effort).
+    If the signature is unintrospectable, assume it binds (let the call proceed).
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return True
+    try:
+        sig.bind(*args, **kwargs)
+        return True
+    except TypeError:
+        return False
+
+
 # How long shutdown_all() waits for in-flight background sync/prefetch work
 # to drain before abandoning it. A wedged provider must never block process
 # teardown indefinitely — the worker threads are daemon, so anything still
@@ -425,8 +454,17 @@ class MemoryManager:
             fn = getattr(provider, "confirm_prefetch_consumed", None)
             if not callable(fn):
                 continue
+            # AC-PX5 #4: present-but-mis-signatured hook -> fail loud, not a silent skip.
+            if not _binds_loop_hook(fn, session_id=session_id):
+                raise LoopHookSignatureError(
+                    f"memory provider '{provider.name}' has confirm_prefetch_consumed with an "
+                    "incompatible signature (expected (*, session_id)) — half-ported loop hook "
+                    "(AC-PX5 #4)"
+                )
             try:
                 fn(session_id=session_id)
+            except LoopHookSignatureError:
+                raise
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' confirm_prefetch_consumed failed: %s",
@@ -451,8 +489,18 @@ class MemoryManager:
             fn = getattr(provider, "on_background_review", None)
             if not callable(fn):
                 continue
+            # AC-PX5 #4: a present-but-mis-signatured hook is a half-ported provider — fail loud
+            # (distinct from the not-implemented clean skip above), never silent-no-op.
+            if not _binds_loop_hook(fn, lesson_candidates, session_id=session_id):
+                raise LoopHookSignatureError(
+                    f"memory provider '{provider.name}' has on_background_review with an "
+                    "incompatible signature (expected (lesson_candidates, *, session_id)) — "
+                    "half-ported loop hook (AC-PX5 #4)"
+                )
             try:
                 total += int(fn(lesson_candidates, session_id=session_id) or 0)
+            except LoopHookSignatureError:
+                raise
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' on_background_review failed: %s",
@@ -477,8 +525,17 @@ class MemoryManager:
             fn = getattr(provider, "recall_for_delegation", None)
             if not callable(fn):
                 continue
+            # AC-PX5 #4: present-but-mis-signatured hook -> fail loud, not a silent skip.
+            if not _binds_loop_hook(fn, goal, session_id=session_id):
+                raise LoopHookSignatureError(
+                    f"memory provider '{provider.name}' has recall_for_delegation with an "
+                    "incompatible signature (expected (goal, *, session_id)) — half-ported "
+                    "loop hook (AC-PX5 #4)"
+                )
             try:
                 block, receipt_id = fn(goal, session_id=session_id)
+            except LoopHookSignatureError:
+                raise
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' recall_for_delegation failed: %s",
@@ -497,8 +554,17 @@ class MemoryManager:
             fn = getattr(provider, "confirm_consumed", None)
             if not callable(fn):
                 continue
+            # AC-PX5 #4: present-but-mis-signatured hook -> fail loud, not a silent skip.
+            if not _binds_loop_hook(fn, receipt_id):
+                raise LoopHookSignatureError(
+                    f"memory provider '{provider.name}' has confirm_consumed with an "
+                    "incompatible signature (expected (receipt_id)) — half-ported loop hook "
+                    "(AC-PX5 #4)"
+                )
             try:
                 fn(receipt_id)
+            except LoopHookSignatureError:
+                raise
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' confirm_consumed failed: %s",
@@ -940,10 +1006,22 @@ class MemoryManager:
         if "hermes_home" not in kwargs:
             from hermes_constants import get_hermes_home
             kwargs["hermes_home"] = str(get_hermes_home())
+        # Thread self so a provider's boot wiring assertion (composite AC-PX5 #2) can verify the
+        # live fan-out dispatch on THIS manager instance, not just the class surface.
+        kwargs.setdefault("memory_manager", self)
         for provider in self._providers:
             try:
                 provider.initialize(session_id=session_id, **kwargs)
             except Exception as e:
+                # AC-PX5 #2: a refuse-to-boot loop wiring error must NOT degrade to a warning —
+                # re-raise so the dead loop refuses to load (never a silently-dead self-improve
+                # loop). Other per-provider init failures stay warn-and-continue as before.
+                if type(e).__name__ == "LoopWiringError":
+                    logger.error(
+                        "Memory provider '%s' refused to boot (loop wiring): %s",
+                        provider.name, e,
+                    )
+                    raise
                 logger.warning(
                     "Memory provider '%s' initialize failed: %s",
                     provider.name, e,
