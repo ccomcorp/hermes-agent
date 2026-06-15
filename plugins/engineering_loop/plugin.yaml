@@ -1,0 +1,28 @@
+name: engineering_loop
+version: 0.1.0
+description: "Engineering Loop Harness — Observe → Decide → Act → Capture Feedback → Check Termination"
+author: NousResearch
+kind: standalone
+platforms:
+  - linux
+  - macos
+  - windows
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - transform_tool_result
+  - on_session_end
+  - subagent_stop
+provides_tools:
+  - engineering_loop_start
+  - engineering_loop_status
+  - engineering_loop_update
+  - engineering_loop_record_feedback
+  - engineering_loop_run_gate
+  - engineering_loop_monitor_app
+  - engineering_loop_request_review
+  - engineering_loop_check_termination
+  - engineering_loop_commit
+  - engineering_loop_export_trace
