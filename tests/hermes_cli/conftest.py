@@ -54,3 +54,23 @@ def _suppress_concurrent_hermes_gate(request, monkeypatch):
         lambda *_a, **_k: [],
         raising=False,
     )
+
+
+@pytest.fixture(autouse=True)
+def _passthrough_aios_safe_update_guard(request, monkeypatch):
+    """Set ``HERMES_SAFE_UPDATE_OK`` so the AIOS chassis guard stays inert.
+
+    The carried fork delta (``# AIOS-SAFE-UPDATE-GUARD`` in main.py) makes a
+    bare ``hermes update`` refuse itself when ``PROJECT_ROOT`` is the AIOS
+    chassis (``I:\\PROJECTS\\AIOS\\hermes-agent``) and the var is unset. On a
+    developer running this suite from the chassis, that guard would fire and
+    abort every ``cmd_update`` mechanism test. Setting the orchestrator's
+    passthrough flag here mirrors the safe path and lets those tests exercise
+    the update flow.
+
+    Tests for the guard itself opt out with ``@pytest.mark.aios_safe_guard``
+    (they pop/patch the var explicitly to see the real refusal).
+    """
+    if request.node.get_closest_marker("aios_safe_guard"):
+        return
+    monkeypatch.setenv("HERMES_SAFE_UPDATE_OK", "1")
