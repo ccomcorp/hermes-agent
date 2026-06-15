@@ -17,15 +17,19 @@ there; nothing here re-implements them. This module only:
 
 The brain leg is now wireable and STAGED via ``HERMES_BRAIN_STAGE`` (0=off default /
 1=observe+recall / 2=+paired reward); stage 0 keeps the live agent byte-for-byte unchanged.
-The vault leg is still absent (``vault=None``). The ``sync_turn`` ack reports a leg by its
-ACTUAL presence/stage (R9 — never a healthy-looking status for a leg that was never
-constructed): an absent leg is ``"skipped"``, the active brain leg is ``"observe-only"``
-(reward is outcome-gated in ``handle_tool_call``, never per-turn).
+The VAULT leg (V1) is now wired too: a QMD-backed ``VaultCache`` (``vault_qmd.QmdVaultCache``)
+is constructed when QMD is installed/indexed (default ON; HERMES_VAULT_ENABLE=0 disables),
+else ``vault=None``. Vault recall is cache-fronted via the base ``queue_prefetch`` and merged
+by score in ``prefetch`` — no inline network on the turn thread. The ``sync_turn`` ack reports
+a leg by its ACTUAL presence/stage (R9 — never a healthy-looking status for a leg that was
+never constructed): an absent leg is ``"skipped"``, an active brain leg is ``"observe-only"``
+(reward is outcome-gated in ``handle_tool_call``, never per-turn), an active vault leg ``"ok"``.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -107,6 +111,22 @@ from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-ba
 # Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
 # keeps a full SKILL.md body from bloating the FTS index while preserving recall keys.
 _LESSON_MAX_CHARS = 2000
+
+# G1 / SPEC-m1-outbox §2.3: max outbox ops a single background drain pass delivers, so the
+# drain stays bounded and never monopolizes the mem-sync worker (Q1 — left open in the spec;
+# chosen here, TUNABLE via HERMES_OUTBOX_DRAIN_MAX).
+_OUTBOX_DRAIN_MAX = 20
+
+
+def _observe_content_hash(content: str) -> str:
+    """Stable content hash for an observe op (SPEC-m1-outbox §2.3, finding GAP-2).
+
+    Required on every enqueued observe so a restart re-send (or any re-drain) collapses to the
+    brain's content_hash/chunk_key vault dedup instead of creating a duplicate corpus row. A
+    plain sha256 over the (already-capped) observed text — deterministic across processes, so the
+    SAME content always hashes the SAME way regardless of which run enqueued it.
+    """
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 
 class HermesCompositeProvider(CompositeMemoryProvider):
@@ -222,6 +242,20 @@ class HermesCompositeProvider(CompositeMemoryProvider):
 
         if self._store is None and self._db_path is not None:
             self._store = ExperienceStore(db_path=self._db_path)
+        # G1 / SPEC-m1-outbox §2.3 restart reclaim: any orphaned in_flight outbox op (a drain
+        # interrupted by a prior crash/restart) → pending, so it is re-drained. Done ONCE at
+        # startup, guarded to the observe stage + a present store. Reclaim is store-ONLY (no brain
+        # client / HTTP needed): it must run even when the brain client is absent, else previously
+        # enqueued in_flight rows are never reclaimed. The drain itself still guards _brain is None.
+        # Re-send is safe — the brain's content_hash vault dedup collapses a duplicate. Best-effort:
+        # never blocks boot.
+        if self._store is not None and self._brain_stage >= 1:
+            try:
+                reclaimed = self._store.outbox_reclaim()
+                if reclaimed:
+                    logger.info("outbox restart-reclaim: %d in_flight op(s) → pending", reclaimed)
+            except Exception as exc:
+                logger.debug("outbox_reclaim failed at startup: %s", exc)
         super().initialize(session_id, **kwargs)
         self._agent_context = str(kwargs.get("agent_context") or "primary")
 
@@ -256,20 +290,101 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         }
         if self._brain is not None and self._brain_stage >= 1:
             sid = session_id or self._session_id
+            content = (assistant_content or "")[:_LESSON_MAX_CHARS]
             try:
-                obs_id = self._brain.observe(
-                    {"type": "context", "content": (assistant_content or "")[:_LESSON_MAX_CHARS]}
-                )
+                obs_id = self._brain.observe({"type": "context", "content": content})
                 if obs_id:
                     with self._obs_lock:
                         self._last_observation[sid] = str(obs_id)
                     ack["brain"] = "observe-only"
                 else:
-                    ack["brain"] = BRAIN_FAIL
-            except Exception as exc:  # best-effort; degrade, never crash
+                    # Non-confirming response (no valid observation_id) — enqueue durably (G1).
+                    ack["brain"] = self._enqueue_observe(content, sid)
+            except Exception as exc:  # transport error; degrade, never crash — but enqueue (G1).
                 logger.debug("brain observe failed: %s", exc)
-                ack["brain"] = BRAIN_FAIL
+                ack["brain"] = self._enqueue_observe(content, sid)
         return ack
+
+    # ----- G1 / AC5: durable observe outbox (SPEC-m1-outbox §2.2 enqueue, §2.3 drain) -----
+
+    def _enqueue_observe(self, content: str, session_id: str) -> str:
+        """On a failed live observe, write a durable `pending` outbox op instead of dropping it
+        (SPEC-m1-outbox §2.2). DEGRADE-NOT-STALL: the enqueue is a cheap local sqlite write and
+        is wrapped so it NEVER raises into the turn — an enqueue failure logs and returns
+        ``BRAIN_FAIL`` exactly as the pre-outbox drop did. A successful live observe never gets
+        here (fast path unchanged). Reward is NEVER enqueued — only observe ops (reward replay is
+        M6). Returns the brain ack marker for ``sync_turn``.
+
+        The op carries a stable ``content_hash`` (so a re-send hits the brain's vault dedup, §2.3
+        GAP-2) and a deterministic ``enqueue_key`` from session+content_hash (so a duplicated turn
+        is an outbox-local no-op, not a second row).
+        """
+        if self._store is None:
+            return BRAIN_FAIL
+        try:
+            content_hash = _observe_content_hash(content)
+            self._store.outbox_enqueue(
+                kind="observe",
+                payload={"type": "context", "content": content},
+                content_hash=content_hash,
+                session_id=session_id,
+                enqueue_key=f"observe:{session_id}:{content_hash}",
+            )
+        except Exception as exc:  # never stall the turn on a local enqueue failure
+            logger.debug("outbox enqueue failed (observe dropped): %s", exc)
+            return BRAIN_FAIL
+        return "enqueued"
+
+    def _drain_outbox(self, max_ops: int = _OUTBOX_DRAIN_MAX) -> Dict[str, int]:
+        """Drain pending observe ops to the brain — OFF the turn thread (SPEC-m1-outbox §2.3).
+
+        Single-drainer-per-pass, bounded by ``max_ops``. Each op: atomic ``outbox_claim``
+        (pending→in_flight), then re-POST observe OUTSIDE the store lock, then settle:
+          * valid ``observation_id`` returned → ``outbox_confirm`` (in_flight→confirmed).
+          * transport error (observe raised) → ``outbox_fail('transport')`` (back to pending,
+            attempts UNCHANGED — a long outage must not poison-kill, §2.3 finding #6).
+          * non-confirming response (no id, treated as a substantive/4xx reject) →
+            ``outbox_fail('substantive')`` (attempts++, → dead at the cap).
+        Best-effort throughout: a settle/claim failure logs and the pass stops; it NEVER raises
+        into the caller (the background worker). Guarded to brain_stage>=1 + a present brain/store.
+        Returns ``{confirmed, transport_fail, substantive_fail}`` counts (useful to tests/health).
+        """
+        out = {"confirmed": 0, "transport_fail": 0, "substantive_fail": 0}
+        if self._brain is None or self._brain_stage < 1 or self._store is None:
+            return out
+        for _ in range(max(0, int(max_ops))):
+            try:
+                row = self._store.outbox_claim()
+            except Exception as exc:
+                logger.debug("outbox_claim failed; stopping drain pass: %s", exc)
+                break
+            if row is None:
+                break  # nothing pending
+            oid = row["id"]
+            payload = row.get("payload") or {}
+            try:
+                obs_id = self._brain.observe(payload)
+            except Exception as exc:  # transport — back to pending, do not poison.
+                logger.debug("outbox drain observe transport-failed: %s", exc)
+                try:
+                    self._store.outbox_fail(oid, "transport")
+                except Exception as exc2:
+                    logger.debug("outbox_fail(transport) failed: %s", exc2)
+                out["transport_fail"] += 1
+                # The brain is unreachable: a transport-failed op returns to pending with
+                # attempts UNCHANGED. STOP the pass rather than re-claim the same row in a spin —
+                # the next queue_prefetch tick retries (degrade-not-stall; finding #6).
+                break
+            try:
+                if obs_id:
+                    self._store.outbox_confirm(oid, str(obs_id))
+                    out["confirmed"] += 1
+                else:
+                    self._store.outbox_fail(oid, "substantive")
+                    out["substantive_fail"] += 1
+            except Exception as exc:
+                logger.debug("outbox settle failed for %s: %s", oid, exc)
+        return out
 
     def record_fork_lesson(
         self,
@@ -426,6 +541,22 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             "write_only_k": self._loop_writeonly_k,
             "write_only_floor": self._loop_writeonly_floor,
         }
+
+    # ----- G1 / AC5: background drain off the hot path -----
+
+    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        """Background warm (the chassis runs this on its `mem-sync` worker, OFF the turn thread):
+        first drain any pending observe outbox ops (SPEC-m1-outbox §2.3 — delivered here so a
+        slow/offline brain never touches the turn), THEN delegate to the base warm-cache recall.
+
+        Both legs are best-effort: a drain failure never raises and never blocks the base warm
+        (which itself degrades, never stalls). The drain is bounded per pass (`_OUTBOX_DRAIN_MAX`).
+        """
+        try:
+            self._drain_outbox()
+        except Exception as exc:  # never let the drain break the prefetch warm
+            logger.debug("outbox drain pass failed (queue_prefetch): %s", exc)
+        super().queue_prefetch(query, session_id=session_id)
 
     # ----- D3b: pre-delegation knowledge-gate recall -----
 
@@ -645,6 +776,41 @@ def _resolve_brain_stage() -> int:
         return 0
 
 
+def _vault_enabled() -> bool:
+    """Parse HERMES_VAULT_ENABLE (default ON). The vault leg is cache-fronted and reaches
+    only the background mem-sync worker, so it is safe to default-on; set "0"/"false"/"off"
+    to disable (e.g. a host with no QMD index)."""
+    raw = (os.environ.get("HERMES_VAULT_ENABLE", "1") or "").strip().lower()
+    return raw not in ("0", "false", "off", "no", "")
+
+
+def _resolve_vault(recall_limit: int):
+    """Construct the QMD-backed ``VaultCache`` for the dev instance, or return ``None``.
+
+    Returns ``None`` (so the composite stays vault-less, NOT a leg that always misses) when:
+      * the leg is disabled (``HERMES_VAULT_ENABLE=0``), or
+      * QMD is not installed/indexed on this host (``QmdVaultCache.is_available()`` is False).
+    Otherwise returns a live adapter — vault recall is warmed in the background by the base
+    ``queue_prefetch`` and merged into recall by score; nothing here touches the turn thread.
+    """
+    if not _vault_enabled():
+        logger.debug("composite vault leg disabled (HERMES_VAULT_ENABLE=0)")
+        return None
+    try:
+        from .vault_qmd import QmdVaultCache  # type: ignore
+    except ImportError:  # loaded flat (composite dir on sys.path)
+        from vault_qmd import QmdVaultCache  # type: ignore
+    vault = QmdVaultCache(recall_limit=recall_limit)
+    if not vault.is_available():
+        logger.info(
+            "composite vault leg SKIPPED: QMD not available "
+            "(set HERMES_VAULT_QMD_JS / HERMES_VAULT_INDEX, or HERMES_VAULT_ENABLE=0)"
+        )
+        return None
+    logger.info("composite vault leg ACTIVE: QMD search (BM25), background cache-warmed")
+    return vault
+
+
 def build_provider(hermes_home: str) -> "HermesCompositeProvider":
     """Construct the composite over a profile-scoped experience store.
 
@@ -655,9 +821,18 @@ def build_provider(hermes_home: str) -> "HermesCompositeProvider":
     HERMES_BRAIN_URL overrides the endpoint (default http://1.1.11.31:8000). When a brain is
     constructed the composite OWNS it (owns_brain=True; the urllib adapter's close() is a no-op).
     A liveness probe is logged at build so a dead endpoint is visible, not silently degraded.
+
+    The VAULT leg (the third recall backend) is now wired: a QMD-backed ``VaultCache``
+    (``vault_qmd.QmdVaultCache``) is constructed when QMD is installed/indexed on the host
+    (default ON; disable via HERMES_VAULT_ENABLE=0). Vault recall is cache-fronted — the base
+    ``queue_prefetch`` warms it on the mem-sync worker, and ``prefetch`` merges it by score —
+    so it adds nothing inline on the turn thread. When QMD is absent the leg is ``None`` and
+    the loop runs store+brain only (sync_turn reports ``vault="skipped"``).
     """
     db_path = os.path.join(hermes_home, "experience.db")
     stage = _resolve_brain_stage()
+    recall_limit = 5
+    vault = _resolve_vault(recall_limit)
     brain = None
     if stage >= 1:
         url = os.environ.get("HERMES_BRAIN_URL") or "http://1.1.11.31:8000"
@@ -677,8 +852,9 @@ def build_provider(hermes_home: str) -> "HermesCompositeProvider":
     else:
         logger.debug("composite brain leg disabled (HERMES_BRAIN_STAGE=0)")
     return HermesCompositeProvider(
-        db_path=db_path, brain=brain, vault=None,
+        db_path=db_path, brain=brain, vault=vault,
         owns_brain=brain is not None, brain_stage=stage,
+        recall_limit=recall_limit,
     )
 
 
