@@ -7976,6 +7976,28 @@ def _discard_lockfile_churn(git_cmd, repo_root):
         pass
 
 
+# --- AIOS-SAFE-UPDATE-GUARD (carried fork delta; see
+# aios/docs/Update-Instructions/loop-fork-patch-manifest.md) ---
+_AIOS_CHASSIS_ROOT = Path(r"I:\PROJECTS\AIOS\hermes-agent")
+
+
+def _safe_update_blocked(project_root, env) -> bool:
+    """True if a bare ``hermes update`` in the AIOS chassis must refuse itself.
+
+    Blocks only when ``project_root`` resolves to the AIOS chassis AND
+    ``HERMES_SAFE_UPDATE_OK`` is falsy. The orchestrator
+    (``Invoke-HermesSafeUpdate.ps1``) sets that var to passthrough. Path
+    compare is case/separator-robust; any other install is never blocked.
+    """
+    try:
+        same = os.path.normcase(os.path.normpath(str(Path(project_root)))) == \
+            os.path.normcase(os.path.normpath(str(_AIOS_CHASSIS_ROOT)))
+    except Exception:
+        return False
+    return same and not env.get("HERMES_SAFE_UPDATE_OK")
+# --- /AIOS-SAFE-UPDATE-GUARD ---
+
+
 def cmd_update(args):
     """Update Hermes Agent to the latest version.
 
@@ -7983,6 +8005,17 @@ def cmd_update(args):
     runs the update, then restores stdio on the way out (even on
     ``sys.exit`` or unhandled exceptions).
     """
+    # AIOS-SAFE-UPDATE-GUARD: a direct full-path `hermes update` in the AIOS
+    # chassis must route through Invoke-HermesSafeUpdate.ps1 (which sets the
+    # passthrough flag) — never the bare destructive reset-hard default.
+    if _safe_update_blocked(PROJECT_ROOT, os.environ):
+        print(
+            "Refusing `hermes update` in the AIOS chassis: this would run the "
+            "destructive reset-to-origin default and wipe the carried fork delta.\n"
+            "Run the safe process instead: scripts/update-guard/Invoke-HermesSafeUpdate.ps1 "
+            "(see aios/docs/Update-Instructions/safe-update-runbook.md)."
+        )
+        sys.exit(1)
     from hermes_cli.config import (
         detect_install_method,
         format_docker_update_message,
