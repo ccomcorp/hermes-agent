@@ -89,6 +89,27 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const searchParams = new URLSearchParams(params || {})
           searchParams.set('token', currentToken)
           return `${protocol}//${url.host}/api/plugins/kanban${path}?${searchParams}`
+        },
+        authedFetch: async (url: string, opts?: any) => {
+          const currentToken = $connection.get()?.token || ''
+          const currentBase = $connection.get()?.baseUrl || 'http://127.0.0.1:9120'
+          const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
+          const headers: Record<string, string> = {}
+          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+          // Don't set Content-Type for FormData — browser sets it with boundary
+          if (opts?.body && !(opts.body instanceof FormData)) {
+            headers['Content-Type'] = 'application/json'
+            opts = { ...opts, body: JSON.stringify(opts.body) }
+          }
+          const res = await fetch(resolvedUrl, {
+            ...opts,
+            headers: { ...headers, ...(opts?.headers || {}) },
+          })
+          if (!res.ok) {
+            const text = await res.text()
+            throw new Error(`HTTP ${res.status}: ${text}`)
+          }
+          return res.json()
         }
       }
     }
