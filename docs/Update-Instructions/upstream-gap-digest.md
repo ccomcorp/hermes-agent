@@ -1,0 +1,303 @@
+# Upstream Gap Digest — aios vs NousResearch/main
+Generated from `git log aios..upstream/main`
+
+## Summary
+- 1,334 non-merge commits + 161 merge commits behind upstream/main
+- Local aios branch == origin/aios (fully pushed, working tree clean)
+- Local main == origin/main (fully pushed)
+- NOTHING to push: all local work already on GitHub
+
+## By type
+fix 774 | feat 195 | test 94 | chore 84 | docs 69 | refactor 45 | perf 10
+
+## Top subsystems
+desktop 187 | gateway 112 | agent 62 | cron 38 | dashboard 36 | cli 35 | tui 26
+memory 24 | skills 22 | mcp 19 | security 16 | compression 15 | kanban 15
+
+## SEAM-FILE commits (87 — merge conflict hotspots for the AIOS loop delta)
+- 710cd48fb fix(agent): validate context/memory tool schemas before wrapping
+- 1e4df599e fix(delegate): strip cronjob toolset from delegated children (#43466)
+- 667a9f513 fix(update): reuse an existing PATH uv on Termux before pip
+- 3e508363f fix(update): avoid source-building uv on Termux
+- 190b01c55 fix(agent): persist tool calls before turn-end flush
+- 2dfcead68 feat(computer-use): make the preflight cross-platform (win/linux)
+- 0223ea5f5 feat(computer-use): surface macOS permission preflight in the desktop
+- 87c4a5ebb feat(background-review): aux-model selector for the self-improvement review (#49252)
+- f1e6d39a7 feat(computer_use): disable cua-driver telemetry by default, add opt-in (#50842)
+- 261794639 fix(delegation): emit high-concurrency cost warning once per process (#50848)
+- b1b20270c refactor(memory): move write-mirror gating behind MemoryManager interface
+- f2e37549c feat(computer_use): cross-platform cua-driver (macOS/Windows/Linux)
+- ef6492b64 fix(gateway): cold-start installed Windows gateway after update when none was running (#50804)
+- eecb5b9dd fix(update): don't count across shallow-clone boundary (bogus '12492 commits behind') (#50784)
+- 87b60ae49 no-mistakes(review): guard token-delta status msg on actual compression in overflow handler
+- 47b6b4cf8 fix #39550: detect token-only compression success
+- e448b2141 feat(dashboard): interactive auth setup on no-provider non-loopback bind (#50551)
+- 7130d6086 feat(providers): remove google-gemini-cli + google-antigravity OAuth providers (#50492)
+- c768c4b71 fix(antigravity): move model flow to model_setup_flows + stop bare-alias hijack
+- 8baa4e997 feat(cli): add native Antigravity OAuth provider
+- bb77a8b0d fix(gateway): respawn unmapped Windows gateways after update (#50090) (#50373)
+- 6902eb391 fix(cli): make ZIP-update directory replace atomic so it can't delete ui-tui
+- db097fb08 fix(cli): auto-restore a deleted ui-tui workspace from git before TUI launch
+- 537ad9ea9 fix(cli): guard missing ui-tui workspace before TUI launch
+- 7a131f7f4 fix(api-server): stop silently promising async delivery on stateless HTTP path (#50319)
+- 587b5b9ac fix(backup): capture memory-provider state stored outside HERMES_HOME (#50325)
+- 9e4fe32d3 fix(session): opt the background-review fork out of session finalization
+- 491579fa0 fix(whatsapp): resolve bridge dir with HERMES_HOME mirror in Docker
+- 83aa84ae3 feat(pets): CLI pet pane + /pet command
+- f22dd8a75 fix(agent): fail over to fallback provider on persistent auth failure (401/403)
+- ea8a8b4af feat(delegation): background fan-out — parallel subagents, one consolidated return (#49734)
+- c884ff64e fix(agent): keep system-prompt model identity in sync across provider failover
+- a6f08ff0c docs(delegate): clarify subagent model is config-level, not per-call
+- 013f9c875 fix(memory): log CLI shutdown hook failures
+- d4e7dd609 refactor(windows): tidy managed-node resolver helpers
+- fcc169057 fix(windows): prefer managed npm for hermes update desktop-rebuild gate
+- 7a7b56d49 fix(windows): prefer managed node for whatsapp and desktop
+- b6e2a54a9 fix(mcp): address adversarial review round 1 (cache parity, gates, races)
+- 1928aa044 fix(managed-scope): honor managed scope in config→env bridges too
+- 38c8a9c10 feat(memory): batch operations for single-turn memory updates (#48507)
+- f1254c8ea fix(skills): rmtree scope guard + default pre_update_backup to true (#48200)
+- d0622cafa refactor(agent): reuse hoisted summary in content-policy branch
+- b892ee2bc fix(agent): summarize non-retryable API errors so raw HTML never leaks
+- 677791606 fix(skills): surface list-modified hint on both update paths + disambiguate diff
+- 085fc5d00 feat(skills): find & diff user-modified bundled skills
+- c276b017a feat(relay): connector⇄gateway channel auth + signed-HTTP inbound receiver + enroll CLI (#48147)
+- 020e59d3c fix(agent): dampen empty-name phantom tool-call loop (#47967) (#48109)
+- c1f9eb0ec fix(desktop): resolve electronDist dynamically + self-heal blocked installs (supersedes #48081/#48082) (#48091)
+- f8098c6b6 fix(desktop): resolve electronDist to the actual electron install location (#48081)
+- bd7fc8fdc feat(gateway): inject stable human-readable message timestamps
+- d1ecebcbf fix(desktop): re-download Electron binary via mirror when pack fails (#47266) (#47276)
+- 44e5848e7 feat(desktop): stream subagent activity into watch windows (#47060)
+- c2c55c444 fix(memory): strip skill scaffolding for all providers, not just openviking
+- 7d938cc5c fix(desktop): keep live model switch metadata truthful
+- 4cf9d80fb feat(display): verbose skill change notifications with content previews
+- 20b1f4f3f feat(memory): configurable background memory update notifications
+- c66ecf0bc feat(delegation): async background subagents via delegate_task(background=true) (#40946)
+- 92a456f71 fix(cli,deps): clear esbuild audit loop
+- 95715dcb0 fix(s6): reserved default gateway must not follow sticky active_profile (#46483)
+- 80f8ffc74 fix(dashboard): pin machine-dashboard reroute to the machine root, not $HOME/.hermes (#46487)
+- d76a58bd1 fix(gateway): resolve sudo profile system installs
+- 10bd01972 refactor(agent): share the content_policy_blocked result builder + recovery hint
+- bb46bf8ce fix(agent): surface model refusals instead of retrying them as errors
+- 4b5ba112a fix: shrink images to reported provider dimension limit (#45979)
+- 069bfd654 fix(agent): keep Codex reasoning replay on Codex path
+- 78c11d99e fix(update): stop Windows gateways before mutating install
+- 9b5f7b63c fix(profile): make clone-from a full source selector
+- 2d474e39c fix(acp): preserve memory provider tools
+- 8cf9d8689 fix(desktop): keep composer usable during reconnect (#45488)
+- 8905ee6b8 fix(agent): rewind flush cursor exactly when repair compacts before the cursor
+- 5d0408d9f fix(agent): clamp flush cursor after repair_message_sequence compaction (#44837)
+- 135fe9016 fix(profiles): backfill .env for pre-existing profiles on hermes update (#45247)
+- 7a318aae2 fix(profiles): exclude session history, backups, and snapshots from --clone-all (#45246)
+- bba9b519a fix(delegation): remove the default subagent wall-clock timeout (#45149)
+- 9b01c4d19 fix(update): never spawn an interactive polkit prompt when restarting a system-scope gateway (#45145)
+- 2714fc839 fix(agent): re-enter retry loop on genuine Nous 429 so fallback guard runs
+- d62979a6f feat(desktop): composer status stack, live subagent windows, editable prompts (#44630)
+- 343803b23 fix(cli): use subprocess on Windows for dashboard profile re-exec (#44282) (#44446)
+- b1fe2107d fix(desktop): keep named-profile desktop backends per-profile (#44510)
+- 73969771a fix(desktop): discover MCP tools for dashboard /api/ws backends (#44512)
+- ce99a8112 fix(dashboard): suppress unicode-animations postinstall during npm ci
+- 5508f4bc5 fix(cli): utf-8 decode for whatsapp-bridge npm install capture (sibling of #43790)
+- b2043cf15 fix(tui): decode startup subprocess output as utf-8
+- dca11b665 fix(mcp): preserve stdio argv passthrough
+- 875aa8f16 feat(dashboard): unify multi-profile management — one machine dashboard, global profile switcher (#44007)
+- 975edd414 fix(cli): omit --workspace when subpackage has its own package-lock.json (#42973) (#43986)
+- 984e6cb5b feat(whatsapp): add WhatsApp Business Cloud API adapter
+
+## All feature commits (197)
+- 2de7549fe feat(desktop): remember window size/position/maximized across launches (salvage #39154)
+- ab9134bf1 feat(openviking): add full recall prefetch policy
+- c93b9f905 feat(relay): terminal 4401 (opt-out) → clean "Relay disabled" state
+- dbe14ce35 feat(gateway): configure Telegram command menu priority
+- 78e122ae1 feat(cron): warn when gateway not running on cron create/list (#51696)
+- 6e88f7b6f feat(relay): Phase 5 Unit C — wake primitive (gateway side) (#51595)
+- 40fddc9e4 feat(relay): Phase 5 §5.3 going-idle / buffered-flip primitive (gateway side) (#51572)
+- e32ebc6aa feat(skills): /learn — distill a reusable skill from anything you describe (#51506)
+- 221cd6024 feat: add reasoning_effort support to ollama-cloud provider
+- 72bfc48e6 feat(tui): track background subagents in the status bar (#51485)
+- da80ac004 feat(slack): add --no-assistant flag to manifest generation
+- 70d28b62f feat(cli): track background subagents in the status bar (#51441)
+- 6cc07b6cd feat(discord): render reasoning as -# subtext via display.reasoning_style (#51168)
+- 45bc4fb37 feat(relay): declare relevance policy to the connector + document the management plane (#51248)
+- 211ba9c7d feat(agent): one-shot LLM helper + llm.oneshot gateway RPC (#51261)
+- af7b7f632 feat(agent): expose coding-context project facts as structured data + project.facts RPC (#51259)
+- d0af7fc95 feat(desktop): detect tool previews into composer status stack
+- ba9e3a491 feat(memory): Honcho OAuth connect — desktop and CLI flows + token refresh (#44335)
+- 3fffecbda feat(desktop): add timeline rail for long chat threads
+- 2dfcead68 feat(computer-use): make the preflight cross-platform (win/linux)
+- 0223ea5f5 feat(computer-use): surface macOS permission preflight in the desktop
+- 87c4a5ebb feat(background-review): aux-model selector for the self-improvement review (#49252)
+- 30e5d0092 feat(computer-use): add whole-screen/desktop capture target
+- 2ba1cfeb2 feat(goals): completion contracts for /goal — evidence-based judging (#50501)
+- ff08e60c6 feat(skills): add cloudflare-temporary-deploy optional skill (#50849)
+- f1e6d39a7 feat(computer_use): disable cua-driver telemetry by default, add opt-in (#50842)
+- f2e37549c feat(computer_use): cross-platform cua-driver (macOS/Windows/Linux)
+- ff85af3fc feat(goals): /goal wait <pid> — park the loop on a background process (#50503)
+- 2e779d11a feat(mem0): v3 API, OSS mode, update/delete tools, telemetry & review fixes (#15624)
+- 75a70d98f feat(relay): forward a stable instance id at self-provision (Phase 6 Unit α) (#50772)
+- 64a507da4 feat(relay): handle passthrough_forward over the WS (Phase 5 §5.1, gateway half) (#50702)
+- ac128af1c feat(desktop): syntax-highlight inline diffs via Shiki
+- a61baa961 feat(desktop): PR-style file diffs in chat
+- 5ff11a689 feat(cli): /timestamps command + timestamps in /history (#50506)
+- 74f0dd62e feat(cli): Ctrl+G submits the edited draft on save (TUI parity) (#50560)
+- e448b2141 feat(dashboard): interactive auth setup on no-provider non-loopback bind (#50551)
+- 9e96e7099 feat(cli): /prompt — compose your next prompt in $EDITOR (#50509)
+- 95d53c3bc feat(cli): /reasoning full — show complete thinking, not 10-line clamp (#50499)
+- 7130d6086 feat(providers): remove google-gemini-cli + google-antigravity OAuth providers (#50492)
+- 8cecaf0b2 feat(process): escalate SIGTERM->SIGKILL on host-pid termination after grace
+- f45ace931 feat(security): startup security posture audit (warn-on-load)
+- b6d2ac176 feat(mem0): add self-hosted support via MEM0_HOST / host config
+- 8baa4e997 feat(cli): add native Antigravity OAuth provider
+- 745c4db23 feat(desktop/windows): show update-in-progress feedback before the desktop exits (#50419) (#50448)
+- 1f4c5aed6 fix(kanban): honor kanban.auto_decompose toggle live, without a gateway restart (#50358)
+- b6d107240 fix(cli): branch new worktrees from the fresh remote tip, not stale local HEAD (#50355)
+- e217fd42e feat(kanban): add task lifecycle plugin hooks (claimed/completed/blocked) (#50349)
+- 9d883ac90 feat(plugins): add ctx.profile_name for session-agnostic profile access (#50346)
+- c0409a87f feat(gateway): typed send-error classification (SendResult.error_kind) (#50342)
+- 5e3e89cc0 feat(hindsight): configurable embedded daemon health grace timeout (#50341)
+- 65a477f12 feat(desktop): add Update now button to About panel (#50186)
+- fb3d31ba8 feat(desktop): add Update now button to About panel
+- e499d69e3 feat(api-server): configurable concurrent-run cap to prevent DoS (#50007)
+- 0ee75469d feat(dashboard): surface gateway busy/drainable on /api/status
+- 51a338a1b feat(gateway): track active_agents in runtime status on turn boundaries
+- 2609bcccc feat(i18n): add complete Spanish translation
+- 86b990fe0 feat(desktop): floating pet, pop-out overlay + Cmd+K picker
+- 75b36a138 feat(pets): TUI pet pane, picker + gateway RPCs
+- 83aa84ae3 feat(pets): CLI pet pane + /pet command
+- e7dbfdaad feat(pets): pet engine + display.pet config
+- ea8a8b4af feat(delegation): background fan-out — parallel subagents, one consolidated return (#49734)
+- 47fadc24d feat(compression): in-place compaction option that keeps one session id (#38763)
+- 11c6f4c7b feat(setup): Blank Slate setup mode — minimal agent, opt in to everything (#36733)
+- 236f0597e feat(desktop): pop the composer out into a draggable floating window
+- cf58f1a52 feat(titles): support language-aware title generation (#45296)
+- 8ebe37f6a feat(desktop): notify renderer when GPU acceleration is disabled due to remote display
+- 5f55f0ff8 feat(teams): native send_video/send_voice/send_document attachments (#49308)
+- d799284b1 feat(optional-skills/creative-ideation): expand to v2.1.0 method library (#42402)
+- 239740a19 feat(tools): MCP elicitation handler with gateway-aware approval routing
+- 26e76a75e feat(telegram): opt-in Online/Offline bot status indicator (#49134)
+- ac00e7368 feat(dashboard): add a reasoning-effort picker to the chat sidebar (#49141)
+- 553cf4f97 feat(desktop): restart the gateway from Cmd+K, with statusbar spinner feedback
+- 9026a8c78 feat(gateway): add Raft bundled platform plugin with activity hooks
+- ddd519ea7 feat(managed-scope): surface managed scope in config show and doctor
+- 4f9e15df9 feat(managed-scope): guard writes to managed config/env keys
+- 81a663abe feat(managed-scope): apply managed .env last with override
+- b5ddd6e71 feat(managed-scope): managed config layer wins over user config
+- 9cbcc0c9c feat(managed-scope): add managed_scope module (resolver, loaders, key helpers)
+- db744e7d1 feat(simplify-code): add risk-tiered application, Chesterton's Fence, slop + silent failure detection
+- 1e70df5fd feat(gateway): multiplex phase 4 — lifecycle guard + per-profile observability
+- d5d02eabb feat(gateway): multiplex phase 3 — secondary-profile adapter registry + conflict detection
+- f35abb122 feat(gateway): multiplex phase 1 — HTTP-inbound /p/<profile>/ routing (webhook)
+- f538470cf feat(gateway): multiplex phase 2 — fail-closed profile credential isolation (Workstream A)
+- d82f9fa7f feat(gateway): multiplex phase 0 — config flag, profile enumeration, profile-stamped session keys
+- e00b96540 feat(tts): add xAI TTS speed and optimize_streaming_latency config knobs
+- 8b7c89bff feat(dashboard): session switcher panel on the Chat tab (#49077)
+- 1d59d2dca feat(desktop): resolve OAuth status for catalog-only account providers
+- ee0de638d feat(desktop): add API-keys search; keep provider lists priority-sorted
+- 6cb04be77 feat(desktop): Keys tab groups by backend provider identity
+- 60dfa0f31 feat(desktop): Accounts tab derives membership from unified provider catalog
+- 3be1326f8 feat(desktop): /api/env derives provider key membership from unified catalog
+- 054b8c82f feat: unified provider_catalog() — one source for CLI picker and desktop tabs
+- 5a506da3d feat(tts): add auxiliary-model auto speech tags for xAI
+- 160bb565b feat(tts): expose speaker_id on built-in Piper provider
+- 9362ce257 feat(skills): add html-artifact skill, fold in sketch + architecture-diagram + concept-diagrams (#48899)
+- c02192ff6 feat(image-gen): add image-to-image / editing to image_generate (#48705)
+- 620fd59b8 feat(model-picker): add Refresh Models control to bust stale model cache (#48691)
+- e48554a3e feat(cli): lock hermes worktrees so concurrent processes can't clobber them
+- d2c53ff55 feat(relay): WS-only inbound on the gateway adapter (Phase 3) (#48294)
+- 3ead2bdd0 feat(prompt): configurable per-platform system-prompt hint overrides
+- f8d8f045f feat(kanban): auto-subscribe calling session on kanban_create
+- 73cd8622f feat(billing): /billing terminal billing — interactive TUI + CLI client (#45449)
+- 38c8a9c10 feat(memory): batch operations for single-turn memory updates (#48507)
+- c37fdec2d feat(dashboard): surface full per-MCP catalog detail; fix pip-install doc (#48520)
+- 5ffbfed19 feat(mcp-catalog): add official Unreal Engine 5.8 MCP server
+- 085fc5d00 feat(skills): find & diff user-modified bundled skills
+- 0ddd21c74 feat(relay): managed-boot self-provision client (Phase 3, gateway side) (#48242)
+- b75757d4a feat(cron): wire on_jobs_changed, cron.chronos config, docs + agent↔NAS contract
+- 3fc7b624d feat(cron,gateway): NAS-JWT fire verifier + /api/cron/fire webhook (Chronos)
+- 4c8bbe641 feat(cron): Chronos NAS-mediated managed-cron provider (scale-to-zero)
+- b01eee0c7 feat(cron): store-level CAS claim for multi-machine at-most-once fire
+- 6ff5fd373 feat(cron): additive CronScheduler hooks (on_jobs_changed/fire_due/reconcile)
+- abbd8646e feat(gateway,desktop): start cron via resolved CronScheduler provider
+- ae8fa1109 feat(cron): cron.provider config + plugins/cron discovery + resolver
+- e6ff41ca9 feat(cron): CronScheduler ABC + InProcessCronScheduler (provider #1)
+- c276b017a feat(relay): connector⇄gateway channel auth + signed-HTTP inbound receiver + enroll CLI (#48147)
+- 237fa7d29 feat(gateway): register relay adapter from config; drop HERMES_GATEWAY_RELAY gate
+- 6b03874d0 feat(gateway): production WebSocketRelayTransport + descriptor negotiation
+- 3db9b3e61 feat(gateway): token-less follow_up outbound op (A2 capability action)
+- a3cdd8c39 feat(relay): route mid-turn /stop over relay interrupt channel
+- d0133fd8e feat(relay): register RelayAdapter through platform registry (flagged off by default)
+- 259e78e17 feat(relay): transport protocol + test-only stub connector
+- b0999c82f feat(relay): generic RelayAdapter advertising negotiated capabilities
+- 3db49381d feat(relay): derive descriptor from PlatformEntry
+- 53d9b9830 feat(relay): experimental CapabilityDescriptor schema
+- ee41aa0c1 feat(desktop): add dismiss control to chat error banners (#47985)
+- 22b6942fc feat(search_files): headroom compression evaluation report + lossless densification (#47866)
+- eaddeaf2e feat(xai): add grok-composer-2.5-fast to xAI OAuth model picker
+- f80381c45 feat(prompt): scale context-file cap to model window + point agent at truncated file (#47846)
+- 7bbffceb9 feat(curator): make skill consolidation opt-in (prune stays default-on) (#47840)
+- 36ae95847 feat(gateway): gate message timestamps behind opt-in (default off)
+- bd7fc8fdc feat(gateway): inject stable human-readable message timestamps
+- bbc842d31 feat(xai): default to grok-build-0.1
+- e76e7b507 feat(hooks): session:compress event_callback for MemPalace sync
+- 44e5848e7 feat(desktop): stream subagent activity into watch windows (#47060)
+- f6a42b1ac feat(prompt): make context-file truncation limit configurable
+- b2da39a0f feat: add z-ai/glm-5.2 to OpenRouter and Nous model lists
+- 509432514 feat(skills): replace shop-app with CLI-based shop skill (v1.0.1)
+- 2c2ca0443 feat(memory): improve OpenViking setup UX
+- 70f53f36c feat(memory): add manual OpenViking setup path
+- 2dace37f6 feat(memory): improve OpenViking setup UX
+- 80e4b8985 feat(desktop): tighten composer model picker interactions
+- a68ac0c49 feat(desktop): allow /browser connect on a local gateway (#47245)
+- 6373aba80 feat(gateway): rename to tool_progress_grouping, add config/docs/tests
+- fc956b9db feat: add tool_progress_style config (accumulate vs separate)
+- 98ae28657 feat(display): document and test memory_notifications setting
+- 4cf9d80fb feat(display): verbose skill change notifications with content previews
+- 20b1f4f3f feat(memory): configurable background memory update notifications
+- a0ec4f52b feat(desktop): disconnect external (CLI-managed) providers
+- 0e81d2fb7 feat(desktop): per-model effort/fast presets in the picker
+- c92a95a13 feat(desktop): move model selector from statusbar to composer
+- 0f75e9904 feat(desktop): trim scratch window chrome
+- 98c294126 feat(desktop): open new sessions in compact windows
+- 5bfed0fe0 feat(skills): add optional payments skills (Stripe Link, MPP, Projects) (#31343)
+- c66ecf0bc feat(delegation): async background subagents via delegate_task(background=true) (#40946)
+- ead38107a feat(status): restore model and context in gateway status
+- 5035fa902 feat(display): show delegate_task goals in tool progress notifications
+- a376ca008 feat(hindsight): make observation scopes configurable on retain
+- bff78a34d feat(zai): add GLM-5.2 with verified 1M context window
+- b0288ae9b feat(desktop): move completion-sound picker into Notifications settings
+- 630a4ef03 feat(desktop): native OS notifications with per-type toggles
+- b4ba3f5e3 feat(desktop): add curated completion cue for agent turn completion (#42480)
+- 12682d96b feat(telegram): restore rich messages opt-out
+- 817f39231 feat(read): extract notebook and office documents (#37082)
+- 28bf8fb47 feat(dashboard): clone profiles from any source
+- a59d5e37e feat(telegram): make rich messages always on (#45584)
+- 266b5a19f feat(desktop): expand the full command inline from the approval bar
+- 0595af0ad feat(desktop): move workspace/worktree drag handle into the leading icon
+- e90672696 feat(desktop): worktree-aware sidebar grouping + composer/sidebar UX fixes
+- bbf020e70 feat(desktop): follow streaming output at bottom + jump-to-bottom button (#45263)
+- 46d758bb3 feat(desktop): window translucency slider in Appearance settings (#45086)
+- d62979a6f feat(desktop): composer status stack, live subagent windows, editable prompts (#44630)
+- e20e0bd74 feat(Yuanbao): support wechat forward msg (#43508)
+- 7ba5df0d5 feat(billing): /credits command — balance + portal top-up handoff (#44776)
+- 4474873d2 feat(cli): persist resolved approval/clarify prompts in scrollback (#44702)
+- 05470aa1b feat(messaging): expose action='unreact' in send_message + react dispatch tests
+- 156f4fba9 feat(photon): add agent-facing emoji reaction support
+- 573c4e651 feat(photon): upgrade to spectrum-ts 3.0.0 (pinned) with markdown + reactions
+- 0a963d8c9 feat(photon): add telemetry toggle via `hermes photon telemetry`
+- 62e937bf2 feat(plugins): expose register_slack_action_handler API
+- 6c00077d3 feat(desktop): auto-detect RTL/bidi text direction in chat
+- e976faac7 feat(cron-recipes): /cron-recipe <name> seeds a conversational fill
+- 1593ca540 feat(cron): Cron Recipes — parameterized automation templates across every surface
+- 9a09ea69f feat(cron): Suggested Cron Jobs — one surface for proposed automations
+- 8878484f8 feat(desktop): wire remote filesystem browsing
+- db79e9013 feat(desktop): add filesystem routing facade
+- 51f47f9a9 feat(desktop): add read-only remote filesystem API
+- a09343cc9 feat(dashboard): SKILL.md editor on Skills page + attach-skill selector in cron modals (#44231)
+- 8972a151a feat(cli,tui): show time since last final agent response on the status bar (#44265)
+- 875aa8f16 feat(dashboard): unify multi-profile management — one machine dashboard, global profile switcher (#44007)
+- d7d281fa3 feat(desktop): strict per-thread drafts on decoupled composer
+- 3e74f75e4 feat(agent): coding-context posture across CLI/TUI/desktop/ACP (#43316)
+- 914befa9a feat(dashboard): profile-scoped skills & toolsets management
+- e0e257171 feat(web): Parallel-backed web search & extract — free Search MCP when keyless, v1 REST when keyed
+- e96ca1a0d feat(sessions): drop empty sessions on CLI exit and session rotation
+- d7dfeed6d feat(honcho-setup): replace deployment-shape prompt with gateway-gated identity tree
+- 984e6cb5b feat(whatsapp): add WhatsApp Business Cloud API adapter
