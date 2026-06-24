@@ -169,3 +169,47 @@ class TestStateIsolation:
         from plugins.engineering_loop.state import ELOOP_DIR
         assert ".hermes" in str(ELOOP_DIR)
         assert "MEMORY.md" not in str(ELOOP_DIR)
+
+
+
+class TestRegistryDispatchContract:
+    """Regression: handlers must tolerate the registry's (args, **kwargs) call
+    contract, including framework-injected kwargs like ``task_id``.
+
+    Previously the handlers declared explicit named parameters and crashed with
+    ``_handle_start() got an unexpected keyword argument 'task_id'`` because the
+    central registry dispatches every tool as ``handler(args_dict, **kwargs)``.
+    The ``_adapt_handler`` wrapper in ``register_tools`` bridges the two.
+    """
+
+    def test_dispatch_start_with_task_id(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from tools.registry import registry
+        from plugins.engineering_loop.tools import register_tools
+
+        register_tools()
+        result = registry.dispatch(
+            "engineering_loop_start",
+            {
+                "goal": "regression: task_id must not crash dispatch",
+                "acceptance_criteria": ["ok"],
+                "loop_type": "deterministic",
+                "task_source": "test",
+            },
+            task_id="task-xyz",      # framework-injected; previously crashed
+            session_id="sess-1",
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert "unexpected keyword" not in str(result)
+
+    def test_dispatch_noarg_handler_with_task_id(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from tools.registry import registry
+        from plugins.engineering_loop.tools import register_tools
+
+        register_tools()
+        # status takes no declared params; task_id must be silently dropped.
+        result = registry.dispatch("engineering_loop_status", {}, task_id="t")
+        assert isinstance(result, dict)
+        assert "unexpected keyword" not in str(result)

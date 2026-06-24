@@ -10,6 +10,7 @@ engineering_loop plugin is loaded and active.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -822,6 +823,40 @@ TOOL_DEFINITIONS = [
 ]
 
 
+def _adapt_handler(handler):
+    """Adapt a named-parameter handler to the registry calling contract.
+
+    The central registry dispatches every tool as ``handler(args, **kwargs)``
+    where ``args`` is the parameters dict and ``**kwargs`` carries framework
+    injections (e.g. ``task_id``). The engineering-loop handlers are written
+    with explicit named parameters, so we translate here: pull each declared
+    parameter out of ``args`` (falling back to framework kwargs), and silently
+    drop any framework kwargs the handler doesn't declare. This keeps the
+    handler signatures readable while staying compatible with the registry.
+    """
+    sig = inspect.signature(handler)
+    param_names = set(sig.parameters)
+    accepts_var_kw = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in sig.parameters.values()
+    )
+
+    def _wrapper(args, **kwargs):
+        call_kwargs = {}
+        merged = {**(args or {}), **kwargs}
+        if accepts_var_kw:
+            # Handler can absorb everything; pass the merged mapping through.
+            return handler(**merged)
+        for key, value in merged.items():
+            if key in param_names:
+                call_kwargs[key] = value
+        return handler(**call_kwargs)
+
+    _wrapper.__name__ = getattr(handler, "__name__", "engineering_loop_handler")
+    _wrapper.__doc__ = handler.__doc__
+    return _wrapper
+
+
 def register_tools() -> None:
     """Register all engineering loop tools with the central registry."""
     for tool_def in TOOL_DEFINITIONS:
@@ -832,7 +867,7 @@ def register_tools() -> None:
                 "description": tool_def["description"],
                 "parameters": tool_def["parameters"],
             },
-            handler=tool_def["handler"],
+            handler=_adapt_handler(tool_def["handler"]),
             check_fn=lambda: True,  # Always available when plugin is loaded
         )
     logger.info(
