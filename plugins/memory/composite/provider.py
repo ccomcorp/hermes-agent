@@ -28,6 +28,7 @@ never constructed): an absent leg is ``"skipped"``, an active brain leg is ``"ob
 
 from __future__ import annotations
 
+import collections
 import concurrent.futures
 import hashlib
 import json
@@ -180,9 +181,23 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # stage-2 reward leg so an outcome PAIRS against the right observation (reaches dW>0).
         self._last_observation: Dict[str, str] = {}
         self._obs_lock = threading.Lock()
+        # D3 lesson-keyed pairing: lesson_ref -> recall-time brain observation_id. Populated by
+        # recall_for (Event 2) when a lesson is served; consumed one-shot by the reward leg so an
+        # OUTCOME reinforces the LESSON's synapses, not whatever the last turn observed. Bounded
+        # FIFO (observation_ids age out of the eligibility window in minutes; no need to retain
+        # more). In-process only — a restart between recall and outcome falls back to turn-pairing.
+        self._lesson_observation: "collections.OrderedDict[str, str]" = collections.OrderedDict()
+        self._lesson_obs_lock = threading.Lock()
+        self._LESSON_OBS_MAX = 256
+        self._review_observe_count: int = 0  # falsifiability: authored lessons observed into brain
         # Background worker for the paired reward — kept OFF the turn thread (R4). Lazy-built.
         self._reward_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._reward_futures: List["concurrent.futures.Future"] = []
+        # D3: background worker for recall-time re-observe (Event 2). recall_for runs on the
+        # synchronous delegation-recall path; a per-lesson brain.observe (observe_timeout up to
+        # 10s each) MUST NOT block it. Lazy-built, single worker — same pattern as _reward_pool.
+        self._observe_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._observe_futures: List["concurrent.futures.Future"] = []
         # Brain health surface (Task #11): the LAST completed reward + running dW totals, so the
         # brain ack is HONEST (no hardcoded 'degraded'). Set by the backgrounded reward _run.
         self._last_brain_reward: Optional[Dict[str, Any]] = None
@@ -571,6 +586,20 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         )
         if not records:
             return "", receipt["id"]
+        # D3 Event 2 (re-observe at recall): a lesson served here will, IF it drives a real
+        # outcome, receive an outcome-gated reward via handle_tool_call. For R-STDP to land on
+        # the LESSON's synapses the reward must pair to an observation within the eligibility
+        # window — the authoring-time trace has long decayed. Re-observe each served lesson and
+        # stash its observation_id keyed by ref. This is dispatched to a BACKGROUND worker
+        # (Sev: a per-lesson brain.observe can block up to observe_timeout ~10s; recall_for is
+        # on the synchronous delegation-recall path and must never block on N brain RPCs). The
+        # map is populated shortly after; if a (much-later) outcome races ahead of it,
+        # handle_tool_call falls back to turn-pairing (graceful, never wrong).
+        if self._brain is not None and self._brain_stage >= 1:
+            self._submit_reobserve(
+                [(rec.get("ref") or rec.get("id"), rec.get("lesson") or rec.get("content"))
+                 for rec in records]
+            )
         return self._format_context(self._merge_dedup(records, [], [])), receipt["id"]
 
     def confirm_consumed(self, receipt_id: str) -> bool:
@@ -601,6 +630,22 @@ class HermesCompositeProvider(CompositeMemoryProvider):
                 written += 1
             except Exception as exc:
                 logger.warning("fork experience-store append failed: %s", exc)
+                continue  # do not observe a lesson that failed to store
+            # D3 Event 1 (observe at authoring): Hebbian-encode the distilled lesson so its
+            # neural representation EXISTS. The concept-dense lesson fires different populations
+            # than the raw turn sync_turn observed (non-redundant). Deliberately NO reward here:
+            # authoring is not an outcome, and a constant reward would saturate the RPE baseline
+            # and corrupt every channel's plasticity. Reward stays outcome-gated (Event 3), paired
+            # to the recall-time observation (Event 2). Best-effort; never breaks the review.
+            if self._brain is not None and self._brain_stage >= 1:
+                try:
+                    self._brain.observe(
+                        {"type": "text", "content": str(cand["lesson"])[:_LESSON_MAX_CHARS]}
+                    )
+                    with self._lesson_obs_lock:  # counter shared with the reobserve worker
+                        self._review_observe_count += 1
+                except Exception as exc:
+                    logger.debug("D3 background-review brain observe failed: %s", exc)
         return written
 
     def recall_for_delegation(self, goal: str, *, session_id: str = ""):
@@ -647,8 +692,18 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         if valence == 0.0:
             return out  # neutral is not a reward
         session_id = kwargs.get("session_id") or self._session_id
-        with self._obs_lock:
-            observation_id = self._last_observation.pop(session_id, None)
+        # D3 Event 3 (lesson-keyed pairing): if the signal names a lesson ref AND we re-observed
+        # that lesson at recall time, pair the reward to the LESSON's observation so R-STDP
+        # reinforces the lesson's synapses. Else fall back to the session-turn observation
+        # (pre-D3 behavior — zero regression for non-lesson signals). Both maps pop one-shot.
+        ref = str(args.get("ref") or "")
+        observation_id = None
+        if ref:
+            with self._lesson_obs_lock:
+                observation_id = self._lesson_observation.pop(ref, None)
+        if observation_id is None:
+            with self._obs_lock:
+                observation_id = self._last_observation.pop(session_id, None)
         # DEVIATION (one-shot pairing): fire the reward ONLY when a captured observation is
         # present to pair against. An un-paired signal (no prior observe, or the stash was
         # already popped by an earlier signal) is not re-credited — this is the one-shot
@@ -656,7 +711,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         if observation_id is None:
             return out
         self._submit_reward(
-            ref=str(args.get("ref") or ""),
+            ref=ref,
             valence=valence,
             derivation=str(args.get("derivation") or ""),
             observation_id=observation_id,
@@ -749,6 +804,49 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             "brain_dW_total": brain_dW_total,
         }
 
+    def _submit_reobserve(self, ref_text_pairs) -> None:
+        """D3 Event 2 worker: re-observe served lessons OFF the synchronous recall path and
+        stash each observation_id keyed by lesson ref. Single-worker pool (ordering preserved);
+        best-effort — a brain fault on any lesson is logged and skipped, never raised. The
+        counter and the map are mutated only here and in on_background_review, both under
+        ``_lesson_obs_lock``."""
+        pairs = [(str(r), str(t)) for (r, t) in ref_text_pairs if r and t]
+        if not pairs:
+            return
+        if self._observe_pool is None:
+            self._observe_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="brain-reobserve"
+            )
+
+        def _run() -> None:
+            for ref, text in pairs:
+                try:
+                    obs_id = self._brain.observe(
+                        {"type": "text", "content": text[:_LESSON_MAX_CHARS]}
+                    )
+                except Exception as exc:  # best-effort; a fault on one lesson skips only it
+                    logger.debug("D3 recall re-observe failed for ref=%s: %s", ref, exc)
+                    continue
+                if obs_id:
+                    with self._lesson_obs_lock:
+                        # one entry per ref; refresh moves it to MRU end
+                        self._lesson_observation.pop(ref, None)
+                        self._lesson_observation[ref] = str(obs_id)
+                        self._review_observe_count += 1
+                        while len(self._lesson_observation) > self._LESSON_OBS_MAX:
+                            self._lesson_observation.popitem(last=False)  # evict oldest (FIFO)
+
+        self._observe_futures.append(self._observe_pool.submit(_run))
+
+    def _flush_observes(self, timeout: float = 5.0) -> None:
+        """Wait for outstanding background re-observes (used by tests + shutdown)."""
+        futures, self._observe_futures = self._observe_futures, []
+        for fut in futures:
+            try:
+                fut.result(timeout=timeout)
+            except Exception:  # noqa: BLE001 - best-effort drain
+                pass
+
     def _flush_rewards(self, timeout: float = 5.0) -> None:
         """Wait for outstanding background rewards (used by tests + shutdown)."""
         futures, self._reward_futures = self._reward_futures, []
@@ -759,7 +857,11 @@ class HermesCompositeProvider(CompositeMemoryProvider):
                 pass
 
     def shutdown(self) -> None:
+        self._flush_observes(timeout=2.0)
         self._flush_rewards(timeout=2.0)
+        if self._observe_pool is not None:
+            self._observe_pool.shutdown(wait=False)
+            self._observe_pool = None
         if self._reward_pool is not None:
             self._reward_pool.shutdown(wait=False)
             self._reward_pool = None
