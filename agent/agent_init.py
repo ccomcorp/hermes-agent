@@ -1142,6 +1142,11 @@ def init_agent(
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
+    # A tool-call REJECTION ({"error":...} payload) this turn — a learnable operator
+    # error (e.g. wrong arg type / unknown ref). ORed into the skill-review trigger so a
+    # misused tool becomes a learning signal instead of evaporating (rejections are
+    # returned as polite payloads, not exceptions, so they bypass shell-keyed feedback).
+    agent._tool_rejection_this_turn = False
     if not skip_memory:
         try:
             mem_config = _agent_cfg.get("memory", {})

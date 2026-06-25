@@ -356,6 +356,13 @@ def run_codex_app_server_turn(
     ):
         should_review_skills = True
         agent._iters_since_skill = 0
+    # A tool REJECTION this turn (learnable operator error) also triggers the skill review,
+    # so a misused tool becomes a learning signal. Mirrors the default turn_finalizer path.
+    # Reset the per-turn flag regardless so it never leaks into a later turn.
+    if getattr(agent, "_tool_rejection_this_turn", False):
+        if "skill_manage" in agent.valid_tool_names:
+            should_review_skills = True
+        agent._tool_rejection_this_turn = False
 
     # External memory provider sync (mirrors line ~15439). Skipped on
     # interrupt/error to avoid feeding partial transcripts to memory.

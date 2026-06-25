@@ -29,6 +29,7 @@ from agent.display import (
     _detect_tool_failure,
 )
 from agent.tool_guardrails import ToolGuardrailDecision
+from agent.tool_result_classification import tool_result_is_rejection
 from agent.tool_dispatch_helpers import (
     _is_destructive_command,
     _is_multimodal_tool_result,
@@ -748,6 +749,15 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 _err_text = _multimodal_text_summary(function_result)
                 result_preview = _err_text[:200] if len(_err_text) > 200 else _err_text
                 logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
+                # A tool REJECTION (operator misuse: unknown ref, invalid/unknown arg, schema
+                # violation) is a learnable error — flag it so turn_finalizer triggers the
+                # background skill-review. NARROW gate (Defect-3 fix): only structured-misuse
+                # rejections, NOT environmental/transient is_error cases (404, file-not-found,
+                # timeout, rate-limit) which are noise for the learning loop. Guardrail blocks
+                # (`blocked`) never count. This runs single-threaded in the main assembly loop
+                # AFTER the executor's `with` block joined all workers, so the write is race-free.
+                if not blocked and tool_result_is_rejection(function_name, function_result):
+                    agent._tool_rejection_this_turn = True
 
             # Track file-mutation outcome for the turn-end verifier.
             # `blocked` calls never actually ran — don't let a guardrail

@@ -268,6 +268,13 @@ def build_turn_context(
     # Track user turns for memory flush and periodic nudge logic.
     agent._user_turn_count += 1
 
+    # Reset the per-turn tool-rejection flag at the TOP of each turn (self-healing): if a
+    # PRIOR turn aborted via an exception before finalize_turn ran, its flag could still be
+    # True; clearing it here guarantees a rejection only ever triggers a review for the turn
+    # it actually happened in, never a stale carry-over. (Defect-1 fix from the D3-rejection
+    # review — the finalize-path reset alone is not exception-safe.)
+    agent._tool_rejection_this_turn = False
+
     # Reset the streaming context scrubber at the top of each turn.
     scrubber = getattr(agent, "_stream_context_scrubber", None)
     if scrubber is not None:

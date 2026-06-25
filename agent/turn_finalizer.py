@@ -436,6 +436,19 @@ def finalize_turn(
             and "skill_manage" in agent.valid_tool_names):
         _should_review_skills = True
         agent._iters_since_skill = 0
+    # A tool REJECTION this turn (a learnable operator error — wrong arg, unknown ref, etc.)
+    # also triggers the skill review, so a misused tool becomes a learning signal instead of
+    # evaporating. Gated on skill_manage availability (the review needs it to author a lesson).
+    # Reset the per-turn flag here too (belt-and-suspenders with the turn-START reset in
+    # turn_context — that one is the exception-safe guarantee; this one keeps a clean turn tidy).
+    # NOTE (interrupt behavior, intentional): the review spawn below requires
+    # `not interrupted`, so a rejection in an INTERRUPTED turn is reset but authors no lesson.
+    # That is deliberate — an interrupted turn is an unreliable signal; we'd rather drop it than
+    # author a lesson from a half-finished trajectory.
+    if getattr(agent, "_tool_rejection_this_turn", False):
+        if "skill_manage" in agent.valid_tool_names:
+            _should_review_skills = True
+        agent._tool_rejection_this_turn = False
 
     # External memory provider: sync the completed turn + queue next prefetch.
     agent._sync_external_memory_for_turn(
