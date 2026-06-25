@@ -4,6 +4,30 @@
 
 Pair with [`loop-liveness-gate.md`](loop-liveness-gate.md): run loop-liveness after every merge; a fingerprint failure means a seam below moved.
 
+## Working Discipline (read before changing anything here)
+
+**AIOS is the main development platform; `hermes-agent` is developed *from* it.** That is why the
+tree is split:
+
+| Thing | What it is |
+|---|---|
+| `I:\PROJECTS\AIOS` | The **main dev platform** — Hermes is built and iterated here. |
+| `I:\PROJECTS\AIOS\hermes-agent` | The **agent chassis / code** — this fork (`ccomcorp/hermes-agent`, branch `aios`) of upstream NousResearch `hermes-agent`. |
+| `I:\PROJECTS\AIOS\hermes-home` | The **dev runtime** (`HERMES_HOME`), **not** `~/.hermes` — config, skills, plugins, the running instance's home. |
+
+The dev desktop app (`aios/scripts/launch-dev-hermes.ps1`) pins `$Chassis = hermes-agent` and
+imports the agent **directly from this chassis** (`HERMES_DESKTOP_HERMES_ROOT=$Chassis`,
+`HERMES_BRAIN_STAGE=2`). So a commit here *is* the deployment path for the dev app.
+
+**Cardinal rule — source-first, always:** before making ANY change, **reference the relevant
+documentation AND read the running code at its source** to understand the system as it actually
+is. Never theorize about behavior; verify it (read the code, the docs, or probe the live system).
+Retract overstatements immediately when the source contradicts them. Prefer **additive**
+extension at an existing seam/hook over editing upstream-shared files (every shared-file edit is a
+future merge-conflict surface — see the seam table below). This manifest itself is fork-local and
+additive for exactly that reason; `AGENTS.md` is byte-identical to upstream and must stay that way.
+
+
 ## Chassis-core delta (the part that must survive an upstream merge)
 All four seam call-sites carry a `# AIOS-LOOP-SEAM:<id>` sentinel — the static tripwire. If an upstream refactor moves/renames a host function, re-home the seam and restore its sentinel.
 
