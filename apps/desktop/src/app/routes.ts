@@ -19,6 +19,7 @@ export const SYSTEM_ROUTE = '/system'
 export const CONFIG_ROUTE = '/config'
 export const LOGS_ROUTE = '/logs'
 export const MODELS_ROUTE = '/models'
+export const STARMAP_ROUTE = '/starmap'
 
 export type AppView =
   | 'agents'
@@ -40,6 +41,7 @@ export type AppView =
   | 'skills'
   | 'system'
   | 'webhooks'
+  | 'starmap'
 
 export type AppRouteId =
   | 'agents'
@@ -61,6 +63,7 @@ export type AppRouteId =
   | 'skills'
   | 'system'
   | 'webhooks'
+  | 'starmap'
 
 export interface AppRoute {
   id: AppRouteId
@@ -87,7 +90,8 @@ export const APP_ROUTES = [
   { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
   { id: 'config', path: CONFIG_ROUTE, view: 'config' },
   { id: 'logs', path: LOGS_ROUTE, view: 'logs' },
-  { id: 'models', path: MODELS_ROUTE, view: 'models' }
+  { id: 'models', path: MODELS_ROUTE, view: 'models' },
+  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))
@@ -96,7 +100,14 @@ const RESERVED_PATHS: ReadonlySet<string> = new Set(APP_ROUTES.map(route => rout
 // Views that render as a full-screen modal card (OverlayView) over the shell.
 // While one is open the app's titlebar control clusters must hide so they don't
 // bleed over the overlay (they sit at a higher z-index than the overlay card).
-export const OVERLAY_VIEWS: ReadonlySet<AppView> = new Set(['agents', 'command-center', 'cron', 'profiles', 'settings'])
+export const OVERLAY_VIEWS: ReadonlySet<AppView> = new Set([
+  'agents',
+  'command-center',
+  'cron',
+  'profiles',
+  'settings',
+  'starmap'
+])
 
 export function isOverlayView(view: AppView): boolean {
   return OVERLAY_VIEWS.has(view)
