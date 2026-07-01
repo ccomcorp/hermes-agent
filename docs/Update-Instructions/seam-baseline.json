@@ -1,0 +1,16 @@
+{
+  "count": 18,
+  "files": 8,
+  "file_list": [
+    "agent/background_review.py",
+    "agent/conversation_loop.py",
+    ".github/workflows/loop-liveness.yml",
+    "docs/Update-Instructions/loop-fork-patch-manifest.md",
+    "docs/Update-Instructions/loop-liveness-gate.md",
+    "plugins/memory/composite/loop_guard.py",
+    "plugins/memory/composite/tests/test_loop_guard.py",
+    "tools/delegate_tool.py"
+  ],
+  "updated": "2026-06-30",
+  "note": "Update this file whenever a seam is intentionally added or removed. Never auto-generate — hand-edit with intent."
+}
