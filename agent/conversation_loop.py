@@ -978,9 +978,14 @@ def run_conversation(
         # the OpenAI SDK. Sanitizing here prevents the 3-retry cycle.
         _sanitize_messages_surrogates(api_messages)
 
-        # Calculate approximate request size for logging
-        total_chars = sum(len(str(msg)) for msg in api_messages)
+        # Calculate approximate request size for logging. Derive the char count
+        # from the cheap token estimate instead of re-stringifying the entire
+        # message history every API call: sum(len(str(msg)) ...) materialized
+        # hundreds of KB of dict reprs per iteration on 150-250K-token histories,
+        # a tight GIL-holding loop that starved the uvicorn event-loop thread
+        # (surfacing as >10s "loop stalled" warnings and session.create timeouts).
         approx_tokens = estimate_messages_tokens_rough(api_messages)
+        total_chars = approx_tokens * 4  # ~4 chars/token; avoids full-history str()
         approx_request_tokens = estimate_request_tokens_rough(
             api_messages, tools=agent.tools or None
         )
