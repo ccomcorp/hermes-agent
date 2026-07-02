@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { PAGE_INSET_X } from '../layout-constants'
+import { AppearanceSettings } from '../settings/appearance-settings'
 import { ConfigSettings } from '../settings/config-settings'
 import { SECTIONS } from '../settings/constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
@@ -112,12 +113,21 @@ export function ConfigView({
 
       {/* ── Scrollable section body (reused ConfigSettings) ──────────── */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        <ConfigSettings
-          activeSectionId={activeSectionId}
-          importInputRef={importInputRef}
-          onConfigSaved={onConfigSaved}
-          onMainModelChanged={onMainModelChanged}
-        />
+        {activeSectionId === 'appearance' ? (
+          // The `appearance` section carries no config keys (constants.ts →
+          // keys: []); it is rendered by the dedicated AppearanceSettings
+          // component, mirroring the Settings overlay (settings/index.tsx). Without
+          // this intercept the generic ConfigSettings renders an empty
+          // "Nothing to configure" pane for Appearance in this full-width view.
+          <AppearanceSettings />
+        ) : (
+          <ConfigSettings
+            activeSectionId={activeSectionId}
+            importInputRef={importInputRef}
+            onConfigSaved={onConfigSaved}
+            onMainModelChanged={onMainModelChanged}
+          />
+        )}
       </div>
     </section>
   )
