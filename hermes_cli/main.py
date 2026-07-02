@@ -5387,6 +5387,73 @@ def _stop_desktop_processes_locking_build(desktop_dir: Path) -> list[int]:
     return stopped
 
 
+def _stop_stale_gateway_daemons() -> list[int]:
+    """Terminate ORPHANED Hermes ``gateway run`` daemons before a desktop rebuild.
+
+    A ``hermes gateway run`` daemon (webhooks / cron / channels) is spawned
+    independently of the desktop window and is NOT reaped when the window closes.
+    If its launching parent has since exited, it becomes an orphan that keeps
+    holding its fixed webhook port (e.g. 8644/8645) and leaks child MCP
+    processes — which clutters the tree across restarts and can block a fresh
+    gateway from binding. We stop ONLY a gateway whose parent process is gone (a
+    true orphan); a healthy, still-parented gateway is deliberately left running
+    so channels/cron survive a normal desktop restart. Best-effort; never raises.
+    Returns the PIDs we asked to stop.
+    """
+    try:
+        import psutil
+    except Exception:
+        return []
+    me = os.getpid()
+    try:
+        procs = list(psutil.process_iter(["pid", "ppid", "cmdline"]))
+    except Exception:
+        return []
+    live_pids = {p.info.get("pid") for p in procs}
+
+    victims = []
+    for proc in procs:
+        try:
+            info = proc.info
+        except Exception:
+            continue
+        pid = info.get("pid")
+        if pid is None or pid == me:
+            continue
+        tokens = [str(t).lower() for t in (info.get("cmdline") or [])]
+        # The gateway daemon runs as ``… hermes … gateway run`` (any shim form:
+        # hermes.exe, hermes-real.exe, or ``-m hermes_cli.main``).
+        if "gateway" not in tokens or "run" not in tokens:
+            continue
+        if not any("hermes" in t for t in tokens):
+            continue
+        ppid = info.get("ppid")
+        # STALE == the launching parent has exited (true orphan). Skip a gateway
+        # whose parent is still alive — that one is healthy, leave it running.
+        if ppid in live_pids:
+            continue
+        victims.append(proc)
+
+    stopped: list[int] = []
+    for proc in victims:
+        try:
+            proc.terminate()
+            stopped.append(int(proc.pid))
+        except Exception:
+            continue
+    if stopped:
+        try:
+            _, alive = psutil.wait_procs(victims, timeout=5)
+            for proc in alive:
+                try:
+                    proc.kill()
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return stopped
+
+
 def _desktop_macos_relaunchable_fixup(desktop_dir: Path) -> None:
     """Make a locally-built (unsigned) macOS desktop app survive in-place self-update.
 
@@ -5649,6 +5716,12 @@ def cmd_gui(args: argparse.Namespace):
             build_label = "source build" if source_mode else "packaged app"
             print(f"✓ Desktop {build_label} is up to date (content stamp matches)")
         else:
+            # Before any rebuild, reap a STALE (orphaned) gateway daemon left by a
+            # prior session — it holds its fixed webhook port and leaks child MCP
+            # procs across restarts. A healthy, still-parented gateway is left alone.
+            stale_gw = _stop_stale_gateway_daemons()
+            if stale_gw:
+                print(f"  ⚠ Stopped orphaned Hermes gateway daemon(s) before rebuild (pid {', '.join(map(str, stale_gw))})")
             print("→ Installing desktop workspace dependencies...")
             nixos_env = _nixos_build_env()
             install_result = _run_npm_install_deterministic(npm, PROJECT_ROOT, capture_output=False, env=nixos_env)
