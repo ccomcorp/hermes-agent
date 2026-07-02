@@ -36,7 +36,11 @@ import { $dirtyPreviewUrls } from '@/store/preview-edit'
 import { PreviewPane } from './preview-pane'
 
 export const PREVIEW_RAIL_MIN_WIDTH = '18rem'
-export const PREVIEW_RAIL_MAX_WIDTH = '38rem'
+// Responsive cap: a fixed rem left the document/preview panel stuck small on
+// wide monitors while the chat column grew far wider. 50vw lets the panel be
+// dragged up to about half the window -- reaching the chat's width -- and
+// scales with the display instead of a hardcoded 608px ceiling.
+export const PREVIEW_RAIL_MAX_WIDTH = '50vw'
 
 const INTRINSIC = `clamp(${PREVIEW_RAIL_MIN_WIDTH}, 36vw, 32rem)`
 
