@@ -362,6 +362,7 @@ def execute_gate(
             exit_code=-1,
             passed=False,
             duration_seconds=duration,
+            required=gate.required,
             error=f"Command validation failed: {err_reason}",
             executed_at=start,
         )
@@ -412,6 +413,7 @@ def execute_gate(
             exit_code=result.returncode,
             passed=passed,
             duration_seconds=duration,
+            required=gate.required,
             stdout_snippet=result.stdout[-1000:] if result.stdout else "",
             stderr_snippet=result.stderr[-1000:] if result.stderr else "",
             log_path=str(log_path) if log_path else "",
@@ -430,6 +432,7 @@ def execute_gate(
             exit_code=-1,
             passed=False,
             duration_seconds=duration,
+            required=gate.required,
             error=msg,
             log_path=str(log_path) if log_path else "",
             executed_at=start,

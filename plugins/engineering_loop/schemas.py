@@ -111,6 +111,7 @@ class GateResult:
     exit_code: int
     passed: bool
     duration_seconds: float
+    required: bool = True
     stdout_snippet: str = ""
     stderr_snippet: str = ""
     log_path: str = ""

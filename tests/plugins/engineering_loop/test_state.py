@@ -118,6 +118,24 @@ class TestGateResults:
         assert len(loaded) == 1
         assert loaded[0]["gate_name"] == "unit"
         assert loaded[0]["passed"] is True
+        assert loaded[0]["required"] is True
+
+    def test_save_gate_results_preserves_optional_requiredness(self, state_manager):
+        """Optional/skipped gate evidence must stay distinguishable."""
+        result = GateResult(
+            gate_name="gate-discovery",
+            command="discover_gates",
+            exit_code=0,
+            passed=True,
+            duration_seconds=0.0,
+            required=False,
+            stdout_snippet="No gates discovered for this project.",
+        )
+
+        state_manager.save_gate_results([result])
+        loaded = state_manager.load_gate_results()
+
+        assert loaded[0]["required"] is False
 
     def test_load_empty_gate_results(self, state_manager):
         """Loading when no gate results exist returns empty list."""
@@ -162,3 +180,11 @@ class TestHeaderGeneration:
 
         header = state_manager.build_header(sample_state)
         assert "STUCK" in header.next_action
+
+    def test_header_tolerates_unrepaired_reviewer_status_string(self, state_manager, sample_state):
+        """Header rendering is defensive even before persisted status normalization."""
+        sample_state.reviewer = ReviewerResult(status="ReviewerStatus.PASS", feedback="ok")  # type: ignore[arg-type]
+
+        header = state_manager.build_header(sample_state)
+
+        assert header.reviewer_status == "PASS"
