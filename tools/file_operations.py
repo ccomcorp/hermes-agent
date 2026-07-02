@@ -937,6 +937,31 @@ class ShellFileOperations(FileOperations):
     def _atomic_write(self, path: str, content: str) -> "ExecuteResult":
         """Write ``content`` to ``path`` atomically via temp-file + rename.
 
+        The POSIX shell implementation is the fast/common path.  If the
+        backend shell itself rejects the generated script (the Windows/MSYS
+        failure mode shows up as ``/bin/bash: -c: line ...``), retry with a
+        Python implementation that embeds only the path in the command and
+        keeps file content on stdin.  This preserves atomic semantics while
+        avoiding shell-heredoc/quoting/path edge cases that otherwise make
+        ``write_file`` return ``bytes_written=0`` forever in desktop sessions.
+        """
+        shell_result = self._atomic_write_shell(path, content)
+        if shell_result.exit_code == 0 or not self._looks_like_shell_launch_failure(shell_result.stdout):
+            return shell_result
+
+        python_result = self._atomic_write_python(path, content)
+        if python_result.exit_code == 0:
+            return python_result
+
+        combined = (
+            f"shell atomic write failed: {shell_result.stdout.strip()}\n"
+            f"python atomic write fallback failed: {python_result.stdout.strip()}"
+        ).strip()
+        return ExecuteResult(stdout=combined, exit_code=python_result.exit_code)
+
+    def _atomic_write_shell(self, path: str, content: str) -> "ExecuteResult":
+        """POSIX shell atomic writer used by ``_atomic_write``.
+
         Streams ``content`` over stdin into a temp file in the SAME
         directory as ``path`` (so the final ``mv`` is a real rename on the
         same filesystem, not a non-atomic cross-device copy), preserves the
@@ -944,10 +969,6 @@ class ShellFileOperations(FileOperations):
         On any failure the temp file is removed so we never leak a partial
         ``.hermes-tmp`` file next to the user's data, and the original file
         is left untouched. Content rides stdin so there is no ARG_MAX limit.
-
-        Returns an :class:`ExecuteResult`; ``exit_code == 0`` means the file
-        was swapped into place atomically. A non-zero exit means nothing was
-        renamed and the original (if any) is intact.
         """
         q_path = self._escape_shell_arg(path)
         parent = os.path.dirname(path) or "."
@@ -987,6 +1008,69 @@ class ShellFileOperations(FileOperations):
             "trap - EXIT"
         )
         return self._exec(script, stdin_data=content)
+
+    @staticmethod
+    def _looks_like_shell_launch_failure(output: str) -> bool:
+        """True when the shell rejected the command before the write ran.
+
+        Environmental write failures (permission denied, no space, missing
+        directory) should surface as-is.  This predicate is intentionally
+        narrow and targets the recurring desktop/MSYS class where bash itself
+        errors while parsing the generated ``-c`` script.
+        """
+        lower = (output or "").lower()
+        return (
+            "/bin/bash: -c:" in lower
+            or "bash: -c:" in lower
+            or "syntax error near unexpected token" in lower
+            or "unexpected eof while looking for matching" in lower
+            or "unterminated quoted string" in lower
+        )
+
+    def _atomic_write_python(self, path: str, content: str) -> "ExecuteResult":
+        """Cross-shell atomic write fallback implemented in Python.
+
+        The path is embedded via ``repr`` in a small Python snippet; the file
+        content is still streamed on stdin so large writes do not hit ARG_MAX
+        and content metacharacters cannot affect shell parsing.
+        """
+        snippet = (
+            "import os, pathlib, stat, sys, tempfile\n"
+            f"target = pathlib.Path({path!r})\n"
+            "parent = target.parent if str(target.parent) else pathlib.Path('.')\n"
+            "tmp_name = None\n"
+            "try:\n"
+            "    parent.mkdir(parents=True, exist_ok=True)\n"
+            "    old_mode = None\n"
+            "    try:\n"
+            "        old_mode = stat.S_IMODE(target.stat().st_mode)\n"
+            "    except FileNotFoundError:\n"
+            "        pass\n"
+            "    with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='', dir=str(parent), prefix='.hermes-tmp.', delete=False) as f:\n"
+            "        tmp_name = f.name\n"
+            "        f.write(sys.stdin.read())\n"
+            "        f.flush()\n"
+            "        os.fsync(f.fileno())\n"
+            "    if old_mode is not None:\n"
+            "        try:\n"
+            "            os.chmod(tmp_name, old_mode)\n"
+            "        except OSError:\n"
+            "            pass\n"
+            "    os.replace(tmp_name, target)\n"
+            "    tmp_name = None\n"
+            "except Exception as exc:\n"
+            "    if tmp_name:\n"
+            "        try:\n"
+            "            os.unlink(tmp_name)\n"
+            "        except OSError:\n"
+            "            pass\n"
+            "    print(str(exc), file=sys.stderr)\n"
+            "    sys.exit(1)\n"
+        )
+        result = self._exec(f"python3 -c {self._escape_shell_arg(snippet)}", stdin_data=content)
+        if result.exit_code != 0 and "python3" in (result.stdout or ""):
+            result = self._exec(f"python -c {self._escape_shell_arg(snippet)}", stdin_data=content)
+        return result
 
     def _detect_file_line_ending(self, path: str, pre_content: Optional[str] = None) -> Optional[str]:
         """Detect the dominant line ending of a file on disk.

@@ -211,6 +211,53 @@ class TestReadResult:
         assert d["mime_type"] == "image/png"
 
 
+
+class _AtomicWriteFallbackEnv:
+    """Fake env that forces the shell writer to fail, then accepts Python."""
+
+    cwd = "/tmp"
+
+    def __init__(self):
+        self.commands = []
+
+    def execute(self, command, cwd=None, **kwargs):
+        self.commands.append(command)
+        if command.startswith("python3 -c"):
+            return {"returncode": 0, "output": ""}
+        return {
+            "returncode": 2,
+            "output": "/bin/bash: -c: line 1: unexpected EOF while looking for matching `'",
+        }
+
+
+class TestAtomicWriteFallback:
+    def test_retries_with_python_when_shell_rejects_script(self):
+        env = _AtomicWriteFallbackEnv()
+        ops = ShellFileOperations(env)
+
+        result = ops._atomic_write("/tmp/example.txt", "content with ' quotes\n")
+
+        assert result.exit_code == 0
+        assert len(env.commands) == 2
+        assert "mktemp" in env.commands[0]
+        assert env.commands[1].startswith("python3 -c")
+
+    def test_non_shell_write_failures_do_not_fallback(self):
+        class PermissionDeniedEnv(_AtomicWriteFallbackEnv):
+            def execute(self, command, cwd=None, **kwargs):
+                self.commands.append(command)
+                return {"returncode": 1, "output": "permission denied"}
+
+        env = PermissionDeniedEnv()
+        ops = ShellFileOperations(env)
+
+        result = ops._atomic_write("/root/example.txt", "content\n")
+
+        assert result.exit_code == 1
+        assert result.stdout == "permission denied"
+        assert len(env.commands) == 1
+
+
 class TestWriteResult:
     def test_to_dict_omits_none(self):
         r = WriteResult(bytes_written=100)
