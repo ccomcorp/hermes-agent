@@ -2935,9 +2935,23 @@ class SessionDB:
                 for key in (
                     "id", "ended_at", "end_reason", "message_count",
                     "tool_call_count", "title", "last_active", "preview",
-                    "model", "system_prompt", "cwd", "git_branch", "git_repo_root",
+                    "model", "system_prompt",
                 ):
                     if key in tip_row:
+                        merged[key] = tip_row[key]
+                # cwd / git_* are LOCATION IDENTITY, not activity data. A
+                # compression-continuation tip can be created without a cwd (some
+                # continuations insert the child row before its cwd is known), and
+                # letting a null tip value overwrite the chain's known cwd erases the
+                # session's project association -- the project sidebar then drops the
+                # whole conversation (project_tree skips null-cwd sessions). Only take
+                # the tip's location when it is actually populated; otherwise keep the
+                # root row's value, which carries the original cwd/repo/branch.
+                for key in ("cwd", "git_branch", "git_repo_root"):
+                    tip_val = tip_row.get(key)
+                    if isinstance(tip_val, str):
+                        tip_val = tip_val.strip()
+                    if tip_val:
                         merged[key] = tip_row[key]
                 merged["_lineage_root_id"] = s["id"]
                 projected.append(merged)
