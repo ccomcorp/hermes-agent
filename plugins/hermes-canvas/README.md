@@ -17,7 +17,7 @@ make it work on the AIOS Windows-first host in the default *loopback* dashboard 
 
 | Fix | Commit | What |
 |---|---|---|
-| **F1 auth shim** | `61f4e3ed` | `dist/index.js` uses raw `fetch()` and omits the `X-Hermes-Session-Token` header the fork gates `/api/plugins/*` on in loopback mode → 401. A prepended shim wraps `window.fetch` to inject it for canvas's own API base. (No frontend source ships upstream, so this is a bundle-level shim, not a rebuild.) |
+| **F1 auth shim** | `61f4e3ed` | `dist/index.js` uses raw `fetch()` and omits the `X-Hermes-Session-Token` header the fork gates `/api/plugins/*` on in loopback mode → 401. A prepended shim wraps `window.fetch` to inject it for same-origin canvas API paths only. (No frontend source ships upstream, so this is a bundle-level shim, not a rebuild.) |
 | **F2b Windows tree-kill** | `621b7ce5` | `os.killpg` is POSIX-only; on Windows the old fallback killed only the `npm.cmd` shim and leaked the real `node.exe` + port. `_terminate_proc` now uses `taskkill /PID <pid> /T /F` on win32. |
 | **F6 path scope** | `21584241` | `_validate_path` admitted all of `Path.home()`; scoped to `HERMES_CANVAS_PROJECTS_ROOT` (or `<HERMES_HOME>/canvas-projects`) because `/agent/prompt` runs an autonomous agent on the path. |
 | **Agent-binary pin** | `3e8f24e5` | `/agent/prompt` resolved `hermes` via bare PATH (could hit a different install). `_resolve_hermes_bin()` prefers `HERMES_CANVAS_HERMES_BIN`, then a launcher next to `sys.executable` (the venv serving the dashboard), then PATH — pinning agent-edit to the I-drive Hermes. |

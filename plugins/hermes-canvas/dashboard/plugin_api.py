@@ -59,7 +59,7 @@ def _templates_dir() -> Path:
 
 
 def _projects_dir() -> Path:
-    return _home() / "canvas-projects"
+    return _canvas_root()
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +224,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _canvas_root() -> Path:
+    """The single root all canvas projects live under (validation + default parent)."""
+    root_env = os.environ.get("HERMES_CANVAS_PROJECTS_ROOT")
+    return Path(root_env).expanduser().resolve() if root_env else (_home().resolve() / "canvas-projects")
+
+
 def _validate_path(path: str) -> Path:
     """Admit only paths under the AIOS canvas projects root."""
-    root_env = os.environ.get("HERMES_CANVAS_PROJECTS_ROOT")
-    root = Path(root_env).expanduser().resolve() if root_env else (_home().resolve() / "canvas-projects")
+    root = _canvas_root()
     root.mkdir(parents=True, exist_ok=True)
     p = Path(path).expanduser().resolve()
     if not (p == root or p.is_relative_to(root)):
@@ -236,12 +241,9 @@ def _validate_path(path: str) -> Path:
 
 
 def _which(cmd: str) -> str | None:
-    """Find command in PATH."""
-    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(path_dir) / cmd
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+    """Find command in PATH (delegates to stdlib so Windows PATHEXT resolution
+    is honored, e.g. npm -> npm.CMD, which is required for subprocess.Popen)."""
+    return shutil.which(cmd)
 
 
 def _resolve_hermes_bin() -> str | None:
@@ -345,7 +347,7 @@ def _terminate_proc(proc: subprocess.Popen, timeout: int = 5) -> None:
     if sys.platform == "win32":
         try:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
         except Exception:
             try:
                 proc.kill()

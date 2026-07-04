@@ -1,4 +1,4 @@
-﻿/* AIOS auth shim (F1): canvas uses raw fetch and omits the session token the
+/* AIOS auth shim (F1): canvas uses raw fetch and omits the session token the
    fork gates /api/plugins/* on in loopback mode -> 401. Wrap window.fetch to
    inject X-Hermes-Session-Token for canvas's own API base only. */
 (function () {
@@ -11,7 +11,8 @@
   window.fetch = function (input, init) {
     try {
       var url = typeof input === "string" ? input : (input && input.url) || "";
-      if (url.indexOf(PREFIX) !== -1) {
+      var u = new URL(url, location.origin);
+      if (u.origin === location.origin && u.pathname.indexOf(PREFIX) === 0) {
         init = init || {};
         var headers = new Headers(init.headers || {});
         var token = window.__HERMES_SESSION_TOKEN__;

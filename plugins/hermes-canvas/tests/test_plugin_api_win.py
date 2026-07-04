@@ -50,3 +50,11 @@ def test_resolve_hermes_bin_uses_interpreter_adjacent(monkeypatch, tmp_path):
     (scripts / "hermes-real.exe").write_text("")
     monkeypatch.setattr(mod.sys, "executable", str(scripts / "python.exe"))
     assert mod._resolve_hermes_bin() == str(scripts / "hermes-real.exe")
+
+
+def test_projects_dir_matches_validate_root(monkeypatch, tmp_path):
+    mod = _load()
+    root = tmp_path / "cr"; monkeypatch.setenv("HERMES_CANVAS_PROJECTS_ROOT", str(root))
+    # default projects dir must live under the same root _validate_path enforces
+    pd = mod._projects_dir()
+    assert pd == root.resolve() or pd.is_relative_to(root.resolve())
