@@ -37,6 +37,24 @@ const CardHeader = (props: any) => React.createElement('div', { className: cn('p
 const CardTitle = (props: any) => React.createElement('h3', { className: cn('font-semibold leading-none', props.className), ...props })
 const CardContent = (props: any) => React.createElement('div', { className: cn('p-4 pt-2', props.className), ...props })
 const Separator = (props: any) => React.createElement('div', { className: cn('h-px w-full bg-border', props.className), ...props })
+// Also provided so the SHARED __HERMES_PLUGIN_SDK__ singleton is a superset that
+// still serves Kanban (which needs these) if Canvas installs the SDK first.
+const Input = (props: any) =>
+  React.createElement('input', { className: cn('flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm', props.className), ...props })
+const Label = (props: any) =>
+  React.createElement('label', { className: cn('text-sm font-medium', props.className), ...props })
+const Select = (props: any) =>
+  React.createElement('select', { className: cn('h-9 rounded-md border bg-transparent px-3 text-sm', props.className), ...props })
+const SelectOption = (props: any) => React.createElement('option', props)
+
+function timeAgo(ts: number): string {
+  if (!ts) return ''
+  const diff = Date.now() / 1000 - ts
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
 
 function canvasUrl(connection: any, path: string): string {
   return `${connection?.baseUrl || 'http://127.0.0.1:9120'}${path}`
@@ -75,34 +93,52 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
       }
     }
 
+    // The SDK is a SHARED first-wins global singleton across all dashboard plugins
+    // (Kanban guards the same global). So this MUST be a correct superset: the
+    // fetch helpers carry Bearer auth (Kanban's board-load 401'd when it inherited
+    // an auth-less Canvas SDK), the component/util set covers both plugins, and
+    // buildWsUrl mirrors Kanban's contract (Canvas itself uses raw fetch, not these).
     if (!win.__HERMES_PLUGIN_SDK__) {
+      const components = { Badge, Button, Card, CardHeader, CardTitle, CardContent, Separator, Input, Label, Select, SelectOption }
       win.__HERMES_PLUGIN_SDK__ = {
         React,
-        components: { Badge, Button, Card, CardHeader, CardTitle, CardContent, Separator },
-        ui: { Badge, Button, Card, CardHeader, CardTitle, CardContent, Separator },
+        components,
+        ui: components,
         hooks: { useState, useEffect, useCallback, useMemo, useRef },
-        utils: { cn },
+        utils: { cn, timeAgo },
         sdkVersion: '1.1.0',
         fetchJSON: async (url: string, opts?: any) => {
-          const base = $connection.get()?.baseUrl || apiBase
-          const resolved = url.startsWith('/') ? `${base}${url}` : url
-          const res = await fetch(resolved, opts)
+          const currentToken = $connection.get()?.token || ''
+          const currentBase = $connection.get()?.baseUrl || apiBase
+          const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
+          const headers: Record<string, string> = { Accept: 'application/json' }
+          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+          if (opts?.body && typeof opts.body !== 'string') { headers['Content-Type'] = 'application/json'; opts = { ...opts, body: JSON.stringify(opts.body) } }
+          const res = await fetch(resolvedUrl, { ...opts, headers: { ...headers, ...(opts?.headers || {}) } })
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
           return res.json()
         },
         authedFetch: async (url: string, opts?: any) => {
-          const base = $connection.get()?.baseUrl || apiBase
-          const resolved = url.startsWith('/') ? `${base}${url}` : url
-          return fetch(resolved, opts)
+          const currentToken = $connection.get()?.token || ''
+          const currentBase = $connection.get()?.baseUrl || apiBase
+          const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
+          const headers: Record<string, string> = {}
+          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+          if (opts?.body && !(opts.body instanceof FormData)) { headers['Content-Type'] = 'application/json'; opts = { ...opts, body: JSON.stringify(opts.body) } }
+          const res = await fetch(resolvedUrl, { ...opts, headers: { ...headers, ...(opts?.headers || {}) } })
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+          return res.json()
         },
         buildWsUrl: async (path: string, params?: Record<string, string>) => {
-          const base = $connection.get()?.baseUrl || apiBase
-          const tok = $connection.get()?.token || ''
-          const u = new URL(base)
+          const currentToken = $connection.get()?.token || ''
+          const currentBase = $connection.get()?.baseUrl || apiBase
+          const u = new URL(currentBase)
           const protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
           const sp = new URLSearchParams(params || {})
-          sp.set('token', tok)
-          return `${protocol}//${u.host}/api/plugins/hermes-canvas${path}?${sp}`
+          sp.set('token', currentToken)
+          // Kanban's WS contract (caller passes '/events' → /api/plugins/kanban/events).
+          // Canvas does not use WS; this exists so an inheriting Kanban keeps working.
+          return `${protocol}//${u.host}/api/plugins/kanban${path}?${sp}`
         }
       }
     }
