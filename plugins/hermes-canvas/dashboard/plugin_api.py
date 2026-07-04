@@ -244,6 +244,22 @@ def _which(cmd: str) -> str | None:
     return None
 
 
+def _resolve_hermes_bin() -> str | None:
+    """Resolve the hermes CLI, pinned to the interpreter's own venv so the
+    dashboard's agent-edit uses the SAME Hermes install that serves it
+    (not a different one on PATH). Order: explicit override, a launcher next
+    to sys.executable, then PATH."""
+    override = os.environ.get("HERMES_CANVAS_HERMES_BIN")
+    if override and Path(override).exists():
+        return override
+    scripts_dir = Path(sys.executable).parent
+    for name in ("hermes-real.exe", "hermes.exe", "hermes.cmd", "hermes"):
+        cand = scripts_dir / name
+        if cand.exists():
+            return str(cand)
+    return _which("hermes")
+
+
 def _has_npm() -> bool:
     return _which("npm") is not None
 
@@ -644,7 +660,7 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     if not (project_path / "package.json").exists() and not (project_path / "index.html").exists():
         raise HTTPException(status_code=400, detail="No package.json or index.html found")
 
-    hermes_bin = _which("hermes")
+    hermes_bin = _resolve_hermes_bin()
     if not hermes_bin:
         raise HTTPException(status_code=500, detail="hermes CLI not found in PATH")
 

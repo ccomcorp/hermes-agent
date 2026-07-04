@@ -35,3 +35,18 @@ def test_validate_path_scoped_to_projects_root(monkeypatch, tmp_path):
     assert mod._validate_path(str(inside)) == inside.resolve()
     with pytest.raises(Exception):
         mod._validate_path(str(tmp_path / "outside"))
+
+
+def test_resolve_hermes_bin_prefers_env_override(monkeypatch, tmp_path):
+    mod = _load()
+    fake = tmp_path / "hermes-real.exe"; fake.write_text("")
+    monkeypatch.setenv("HERMES_CANVAS_HERMES_BIN", str(fake))
+    assert mod._resolve_hermes_bin() == str(fake)
+
+def test_resolve_hermes_bin_uses_interpreter_adjacent(monkeypatch, tmp_path):
+    mod = _load()
+    monkeypatch.delenv("HERMES_CANVAS_HERMES_BIN", raising=False)
+    scripts = tmp_path / "Scripts"; scripts.mkdir()
+    (scripts / "hermes-real.exe").write_text("")
+    monkeypatch.setattr(mod.sys, "executable", str(scripts / "python.exe"))
+    assert mod._resolve_hermes_bin() == str(scripts / "hermes-real.exe")
