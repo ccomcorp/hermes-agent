@@ -1,3 +1,28 @@
+﻿/* AIOS auth shim (F1): canvas uses raw fetch and omits the session token the
+   fork gates /api/plugins/* on in loopback mode -> 401. Wrap window.fetch to
+   inject X-Hermes-Session-Token for canvas's own API base only. */
+(function () {
+  "use strict";
+  var HEADER = "X-Hermes-Session-Token";
+  var PREFIX = "/api/plugins/hermes-canvas";
+  if (window.__HERMES_CANVAS_FETCH_SHIMMED__) return;
+  window.__HERMES_CANVAS_FETCH_SHIMMED__ = true;
+  var origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      var url = typeof input === "string" ? input : (input && input.url) || "";
+      if (url.indexOf(PREFIX) !== -1) {
+        init = init || {};
+        var headers = new Headers(init.headers || {});
+        var token = window.__HERMES_SESSION_TOKEN__;
+        if (token && !headers.has(HEADER)) headers.set(HEADER, token);
+        init.headers = headers;
+        if (init.credentials == null) init.credentials = "include";
+      }
+    } catch (e) { /* fall through */ }
+    return origFetch(input, init);
+  };
+})();
 (function () {
   'use strict';
 
