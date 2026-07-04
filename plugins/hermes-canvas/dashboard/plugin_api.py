@@ -321,8 +321,22 @@ def _run_npm_install(project_path: Path) -> None:
 
 
 def _terminate_proc(proc: subprocess.Popen, timeout: int = 5) -> None:
-    """Terminate a subprocess and its child process group when possible."""
+    """Terminate a subprocess and its whole tree (Windows-safe)."""
     if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=timeout)
+        except Exception:
+            pass
         return
     try:
         os.killpg(proc.pid, 15)
