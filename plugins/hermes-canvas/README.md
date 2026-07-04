@@ -22,7 +22,7 @@ make it work on the AIOS Windows-first host in the default *loopback* dashboard 
 | **F6 path scope** | `21584241` | `_validate_path` admitted all of `Path.home()`; scoped to `HERMES_CANVAS_PROJECTS_ROOT` (or `<HERMES_HOME>/canvas-projects`) because `/agent/prompt` runs an autonomous agent on the path. |
 | **Agent-binary pin** | `3e8f24e5` | `/agent/prompt` resolved `hermes` via bare PATH (could hit a different install). `_resolve_hermes_bin()` prefers `HERMES_CANVAS_HERMES_BIN`, then a launcher next to `sys.executable` (the venv serving the dashboard), then PATH — pinning agent-edit to the I-drive Hermes. |
 
-Tests for the Python edits: `tests/test_plugin_api_win.py` (run with the chassis venv pytest — 4 tests).
+Tests for the Python edits: `tests/test_plugin_api_win.py` (run with the chassis venv pytest — 5 tests).
 
 ## Configuration (env)
 
@@ -34,7 +34,26 @@ Tests for the Python edits: `tests/test_plugin_api_win.py` (run with the chassis
 Bundled chassis plugins are discovered by directory layout. To surface the Canvas tab:
 1. Ensure `hermes-canvas` is enabled (add to `plugins.enabled` in `hermes-home/config.yaml` if bundled plugins are opt-in in this build).
 2. Launch/relaunch the dev dashboard via `AIOS\scripts\launch-dev-hermes.ps1` (pins `HERMES_HOME` to the I-drive home and activates the chassis venv).
-3. Verify: `GET /api/dashboard/plugins` lists `hermes-canvas` with `has_api: true`; the Canvas tab appears after Sessions in both web and desktop.
+3. Verify: `GET /api/dashboard/plugins` lists `hermes-canvas` with `has_api: true`.
+   - **Web dashboard:** the tab renders dynamically from the manifest (`tab.position: after:skills`). No extra wiring.
+   - **Desktop app:** the desktop sidebar is a STATIC list (`apps/desktop/src/app/chat/sidebar/index.tsx`) — it does NOT render plugin tabs dynamically. A native tab is required (see below).
+
+## Desktop surface (native tab)
+
+Because the desktop sidebar is hardcoded, the Canvas tab is wired natively (mirroring Kanban). This is the
+one part of this plugin that touches **upstream-shared desktop files** (fork delta / merge-conflict surface),
+marked with `// AIOS:` comments:
+- `apps/desktop/src/app/canvas/index.tsx` — NEW page; loads the plugin bundle via the SDK bridge.
+- `apps/desktop/src/app/routes.ts` — `CANVAS_ROUTE` + `AppView`/`AppRouteId`/`APP_ROUTES` entries.
+- `apps/desktop/src/app/chat/sidebar/index.tsx` — the `canvas` nav item.
+- `apps/desktop/src/app/desktop-controller.tsx` — lazy `CanvasView` + route.
+- `apps/desktop/src/app/types.ts` — `'canvas'` added to `SidebarNavId`.
+
+**Cross-origin note:** canvas's bundle uses raw relative `fetch('/api/plugins/hermes-canvas/...')`, which is
+same-origin in the web dashboard but NOT in Electron (renderer origin != gateway). The desktop page installs a
+`window.fetch` rewrite that prefixes the gateway base for canvas's relative API + asset URLs before loading the
+bundle; the bundle's F1 auth shim then delegates to it. Desktop source changes require a rebuild+relaunch via
+`AIOS\scripts\launch-dev-hermes.ps1` — a renderer reload does not pick them up.
 
 ## Durability across updates
 
