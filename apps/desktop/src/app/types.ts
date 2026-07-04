@@ -124,6 +124,7 @@ export type CommandDispatchResponse =
 
 export type SidebarNavId =
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'command-center'
   | 'config'

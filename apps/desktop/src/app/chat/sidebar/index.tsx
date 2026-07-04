@@ -102,6 +102,7 @@ import {
   CONFIG_ROUTE,
   FILES_ROUTE,
   KANBAN_ROUTE,
+  CANVAS_ROUTE,
   LOGS_ROUTE,
   MESSAGING_ROUTE,
   MODELS_ROUTE,
@@ -163,6 +164,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   { id: 'messaging', label: '', icon: props => <Codicon name="comment" {...props} />, route: MESSAGING_ROUTE },
   { id: 'artifacts', label: '', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE },
   { id: 'kanban', label: 'Kanban', icon: props => <Codicon name="project" {...props} />, route: KANBAN_ROUTE },
+  { id: 'canvas', label: 'Canvas', icon: props => <Codicon name="sparkle" {...props} />, route: CANVAS_ROUTE }, // AIOS: hermes-canvas
   { id: 'channels', label: 'Channels', icon: props => <Codicon name="broadcast" {...props} />, route: CHANNELS_ROUTE },
   { id: 'pairing', label: 'Pairing', icon: props => <Codicon name="shield" {...props} />, route: PAIRING_ROUTE },
   { id: 'webhooks', label: 'Webhooks', icon: props => <Codicon name="radio-tower" {...props} />, route: WEBHOOKS_ROUTE },

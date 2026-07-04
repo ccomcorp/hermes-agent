@@ -9,6 +9,7 @@ export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
 export const KANBAN_ROUTE = '/kanban'
+export const CANVAS_ROUTE = '/canvas' // AIOS: hermes-canvas plugin tab
 export const PAIRING_ROUTE = '/pairing'
 export const WEBHOOKS_ROUTE = '/webhooks'
 export const PLUGINS_ROUTE = '/plugins'
@@ -24,6 +25,7 @@ export const STARMAP_ROUTE = '/starmap'
 export type AppView =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'chat'
   | 'command-center'
@@ -46,6 +48,7 @@ export type AppView =
 export type AppRouteId =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'command-center'
   | 'config'
@@ -80,6 +83,7 @@ export const APP_ROUTES = [
   { id: 'artifacts', path: ARTIFACTS_ROUTE, view: 'artifacts' },
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
   { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
+  { id: 'canvas', path: CANVAS_ROUTE, view: 'canvas' }, // AIOS: hermes-canvas
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },
   { id: 'pairing', path: PAIRING_ROUTE, view: 'pairing' },

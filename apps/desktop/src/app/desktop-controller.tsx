@@ -135,6 +135,7 @@ const ArtifactsView = lazy(async () => ({ default: (await import('./artifacts'))
 const CommandCenterView = lazy(async () => ({ default: (await import('./command-center')).CommandCenterView }))
 const CronView = lazy(async () => ({ default: (await import('./cron')).CronView }))
 const KanbanView = lazy(async () => ({ default: (await import('./kanban')).KanbanView }))
+const CanvasView = lazy(async () => ({ default: (await import('./canvas')).CanvasView })) // AIOS: hermes-canvas
 const PairingView = lazy(async () => ({ default: (await import('./pairing')).PairingView }))
 const WebhooksView = lazy(async () => ({ default: (await import('./webhooks')).WebhooksView }))
 const PluginsView = lazy(async () => ({ default: (await import('./plugins')).PluginsView }))
@@ -1227,6 +1228,15 @@ export function DesktopController() {
               </Suspense>
             }
             path="kanban"
+          />
+          {/* AIOS: hermes-canvas plugin tab */}
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <CanvasView setStatusbarItemGroup={setStatusbarItemGroup} />
+              </Suspense>
+            }
+            path="canvas"
           />
           <Route
             element={
