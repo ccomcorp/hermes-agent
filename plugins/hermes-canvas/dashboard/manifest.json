@@ -6,7 +6,7 @@
   "version": "0.1.8",
   "tab": {
     "path": "/canvas",
-    "position": "after:sessions"
+    "position": "after:skills"
   },
   "entry": "dist/index.js?v=10",
   "css": "dist/style.css?v=8",
