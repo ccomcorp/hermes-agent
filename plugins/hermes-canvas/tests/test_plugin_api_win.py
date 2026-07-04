@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 PLUGIN = Path(__file__).parents[1] / "dashboard" / "plugin_api.py"
 
 def _load():
@@ -23,3 +25,13 @@ def test_terminate_uses_taskkill_on_windows(monkeypatch):
     mod._terminate_proc(FakeProc())
     assert calls["args"][0] == "taskkill" and "/T" in calls["args"] and "/F" in calls["args"]
     assert "4321" in calls["args"]
+
+
+def test_validate_path_scoped_to_projects_root(monkeypatch, tmp_path):
+    mod = _load()
+    root = tmp_path / "canvas-projects"; root.mkdir()
+    monkeypatch.setenv("HERMES_CANVAS_PROJECTS_ROOT", str(root))
+    inside = root / "p1"; inside.mkdir()
+    assert mod._validate_path(str(inside)) == inside.resolve()
+    with pytest.raises(Exception):
+        mod._validate_path(str(tmp_path / "outside"))

@@ -225,10 +225,12 @@ def _now_iso() -> str:
 
 
 def _validate_path(path: str) -> Path:
-    """Ensure path is within allowed roots."""
+    """Admit only paths under the AIOS canvas projects root."""
+    root_env = os.environ.get("HERMES_CANVAS_PROJECTS_ROOT")
+    root = Path(root_env).expanduser().resolve() if root_env else (_home().resolve() / "canvas-projects")
+    root.mkdir(parents=True, exist_ok=True)
     p = Path(path).expanduser().resolve()
-    allowed_roots = [Path.home().resolve(), Path("/tmp").resolve(), _home().resolve()]
-    if not any(p == root or p.is_relative_to(root) for root in allowed_roots):
+    if not (p == root or p.is_relative_to(root)):
         raise HTTPException(status_code=400, detail="Path not allowed")
     return p
 
