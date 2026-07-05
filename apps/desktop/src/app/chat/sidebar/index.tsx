@@ -174,6 +174,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   { id: 'config', label: 'Config', icon: props => <Codicon name="settings-gear" {...props} />, route: CONFIG_ROUTE },
   { id: 'logs', label: 'Logs', icon: props => <Codicon name="output" {...props} />, route: LOGS_ROUTE },
   { id: 'models', label: 'Models', icon: props => <Codicon name="server-process" {...props} />, route: MODELS_ROUTE },
+  { id: 'analytics', label: 'Analytics', icon: props => <Codicon name="graph" {...props} />, route: '/command-center?section=usage' }, // AIOS: usage/token analytics
   { id: 'profiles', label: 'Profiles', icon: props => <Codicon name="organization" {...props} />, route: PROFILES_ROUTE }
 ]
 

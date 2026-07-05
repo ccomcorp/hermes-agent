@@ -123,6 +123,7 @@ export type CommandDispatchResponse =
   | PrefillCommandDispatchResponse
 
 export type SidebarNavId =
+  | 'analytics'
   | 'artifacts'
   | 'canvas'
   | 'channels'
