@@ -128,8 +128,8 @@
       body:has(.hc-root) #root,
       body:has(.hc-root) main,
       body:has(.hc-root) [role="main"] {
-        background: #0d0d0f !important;
-        background-color: #0d0d0f !important;
+        background: var(--ui-chat-surface-background) !important;
+        background-color: var(--ui-chat-surface-background) !important;
         background-image: none !important;
         background-blend-mode: normal !important;
       }
@@ -606,9 +606,9 @@
       console.warn('Hermes Canvas: Node.js/npm not available; project creation and Vite projects may fail, but static HTML projects can still be opened.');
     }
 
-    return h('div', { className: 'hc-root', style: { background: '#0d0d0f' } },
+    return h('div', { className: 'hc-root', style: { background: 'var(--ui-chat-surface-background)' } },
       // Left Sidebar
-      h('div', { className: 'hc-sidebar', style: { background: '#0d0d0f', borderRight: '1px solid #1e1e22' } },
+      h('div', { className: 'hc-sidebar', style: { background: 'var(--ui-chat-surface-background)', borderRight: '1px solid var(--dt-border)' } },
         h(ProjectPanel, {
           projectPath: projectPath,
           defaultProjectParent: defaultProjectParent,
@@ -638,8 +638,8 @@
         h(LogsPanel, { logs: logs })
       ),
       // Right Preview
-      h('div', { className: 'hc-preview', style: { background: '#0d0d0f' } },
-        h('div', { className: 'hc-preview-toolbar', style: { background: '#131316', borderBottom: '1px solid #1e1e22' } },
+      h('div', { className: 'hc-preview', style: { background: 'var(--ui-chat-surface-background)' } },
+        h('div', { className: 'hc-preview-toolbar', style: { background: 'var(--ui-chat-surface-background)', borderBottom: '1px solid var(--dt-border)' } },
           h('span', { className: 'hc-panel-title' }, 'Preview'),
           h('div', { style: { flex: 1 } }),
           h(Button, {
