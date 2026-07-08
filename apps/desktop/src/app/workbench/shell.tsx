@@ -1,0 +1,132 @@
+/**
+ * Workbench shell — three regions (left: requirement list, center: editor,
+ * right: trace/linked-artifacts stub) plus a status bar showing workspace
+ * root, terminal cwd, profile, and backend mode as separate, distinctly
+ * labeled items (03-security-and-constraints.md §4 — profiles are not a
+ * filesystem sandbox, so this view never conflates profile with workspace
+ * root). Fails closed: with no workspace root selected, nothing under
+ * `.hermes/workbench` is read or written — this shows a "select a workspace"
+ * empty state instead.
+ */
+import { useStore } from '@nanostores/react'
+import type * as React from 'react'
+import { useCallback, useEffect } from 'react'
+
+import { Button } from '@/components/ui/button'
+import { Codicon } from '@/components/ui/codicon'
+import { cn } from '@/lib/utils'
+import { notifyError } from '@/store/notifications'
+import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
+import { $currentCwd } from '@/store/session'
+
+import { PAGE_INSET_X } from '../layout-constants'
+import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
+
+import { RequirementPanel } from './requirement-panel'
+import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
+import { workbenchStrings as s } from './strings'
+
+interface WorkbenchShellProps extends React.ComponentProps<'section'> {
+  setStatusbarItemGroup?: SetStatusbarItemGroup
+}
+
+export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShellProps) {
+  const workspaceRoot = useStore($workbenchWorkspaceRoot)
+  const terminalCwd = useStore($currentCwd)
+  const activeProfile = useStore($activeGatewayProfile)
+  const backendMode = useStore($workbenchBackendMode)
+
+  // Four distinctly-labeled status items, mirroring how Files pushes a single
+  // 'files-path' group (files/index.tsx) — never merged into one string, so
+  // "workspace root" and "profile" can never be read as the same thing.
+  useEffect(() => {
+    setStatusbarItemGroup?.('workbench', [
+      {
+        id: 'workbench-workspace-root',
+        label: s.statusBar.workspaceRoot,
+        detail: workspaceRoot || '—',
+        title: workspaceRoot || s.selectWorkspaceTitle,
+        variant: 'text'
+      },
+      {
+        id: 'workbench-terminal-cwd',
+        label: s.statusBar.terminalCwd,
+        detail: terminalCwd || '—',
+        title: terminalCwd || undefined,
+        variant: 'text'
+      },
+      {
+        id: 'workbench-profile',
+        label: s.statusBar.profile,
+        detail: normalizeProfileKey(activeProfile),
+        variant: 'text'
+      },
+      {
+        id: 'workbench-backend-mode',
+        label: backendMode === 'local' ? s.statusBar.backendLocal : s.statusBar.backendRemoteUnsupported,
+        variant: 'text'
+      }
+    ])
+
+    return () => setStatusbarItemGroup?.('workbench', [])
+  }, [activeProfile, backendMode, setStatusbarItemGroup, terminalCwd, workspaceRoot])
+
+  const pickWorkspace = useCallback(async () => {
+    try {
+      const picked = await window.hermesDesktop.selectPaths({
+        directories: true,
+        multiple: false,
+        title: s.selectWorkspace
+      })
+
+      const next = picked?.[0]
+
+      if (next) {
+        setWorkbenchWorkspaceRoot(next)
+      }
+    } catch (err) {
+      notifyError(err, s.selectWorkspace)
+    }
+  }, [])
+
+  return (
+    <section
+      {...props}
+      className="flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)"
+    >
+      <header
+        className={cn(
+          'flex shrink-0 items-center justify-between gap-3 pb-2 pt-[calc(var(--titlebar-height)+0.5rem)]',
+          PAGE_INSET_X
+        )}
+      >
+        <h1 className="text-sm font-semibold text-foreground">{s.title}</h1>
+        <Button onClick={() => void pickWorkspace()} size="sm" variant="outline">
+          <Codicon name="folder-opened" size="0.875rem" />
+          {workspaceRoot ? s.changeWorkspace : s.selectWorkspace}
+        </Button>
+      </header>
+
+      {!workspaceRoot ? (
+        <div className="grid flex-1 place-items-center px-6 text-center">
+          <div className="flex max-w-sm flex-col items-center gap-3">
+            <Codicon className="text-muted-foreground/50" name="folder" size="1.5rem" />
+            <p className="text-sm font-medium text-foreground/90">{s.selectWorkspaceTitle}</p>
+            <p className="text-xs leading-relaxed text-muted-foreground/70">{s.selectWorkspaceDesc}</p>
+            <Button onClick={() => void pickWorkspace()} size="sm" variant="default">
+              {s.selectWorkspace}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_16rem]">
+          <RequirementPanel workspaceRoot={workspaceRoot} />
+          <aside className="hidden min-h-0 flex-col overflow-y-auto border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
+            <h2 className="text-xs font-semibold text-foreground">{s.traceHeading}</h2>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground/70">{s.traceStub}</p>
+          </aside>
+        </div>
+      )}
+    </section>
+  )
+}

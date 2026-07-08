@@ -138,6 +138,7 @@ const WebhooksView = lazy(async () => ({ default: (await import('./webhooks')).W
 const PluginsView = lazy(async () => ({ default: (await import('./plugins')).PluginsView }))
 const FilesView = lazy(async () => ({ default: (await import('./files')).FilesView }))
 const ChannelsView = lazy(async () => ({ default: (await import('./channels')).ChannelsView }))
+const WorkbenchView = lazy(async () => ({ default: (await import('./workbench')).WorkbenchView })) // AIOS: hermes-workbench
 const SystemView = lazy(async () => ({ default: (await import('./system')).SystemView }))
 const ConfigView = lazy(async () => ({ default: (await import('./config')).ConfigView }))
 const LogsView = lazy(async () => ({ default: (await import('./logs')).LogsView }))
@@ -1404,6 +1405,15 @@ export function DesktopController() {
               </Suspense>
             }
             path="channels"
+          />
+          {/* AIOS: hermes-workbench Requirements panel (Slice B) */}
+          <Route
+            element={
+              <Suspense fallback={null}>
+                <WorkbenchView setStatusbarItemGroup={setStatusbarItemGroup} />
+              </Suspense>
+            }
+            path="workbench"
           />
           <Route
             element={
