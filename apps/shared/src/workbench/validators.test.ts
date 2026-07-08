@@ -52,6 +52,18 @@ describe('validateCreateRequirementRequest', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('INVALID_SOURCE')
   })
+
+  it('rejects an oversized title', () => {
+    const result = validateCreateRequirementRequest({ ...valid, title: 'a'.repeat(501) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
+  })
+
+  it('rejects oversized markdown', () => {
+    const result = validateCreateRequirementRequest({ ...valid, markdown: 'a'.repeat(1_000_001) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MARKDOWN_TOO_LARGE')
+  })
 })
 
 describe('validateUpdateRequirementRequest', () => {

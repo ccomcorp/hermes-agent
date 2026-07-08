@@ -19,7 +19,8 @@ describe('normalizeWorkbenchRelativePath', () => {
   it('strips leading ./ and /', () => {
     expect(normalizeWorkbenchRelativePath('./a/b')).toBe('a/b')
     expect(normalizeWorkbenchRelativePath('/a/b')).toBe('a/b')
-    expect(normalizeWorkbenchRelativePath('././a')).toBe('a')
+    // Only a single leading `./` prefix is stripped (not recursively).
+    expect(normalizeWorkbenchRelativePath('././a')).toBe('./a')
   })
 
   it('collapses duplicate slashes', () => {
@@ -28,6 +29,21 @@ describe('normalizeWorkbenchRelativePath', () => {
 
   it('strips trailing slash', () => {
     expect(normalizeWorkbenchRelativePath('a/b/')).toBe('a/b')
+  })
+
+  it('normalizes plan-doc example fragments', () => {
+    // ./.hermes/workbench/plans/x.md -> normalized
+    expect(normalizeWorkbenchRelativePath('./.hermes/workbench/plans/x.md')).toBe(
+      '.hermes/workbench/plans/x.md'
+    )
+    // .hermes\workbench\plans\x.md -> normalized (Windows separators)
+    expect(normalizeWorkbenchRelativePath('.hermes\\workbench\\plans\\x.md')).toBe(
+      '.hermes/workbench/plans/x.md'
+    )
+    // .hermes/workbench/requirements//x -> normalized (duplicate slash collapsed)
+    expect(normalizeWorkbenchRelativePath('.hermes/workbench/requirements//x')).toBe(
+      '.hermes/workbench/requirements/x'
+    )
   })
 
   it('returns empty string for empty/whitespace input', () => {
@@ -50,7 +66,9 @@ describe('isSafeWorkbenchRelativePath', () => {
   it('rejects path traversal with ..', () => {
     expect(isSafeWorkbenchRelativePath('../etc/passwd')).toBe(false)
     expect(isSafeWorkbenchRelativePath('a/../../b')).toBe(false)
-    expect(isSafeWorkbenchRelativePath('a/../b')).toBe(true) // stays within root
+    // Any `..` segment is rejected outright (security doc: "Reject `..`
+    // segments after normalization"), even when it would resolve within root.
+    expect(isSafeWorkbenchRelativePath('a/../b')).toBe(false)
   })
 
   it('rejects absolute paths', () => {
@@ -61,6 +79,31 @@ describe('isSafeWorkbenchRelativePath', () => {
   it('rejects empty strings', () => {
     expect(isSafeWorkbenchRelativePath('')).toBe(false)
     expect(isSafeWorkbenchRelativePath('   ')).toBe(false)
+  })
+
+  it('accepts workbench-relative artifact paths', () => {
+    expect(
+      isSafeWorkbenchRelativePath('.hermes/workbench/requirements/abc/requirement.md')
+    ).toBe(true)
+    expect(isSafeWorkbenchRelativePath('./.hermes/workbench/plans/x.md')).toBe(true)
+    expect(isSafeWorkbenchRelativePath('.hermes\\workbench\\plans\\x.md')).toBe(true)
+  })
+
+  it('rejects traversal that escapes the workbench root', () => {
+    expect(isSafeWorkbenchRelativePath('../secret')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('.hermes/workbench/../../.env')).toBe(false)
+  })
+
+  it('rejects Windows absolute paths written with backslashes', () => {
+    expect(isSafeWorkbenchRelativePath('C:\\Users\\x\\.env')).toBe(false)
+  })
+
+  it('rejects POSIX-absolute input outright instead of silently containing it', () => {
+    // normalizeWorkbenchRelativePath('/etc/passwd') strips the leading `/`
+    // and would otherwise yield the "contained" relative path 'etc/passwd'.
+    // Fail-closed: absolute input must be rejected, not rewritten.
+    expect(isSafeWorkbenchRelativePath('/etc/passwd')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('/absolute/but/nested')).toBe(false)
   })
 })
 

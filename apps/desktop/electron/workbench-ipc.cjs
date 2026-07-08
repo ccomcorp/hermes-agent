@@ -57,6 +57,25 @@ function fail(result) {
 }
 
 // ---------------------------------------------------------------------------
+// Response normalization (locked decision §3.5)
+//
+// Every workbench handler must return exactly ONE envelope shape to the
+// renderer: WorkbenchResult<T> = { ok, value?, message?, code? }. The store is
+// mixed — some methods return a bare payload (createRequirement -> { requirement,
+// trace }), others already return a WorkbenchResult (readPlan -> { ok, value }).
+// `normalize` collapses both into the single shape so no renderer component has
+// to special-case where the envelope came from. It only touches the envelope;
+// the returned data is unchanged.
+// ---------------------------------------------------------------------------
+
+function normalize(result) {
+  if (result && typeof result === 'object' && typeof result.ok === 'boolean') {
+    return result
+  }
+  return { ok: true, value: result }
+}
+
+// ---------------------------------------------------------------------------
 // Register all workbench IPC handlers
 // ---------------------------------------------------------------------------
 
@@ -68,7 +87,7 @@ function registerWorkbenchIpc() {
     if (!isOk(rootCheck)) return fail(rootCheck)
 
     try {
-      return store.listRequirements(payload.workspaceRoot)
+      return normalize(store.listRequirements(payload.workspaceRoot))
     } catch (err) {
       return { ok: false, message: 'Failed to list requirements: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -93,8 +112,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      const result = store.createRequirement(payload.workspaceRoot, payload)
-      return { ok: true, value: result }
+      return normalize(store.createRequirement(payload.workspaceRoot, payload))
     } catch (err) {
       return { ok: false, message: 'Failed to create requirement: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -113,7 +131,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.readRequirement(payload.workspaceRoot, payload.requirementId)
+      return normalize(store.readRequirement(payload.workspaceRoot, payload.requirementId))
     } catch (err) {
       return { ok: false, message: 'Failed to read requirement: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -142,7 +160,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.updateRequirement(payload.workspaceRoot, payload.requirementId, payload)
+      return normalize(store.updateRequirement(payload.workspaceRoot, payload.requirementId, payload))
     } catch (err) {
       return { ok: false, message: 'Failed to update requirement: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -155,7 +173,7 @@ function registerWorkbenchIpc() {
     if (!isOk(rootCheck)) return fail(rootCheck)
 
     try {
-      return store.listPlans(payload.workspaceRoot, payload.requirementId)
+      return normalize(store.listPlans(payload.workspaceRoot, payload.requirementId))
     } catch (err) {
       return { ok: false, message: 'Failed to list plans: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -182,10 +200,47 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      const result = store.createPlan(payload.workspaceRoot, payload)
-      return { ok: true, value: result }
+      return normalize(store.createPlan(payload.workspaceRoot, payload))
     } catch (err) {
       return { ok: false, message: 'Failed to create plan: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // Versioned refine (locked decision §3.2). `plans:update` writes a NEW plan
+  // version linked to the prior one; it never overwrites the prior file.
+  ipcMain.handle('hermes:workbench:plans:update', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.planId || typeof payload.planId !== 'string' || !payload.planId.trim()) {
+      return { ok: false, message: 'planId is required', code: 'MISSING_PLAN_ID' }
+    }
+
+    // A caller-supplied relative path is a path-traversal vector — fail closed.
+    if (payload.planRelativePath && !store._internal.isSafeRelativePath(payload.planRelativePath)) {
+      return { ok: false, message: 'planRelativePath escapes the workspace', code: 'UNSAFE_PATH' }
+    }
+
+    const mdCheck = validateMarkdown(payload.markdown, true)
+    if (!isOk(mdCheck)) return fail(mdCheck)
+
+    if (payload.title) {
+      const titleCheck = validateTitle(payload.title)
+      if (!isOk(titleCheck)) return fail(titleCheck)
+    }
+
+    if (payload.operation && payload.operation !== 'refine') {
+      return { ok: false, message: 'plans:update only supports the refine operation', code: 'INVALID_OPERATION' }
+    }
+
+    try {
+      return normalize(store.refinePlan(payload.workspaceRoot, { ...payload, operation: 'refine' }))
+    } catch (err) {
+      return { ok: false, message: 'Failed to refine plan: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
 
@@ -202,7 +257,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.readPlan(payload.workspaceRoot, payload.planId)
+      return normalize(store.readPlan(payload.workspaceRoot, payload.planId))
     } catch (err) {
       return { ok: false, message: 'Failed to read plan: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -215,7 +270,7 @@ function registerWorkbenchIpc() {
     if (!isOk(rootCheck)) return fail(rootCheck)
 
     try {
-      return store.listChangeSets(payload.workspaceRoot)
+      return normalize(store.listChangeSets(payload.workspaceRoot))
     } catch (err) {
       return { ok: false, message: 'Failed to list changesets: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -242,7 +297,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.createChangeSet(payload.workspaceRoot, payload)
+      return normalize(store.createChangeSet(payload.workspaceRoot, payload))
     } catch (err) {
       return { ok: false, message: 'Failed to create changeset: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -261,7 +316,7 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.readChangeSet(payload.workspaceRoot, payload.changesetId)
+      return normalize(store.readChangeSet(payload.workspaceRoot, payload.changesetId))
     } catch (err) {
       return { ok: false, message: 'Failed to read changeset: ' + err.message, code: 'INTERNAL_ERROR' }
     }
@@ -287,11 +342,11 @@ function registerWorkbenchIpc() {
     }
 
     try {
-      return store.updateChangeSetStatus(
+      return normalize(store.updateChangeSetStatus(
         payload.workspaceRoot,
         payload.changesetId,
         payload.statusPatch || {}
-      )
+      ))
     } catch (err) {
       return { ok: false, message: 'Failed to update changeset: ' + err.message, code: 'INTERNAL_ERROR' }
     }

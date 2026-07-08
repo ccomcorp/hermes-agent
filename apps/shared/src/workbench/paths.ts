@@ -64,6 +64,15 @@ export function isSafeWorkbenchRelativePath(value: string): boolean {
   if (/^[a-zA-Z]:/.test(value)) return false
   if (value.startsWith('\\\\')) return false
 
+  // Reject POSIX-absolute paths (leading `/`) on the ORIGINAL input.
+  // normalizeWorkbenchRelativePath() strips a leading `/` to make the
+  // result relative (needed for legitimate relative-path normalization,
+  // e.g. `./x` or duplicate slashes), but that means absolute input like
+  // `/etc/passwd` would otherwise be silently rewritten into a "safe"
+  // relative path instead of being rejected. Fail closed: absolute input
+  // is invalid input, not something to coerce into relative.
+  if (/^\/+/.test(value.trim())) return false
+
   // Reject path traversal — check both the original and normalized
   const segments = normalized.split('/')
   if (segments.includes('..')) return false

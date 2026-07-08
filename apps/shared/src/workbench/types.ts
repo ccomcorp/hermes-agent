@@ -126,6 +126,9 @@ export interface WorkbenchPlan {
   contentHash: string
   byteSize: number
   version: number
+  // Set on refined plans: the id of the prior version this plan supersedes.
+  // Absent on the first ("draft") version. Refine never overwrites history.
+  supersedesPlanId?: string
 }
 
 export interface CreateWorkbenchPlanRequest {

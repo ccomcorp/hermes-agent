@@ -107,6 +107,15 @@ function isSafeRelativePath(value) {
   if (/^[a-zA-Z]:/.test(value)) return false
   if (value.startsWith('\\\\')) return false
 
+  // Reject POSIX-absolute paths (leading `/`) on the ORIGINAL input.
+  // normalizeRelativePath() strips a leading `/` to make the result
+  // relative (needed for legitimate relative-path normalization, e.g.
+  // `./x` or duplicate slashes), but that means absolute input like
+  // `/etc/passwd` would otherwise be silently rewritten into a "safe"
+  // relative path instead of being rejected. Fail closed: absolute input
+  // is invalid input, not something to coerce into relative.
+  if (/^\/+/.test(value.trim())) return false
+
   // Reject path traversal
   const segments = normalized.split('/')
   if (segments.includes('..')) return false
@@ -375,6 +384,7 @@ function createPlan(workspaceRoot, input) {
   const uniqueId = ensureUniqueId(workspaceRoot, id, PLANS_DIR)
 
   const relativePath = `${PLANS_DIR}/${uniqueId}.md`
+  const metaRelativePath = `${PLANS_DIR}/${uniqueId}.meta.json`
   const hash = contentHash(input.markdown)
   const byteSize = Buffer.byteLength(input.markdown, 'utf8')
 
@@ -385,18 +395,31 @@ function createPlan(workspaceRoot, input) {
     relativePath,
     requirementId: input.requirementId || undefined,
     sourceRequest: input.sourceRequest,
-    operation: input.operation,
+    operation: input.operation || 'draft',
     createdAt: now,
     updatedAt: now,
     savedAt: now,
     contentHash: hash,
     byteSize,
-    version: 1
+    version: 1,
+    supersedesPlanId: undefined
   }
 
   // Write plan file
   const fullPath = resolveWorkspacePath(workspaceRoot, relativePath)
   atomicWriteFile(fullPath, input.markdown)
+
+  // Write a metadata sidecar next to the plan so a later refine can walk the
+  // version chain from disk (version + supersedes link) without the manifest.
+  atomicWriteJSON(resolveWorkspacePath(workspaceRoot, metaRelativePath), {
+    version: 1,
+    baseId: uniqueId,
+    supersedesPlanId: null,
+    requirementId: input.requirementId || null,
+    title: plan.title,
+    operation: plan.operation,
+    createdAt: now
+  })
 
   // Update manifest
   updateManifest(workspaceRoot, (m) => {
@@ -404,7 +427,10 @@ function createPlan(workspaceRoot, input) {
       id: uniqueId,
       title: plan.title,
       relativePath,
-      updatedAt: now
+      updatedAt: now,
+      version: 1,
+      supersedesPlanId: null,
+      requirementId: input.requirementId || undefined
     })
     return m
   })
@@ -415,6 +441,118 @@ function createPlan(workspaceRoot, input) {
   }
 
   return { plan, summary: `Plan "${plan.title}" created` }
+}
+
+// ---------------------------------------------------------------------------
+// Versioned plan refine (locked decision: refine keeps history)
+//
+// A refine never overwrites or deletes the prior plan. It writes a NEW plan
+// version file (`<base>-v<n>.md`) plus a `.meta.json` sidecar that carries the
+// supersedes-link back to the prior version, and records the new plan + link in
+// the source requirement's trace.json (`linkedPlanIds` + a `plan_linked` entry).
+// ---------------------------------------------------------------------------
+
+function readPlanMeta(workspaceRoot, planId) {
+  const safeId = sanitizeId(planId)
+  if (!safeId) return null
+  const metaRelativePath = `${PLANS_DIR}/${safeId}.meta.json`
+  const fullPath = resolveWorkspacePath(workspaceRoot, metaRelativePath)
+  if (!fs.existsSync(fullPath)) return null
+  try {
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function refinePlan(workspaceRoot, input) {
+  const now = new Date().toISOString()
+
+  const priorId = sanitizeId(input.planId)
+  if (!priorId) {
+    return { ok: false, message: 'planId is required to refine a plan', code: 'MISSING_PLAN_ID' }
+  }
+
+  // Defense in depth: a caller-supplied relative path is a traversal vector.
+  // Fail closed if it would escape the workspace.
+  if (input.planRelativePath && !isSafeRelativePath(input.planRelativePath)) {
+    return { ok: false, message: 'planRelativePath escapes the workspace', code: 'UNSAFE_PATH' }
+  }
+
+  // Locate the prior version. Never mutate it.
+  const priorRelativePath = `${PLANS_DIR}/${priorId}.md`
+  const priorFullPath = resolveWorkspacePath(workspaceRoot, priorRelativePath)
+  if (!fs.existsSync(priorFullPath)) {
+    return { ok: false, message: 'Prior plan not found', code: 'NOT_FOUND' }
+  }
+
+  const priorMeta = readPlanMeta(workspaceRoot, priorId)
+  const priorVersion = priorMeta && Number.isFinite(priorMeta.version) ? priorMeta.version : 1
+  const baseId = (priorMeta && priorMeta.baseId) || priorId.replace(/-v\d+$/, '')
+  const newVersion = priorVersion + 1
+
+  const newId = ensureUniqueId(workspaceRoot, `${baseId}-v${newVersion}`, PLANS_DIR)
+  const relativePath = `${PLANS_DIR}/${newId}.md`
+  const metaRelativePath = `${PLANS_DIR}/${newId}.meta.json`
+
+  const hash = contentHash(input.markdown)
+  const byteSize = Buffer.byteLength(input.markdown, 'utf8')
+  const requirementId = input.requirementId || (priorMeta && priorMeta.requirementId) || undefined
+  const title = input.title || (priorMeta && priorMeta.title) || newId
+
+  const plan = {
+    id: newId,
+    title,
+    workspaceRoot,
+    relativePath,
+    requirementId: requirementId || undefined,
+    sourceRequest: input.sourceRequest,
+    operation: 'refine',
+    createdAt: now,
+    updatedAt: now,
+    savedAt: now,
+    contentHash: hash,
+    byteSize,
+    version: newVersion,
+    supersedesPlanId: priorId
+  }
+
+  // Write the NEW version and its supersedes-carrying sidecar. The prior
+  // version file and sidecar are never touched — refine keeps full history.
+  atomicWriteFile(resolveWorkspacePath(workspaceRoot, relativePath), input.markdown)
+  atomicWriteJSON(resolveWorkspacePath(workspaceRoot, metaRelativePath), {
+    version: newVersion,
+    baseId,
+    supersedesPlanId: priorId,
+    requirementId: requirementId || null,
+    title,
+    operation: 'refine',
+    createdAt: now
+  })
+
+  // Manifest: append the new version, leave the prior entry intact.
+  updateManifest(workspaceRoot, (m) => {
+    m.plans.push({
+      id: newId,
+      title,
+      relativePath,
+      updatedAt: now,
+      version: newVersion,
+      supersedesPlanId: priorId,
+      requirementId: requirementId || undefined
+    })
+    return m
+  })
+
+  // Record the new version + supersedes link in the requirement trace.
+  if (requirementId) {
+    linkPlanToRequirement(workspaceRoot, requirementId, newId, {
+      supersedesPlanId: priorId,
+      version: newVersion
+    })
+  }
+
+  return { plan, summary: `Plan refined to v${newVersion} (supersedes ${priorId})` }
 }
 
 function readPlan(workspaceRoot, planId) {
@@ -429,6 +567,7 @@ function readPlan(workspaceRoot, planId) {
   const markdown = fs.readFileSync(fullPath, 'utf8')
   const hash = contentHash(markdown)
   const stat = fs.statSync(fullPath)
+  const meta = readPlanMeta(workspaceRoot, safeId)
 
   return {
     ok: true,
@@ -438,7 +577,9 @@ function readPlan(workspaceRoot, planId) {
       relativePath,
       contentHash: hash,
       byteSize: stat.size,
-      savedAt: stat.mtime.toISOString()
+      savedAt: stat.mtime.toISOString(),
+      version: meta && Number.isFinite(meta.version) ? meta.version : 1,
+      supersedesPlanId: meta && meta.supersedesPlanId ? meta.supersedesPlanId : undefined
     }
   }
 }
@@ -585,7 +726,7 @@ function ensureUniqueId(workspaceRoot, baseId, dir) {
   }
 }
 
-function linkPlanToRequirement(workspaceRoot, requirementId, planId) {
+function linkPlanToRequirement(workspaceRoot, requirementId, planId, metadata) {
   const tracePath = `${REQUIREMENTS_DIR}/${sanitizeId(requirementId)}/trace.json`
   const fullPath = resolveWorkspacePath(workspaceRoot, tracePath)
 
@@ -600,12 +741,16 @@ function linkPlanToRequirement(workspaceRoot, requirementId, planId) {
       trace.linkedPlanIds.push(planId)
     }
     trace.updatedAt = now
+    const supersedes = metadata && metadata.supersedesPlanId
     trace.history.push({
       id: generateId('trace'),
       at: now,
       actor: 'system',
       kind: 'plan_linked',
-      summary: `Plan ${planId} linked`
+      summary: supersedes
+        ? `Plan ${planId} linked (refine of ${supersedes})`
+        : `Plan ${planId} linked`,
+      ...(metadata ? { metadata } : {})
     })
 
     atomicWriteJSON(fullPath, trace)
@@ -624,7 +769,9 @@ module.exports = {
   updateRequirement,
   listRequirements,
   createPlan,
+  refinePlan,
   readPlan,
+  readPlanMeta,
   listPlans,
   createChangeSet,
   readChangeSet,

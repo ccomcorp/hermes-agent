@@ -267,7 +267,22 @@ declare global {
             contentHash: string
             byteSize: number
             savedAt: string
+            version: number
+            supersedesPlanId?: string
           }>>
+          // Versioned refine — keeps history. Writes a NEW plan version file
+          // that supersedes the prior one; the prior version is never
+          // overwritten. Wired to the `hermes:workbench:plans:update` channel.
+          update: (payload: {
+            workspaceRoot: string
+            planId: string
+            markdown: string
+            title?: string
+            sourceRequest?: string
+            requirementId?: string
+            planRelativePath?: string
+            operation?: 'refine'
+          }) => Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>>
         }
         changesets: {
           list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>

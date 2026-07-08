@@ -237,7 +237,9 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     plans: {
       list: payload => ipcRenderer.invoke('hermes:workbench:plans:list', payload),
       create: payload => ipcRenderer.invoke('hermes:workbench:plans:create', payload),
-      read: payload => ipcRenderer.invoke('hermes:workbench:plans:read', payload)
+      read: payload => ipcRenderer.invoke('hermes:workbench:plans:read', payload),
+      // Versioned refine — writes a NEW plan version linked to the prior one.
+      update: payload => ipcRenderer.invoke('hermes:workbench:plans:update', payload)
     },
     changesets: {
       list: payload => ipcRenderer.invoke('hermes:workbench:changesets:list', payload),

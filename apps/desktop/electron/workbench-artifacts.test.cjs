@@ -279,6 +279,11 @@ test('isSafeRelativePath rejects traversal', () => {
   assert.strictEqual(store._internal.isSafeRelativePath('safe/path'), true)
 })
 
+test('isSafeRelativePath rejects POSIX-absolute paths', () => {
+  assert.strictEqual(store._internal.isSafeRelativePath('/etc/passwd'), false)
+  assert.strictEqual(store._internal.isSafeRelativePath('/absolute/but/nested'), false)
+})
+
 test('sanitizeId lowercases and cleans', () => {
   assert.strictEqual(store._internal.sanitizeId('My Req!'), 'my-req')
   assert.strictEqual(store._internal.sanitizeId(''), '')
