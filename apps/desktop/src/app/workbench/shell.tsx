@@ -28,20 +28,22 @@ import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
 import { workbenchStrings as s } from './strings'
+import { WorkflowPanel } from './workflow-panel'
 import { WritePanel } from './write-panel'
 
 // Top-level area switch (Requirements+Plans+ChangeSets+Design vs. Write
-// Workspace). LAYOUT DECISION (Slice J): Write Workspace's live source/preview
-// split needs real width to be usable — the existing 20rem right rail (which
-// already stacks Plans/ChangeSets/Design settings) has no room left for a
-// second editor pane. Rather than cram a fourth thing into that rail or force
-// a redesign of the existing Requirements-centric layout, Write Workspace gets
-// its own full-width area behind a simple two-way tab switch in the header,
-// the same kind of one-off layout call Slices C/D/F each made when a new
-// artifact type didn't fit the existing regions cleanly. Local component
-// state (not persisted) — matches how Slice J's split-mode toggle is also a
-// plain, non-persisted view state.
-type WorkbenchArea = 'requirements' | 'write'
+// Workspace vs. Workflow Designer). LAYOUT DECISION (Slice J, extended by
+// Slice M): Write Workspace's live source/preview split — and now the
+// Workflow Designer's node/edge canvas — both need real width to be usable —
+// the existing 20rem right rail (which already stacks Plans/ChangeSets/Design
+// settings) has no room left for a second editor pane or a graph canvas.
+// Rather than cram a third thing into that rail or force a redesign of the
+// existing Requirements-centric layout, both get their own full-width area
+// behind a simple tab switch in the header, the same kind of one-off layout
+// call Slices C/D/F each made when a new artifact type didn't fit the
+// existing regions cleanly. Local component state (not persisted) — matches
+// how Slice J's split-mode toggle is also a plain, non-persisted view state.
+type WorkbenchArea = 'requirements' | 'workflow' | 'write'
 
 interface WorkbenchShellProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
@@ -144,6 +146,17 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
               >
                 {s.write.navLabel}
               </button>
+              <button
+                className={
+                  area === 'workflow'
+                    ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.7rem] font-medium text-foreground'
+                    : 'rounded-[0.25rem] px-2 py-0.5 text-[0.7rem] font-medium text-muted-foreground/70 hover:text-foreground'
+                }
+                onClick={() => setArea('workflow')}
+                type="button"
+              >
+                {s.workflow.navLabel}
+              </button>
             </div>
           )}
         </div>
@@ -167,6 +180,10 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
       ) : area === 'write' ? (
         <div className="grid min-h-0 flex-1 grid-cols-1">
           <WritePanel workspaceRoot={workspaceRoot} />
+        </div>
+      ) : area === 'workflow' ? (
+        <div className="grid min-h-0 flex-1 grid-cols-1">
+          <WorkflowPanel workspaceRoot={workspaceRoot} />
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_20rem]">

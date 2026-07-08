@@ -24,6 +24,7 @@ const CHANGESETS_DIR = '.hermes/workbench/changesets'
 const DESIGNS_DIR = '.hermes/workbench/designs'
 const DESIGN_SETTINGS_RELATIVE_PATH = `${DESIGNS_DIR}/settings.json`
 const WRITE_DIR = '.hermes/workbench/write'
+const WORKFLOWS_DIR = '.hermes/workbench/workflows'
 const MANIFEST_PATH = '.hermes/workbench/manifest.json'
 
 // ---------------------------------------------------------------------------
@@ -993,6 +994,124 @@ function listWriteProjects(workspaceRoot) {
 }
 
 // ---------------------------------------------------------------------------
+// Workflow Designer — AUTHORING ONLY (Slice M, go-forward plan §5).
+//
+// A WorkbenchWorkflow is a single JSON document (the whole graph: id/title/
+// workspaceRoot/enabled/nodes/edges/timestamps) per workflow, stored as a flat
+// file under WORKFLOWS_DIR — the same shape as a ChangeSet, not a directory
+// with a sidecar like Requirement/Write project. Nothing in this section
+// interprets, evaluates, or executes any node's `config`; every function here
+// is a pure JSON read/write, exactly like every other artifact type in this
+// file. There is no "run workflow" function anywhere in this module.
+// ---------------------------------------------------------------------------
+
+function workflowRelativePath(id) {
+  return `${WORKFLOWS_DIR}/${sanitizeId(id)}.json`
+}
+
+function createWorkflow(workspaceRoot, input) {
+  const now = new Date().toISOString()
+  const id = generateId('wf')
+  const relativePath = workflowRelativePath(id)
+  const fullPath = resolveWorkspacePath(workspaceRoot, relativePath)
+
+  const workflow = {
+    id,
+    title: input.title,
+    workspaceRoot,
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    nodes: Array.isArray(input.nodes) ? input.nodes : [],
+    edges: Array.isArray(input.edges) ? input.edges : [],
+    createdAt: now,
+    updatedAt: now
+  }
+
+  atomicWriteJSON(fullPath, workflow)
+
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.workflows)) m.workflows = []
+    m.workflows.push({ id, title: input.title, relativePath, updatedAt: now })
+    return m
+  })
+
+  return { workflow }
+}
+
+function readWorkflow(workspaceRoot, workflowId) {
+  const safeId = sanitizeId(workflowId)
+  const relativePath = workflowRelativePath(safeId)
+  const fullPath = resolveWorkspacePath(workspaceRoot, relativePath)
+
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, message: 'Workflow not found', code: 'NOT_FOUND' }
+  }
+
+  try {
+    const workflow = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+    return { ok: true, value: workflow }
+  } catch {
+    return { ok: false, message: 'Corrupt workflow file', code: 'CORRUPT' }
+  }
+}
+
+function updateWorkflow(workspaceRoot, workflowId, input) {
+  const safeId = sanitizeId(workflowId)
+  const relativePath = workflowRelativePath(safeId)
+  const fullPath = resolveWorkspacePath(workspaceRoot, relativePath)
+
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, message: 'Workflow not found', code: 'NOT_FOUND' }
+  }
+
+  let workflow
+  try {
+    workflow = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+  } catch {
+    return { ok: false, message: 'Corrupt workflow file', code: 'CORRUPT' }
+  }
+
+  const now = new Date().toISOString()
+
+  if (input.title) workflow.title = input.title
+  if (typeof input.enabled === 'boolean') workflow.enabled = input.enabled
+  if (Array.isArray(input.nodes)) workflow.nodes = input.nodes
+  if (Array.isArray(input.edges)) workflow.edges = input.edges
+  workflow.updatedAt = now
+
+  atomicWriteJSON(fullPath, workflow)
+
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.workflows)) m.workflows = []
+    const idx = m.workflows.findIndex((w) => w.id === safeId)
+    if (idx >= 0) {
+      m.workflows[idx].title = workflow.title
+      m.workflows[idx].updatedAt = now
+    } else {
+      m.workflows.push({ id: safeId, title: workflow.title, relativePath, updatedAt: now })
+    }
+    return m
+  })
+
+  const hash = contentHash(JSON.stringify({ nodes: workflow.nodes, edges: workflow.edges }))
+
+  return {
+    ok: true,
+    value: {
+      id: safeId,
+      title: workflow.title,
+      enabled: workflow.enabled,
+      contentHash: hash,
+      updatedAt: now
+    }
+  }
+}
+
+function listWorkflows(workspaceRoot) {
+  const manifest = ensureManifest(workspaceRoot)
+  return { ok: true, value: manifest.workflows || [] }
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -1075,6 +1194,10 @@ module.exports = {
   readWriteProject,
   updateWriteProject,
   listWriteProjects,
+  createWorkflow,
+  readWorkflow,
+  updateWorkflow,
+  listWorkflows,
   readManifest,
   ensureManifest,
   updateManifest,

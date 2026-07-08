@@ -408,6 +408,44 @@ export interface WorkbenchWorkflowEdge {
   targetHandle?: string
 }
 
+// Slice M (go-forward plan §5) — AUTHORING ONLY. A WorkbenchWorkflow is a
+// document + metadata (id/title/workspaceRoot/enabled/nodes/edges/timestamps),
+// the same structural model as a Requirement/Write project, not a singleton
+// like Design settings. These request/response types add ONLY the create/
+// read/update/list wire shapes; WorkbenchWorkflowNodeKind/WorkbenchWorkflow/
+// WorkbenchWorkflowNode/WorkbenchWorkflowEdge above are unmodified and final.
+// Creating/updating a workflow graph never runs, executes, or interprets any
+// node's `config` — this is a pure JSON document write, like every other
+// artifact type in this file.
+export interface CreateWorkbenchWorkflowRequest {
+  workspaceRoot: string
+  title: string
+  nodes?: WorkbenchWorkflowNode[]
+  edges?: WorkbenchWorkflowEdge[]
+  enabled?: boolean
+}
+
+export interface CreateWorkbenchWorkflowResponse {
+  workflow: WorkbenchWorkflow
+}
+
+export interface UpdateWorkbenchWorkflowRequest {
+  workspaceRoot: string
+  workflowId: string
+  nodes: WorkbenchWorkflowNode[]
+  edges: WorkbenchWorkflowEdge[]
+  title?: string
+  enabled?: boolean
+}
+
+export interface UpdateWorkbenchWorkflowResponse {
+  id: string
+  title: string
+  enabled: boolean
+  contentHash: string
+  updatedAt: string
+}
+
 // ---------------------------------------------------------------------------
 // Workbench events
 // ---------------------------------------------------------------------------
@@ -485,5 +523,11 @@ export const WORKBENCH_IPC_CHANNELS = {
   writeProjectsCreate: 'hermes:workbench:write:create',
   writeProjectsRead: 'hermes:workbench:write:read',
   writeProjectsUpdate: 'hermes:workbench:write:update',
+  // Workflow Designer — AUTHORING ONLY (Slice M, go-forward plan §5). No
+  // run/execute channel exists here or anywhere in this slice.
+  workflowsList: 'hermes:workbench:workflows:list',
+  workflowsCreate: 'hermes:workbench:workflows:create',
+  workflowsRead: 'hermes:workbench:workflows:read',
+  workflowsUpdate: 'hermes:workbench:workflows:update',
   event: 'hermes:workbench:event'
 } as const

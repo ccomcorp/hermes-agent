@@ -10,7 +10,8 @@ import {
   HERMES_PLANS_DIR,
   HERMES_CHANGESETS_DIR,
   HERMES_DESIGNS_DIR,
-  HERMES_WRITE_DIR
+  HERMES_WRITE_DIR,
+  HERMES_WORKFLOWS_DIR
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -159,6 +160,19 @@ export function buildWriteProjectDocumentRelativePath(writeProjectId: string): s
 export function buildWriteProjectMetaRelativePath(writeProjectId: string): string {
   const safeId = sanitizeId(writeProjectId)
   return `${HERMES_WRITE_DIR}/${safeId}/project.json`
+}
+
+// ---------------------------------------------------------------------------
+// Workflow path builder (Slice M, go-forward plan §5)
+//
+// A WorkbenchWorkflow is a single JSON document (the whole graph) per
+// workflow, the same flat-file shape as a ChangeSet — not a directory with a
+// sidecar like Requirement/Write project.
+// ---------------------------------------------------------------------------
+
+export function buildWorkflowRelativePath(workflowId: string): string {
+  const safeId = sanitizeId(workflowId)
+  return `${HERMES_WORKFLOWS_DIR}/${safeId}.json`
 }
 
 // ---------------------------------------------------------------------------

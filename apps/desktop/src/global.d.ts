@@ -1,19 +1,23 @@
 import type {
+  WorkbenchChangeSet,
+  WorkbenchDesignSettings,
+  WorkbenchPlan,
+  WorkbenchRequirement,
+  WorkbenchRequirementStatus,
+  WorkbenchRequirementTrace,
+  WorkbenchWorkflow,
+  WorkbenchWorkflowEdge,
+  WorkbenchWorkflowNode,
+  WorkbenchWriteProject,
+  WorkbenchWriteRecentEdit
+} from '@hermes/shared'
+
+import type {
   PetOverlayBounds,
   PetOverlayControl,
   PetOverlayOpenRequest,
   PetOverlayStatePayload
 } from './store/pet-overlay'
-import type {
-  WorkbenchRequirement,
-  WorkbenchRequirementTrace,
-  WorkbenchRequirementStatus,
-  WorkbenchPlan,
-  WorkbenchChangeSet,
-  WorkbenchDesignSettings,
-  WorkbenchWriteProject,
-  WorkbenchWriteRecentEdit
-} from '@hermes/shared'
 
 export {}
 
@@ -355,6 +359,37 @@ declare global {
           }) => Promise<WorkbenchIpcResult<{
             id: string
             title?: string
+            contentHash: string
+            updatedAt: string
+          }>>
+        }
+        // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
+        // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN.
+        // No run/execute channel exists here.
+        workflow: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            nodes?: WorkbenchWorkflowNode[]
+            edges?: WorkbenchWorkflowEdge[]
+            enabled?: boolean
+          }) => Promise<WorkbenchIpcResult<{ workflow: WorkbenchWorkflow }>>
+          read: (payload: {
+            workspaceRoot: string
+            workflowId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchWorkflow>>
+          update: (payload: {
+            workspaceRoot: string
+            workflowId: string
+            nodes: WorkbenchWorkflowNode[]
+            edges: WorkbenchWorkflowEdge[]
+            title?: string
+            enabled?: boolean
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title: string
+            enabled: boolean
             contentHash: string
             updatedAt: string
           }>>

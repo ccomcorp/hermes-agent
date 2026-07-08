@@ -73,6 +73,9 @@ export function setWorkbenchWorkspaceRoot(root: null | string) {
   $workbenchWriteProjects.set([])
   $workbenchActiveWriteProjectId.set(null)
   $workbenchWriteProjectsError.set(null)
+  $workbenchWorkflows.set([])
+  $workbenchActiveWorkflowId.set(null)
+  $workbenchWorkflowsError.set(null)
 }
 
 export function setWorkbenchRequirements(entries: WorkbenchManifestEntry[]) {
@@ -293,5 +296,48 @@ export function upsertWorkbenchWriteProjectManifestEntry(entry: WorkbenchManifes
 export function patchWorkbenchWriteProjectManifestEntry(id: string, patch: Partial<WorkbenchManifestEntry>) {
   $workbenchWriteProjects.set(
     $workbenchWriteProjects.get().map(entry => (entry.id === id ? { ...entry, ...patch } : entry))
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Designer (Slice M — AUTHORING ONLY, go-forward plan §5)
+//
+// Workflows are a list, one per workspace, exactly like Requirements/Write
+// projects — not a singleton like Design Studio settings. Loaded detail
+// (nodes/edges) is view-local state in workflow-panel.tsx, matching how
+// requirement-panel.tsx/write-panel.tsx keep their loaded detail local rather
+// than global.
+// ---------------------------------------------------------------------------
+
+export const $workbenchWorkflows = atom<WorkbenchManifestEntry[]>([])
+export const $workbenchWorkflowsLoading = atom(false)
+export const $workbenchWorkflowsError = atom<null | string>(null)
+export const $workbenchActiveWorkflowId = atom<null | string>(null)
+
+export function setWorkbenchWorkflows(entries: WorkbenchManifestEntry[]) {
+  $workbenchWorkflows.set(entries)
+}
+
+export function setWorkbenchWorkflowsLoading(loading: boolean) {
+  $workbenchWorkflowsLoading.set(loading)
+}
+
+export function setWorkbenchWorkflowsError(message: null | string) {
+  $workbenchWorkflowsError.set(message)
+}
+
+export function setWorkbenchActiveWorkflowId(id: null | string) {
+  $workbenchActiveWorkflowId.set(id)
+}
+
+export function upsertWorkbenchWorkflowManifestEntry(entry: WorkbenchManifestEntry) {
+  const current = $workbenchWorkflows.get()
+  const next = [entry, ...current.filter(existing => existing.id !== entry.id)]
+  $workbenchWorkflows.set(next)
+}
+
+export function patchWorkbenchWorkflowManifestEntry(id: string, patch: Partial<WorkbenchManifestEntry>) {
+  $workbenchWorkflows.set(
+    $workbenchWorkflows.get().map(entry => (entry.id === id ? { ...entry, ...patch } : entry))
   )
 }

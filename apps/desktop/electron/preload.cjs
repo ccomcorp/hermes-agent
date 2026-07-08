@@ -262,6 +262,15 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       create: payload => ipcRenderer.invoke('hermes:workbench:write:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:write:read', payload),
       update: payload => ipcRenderer.invoke('hermes:workbench:write:update', payload)
+    },
+    workflow: {
+      // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
+      // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN —
+      // no run/execute channel exists here or anywhere else in this slice.
+      list: payload => ipcRenderer.invoke('hermes:workbench:workflows:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:workflows:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:workflows:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:workflows:update', payload)
     }
   }
 })

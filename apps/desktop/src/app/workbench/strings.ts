@@ -280,6 +280,63 @@ export const workbenchStrings = {
     }
   },
 
+  // Workflow Designer (Slice M — AUTHORING ONLY; see go-forward plan §5
+  // Slice M/N split). A workflow is a graph (nodes + edges) that is created,
+  // saved, loaded, and edited — it is NEVER RUN. No "Run" copy, no execution
+  // status copy belongs here — that is Slice N, not started. The palette only
+  // ever offers 3 node kinds (Trigger/Condition/Output); the other 9 declared
+  // WorkbenchWorkflowNodeKind values are intentionally not named in this
+  // catalog.
+  workflow: {
+    heading: 'Workflows',
+    navLabel: 'Workflows',
+
+    loading: 'Loading workflows',
+    loadFailed: 'Failed to load workflows',
+    openFailed: 'Failed to open workflow',
+    newWorkflow: 'New workflow',
+    emptyTitle: 'No workflows yet',
+    emptyDesc: 'Create the first Workbench Workflow for this workspace.',
+    selectPrompt: 'Select a workflow to view it, or create a new one.',
+
+    createTitle: 'New workflow',
+    createDialogDesc:
+      'Workbench Workflows are authored graphs of nodes and edges. Creating one writes a file only — it is never run.',
+    titleLabel: 'Title',
+    titlePlaceholder: 'Workflow title',
+    create: 'Create',
+    creating: 'Creating',
+    createFailed: 'Failed to create workflow',
+    createdTitle: (title: string) => `"${title}" created`,
+
+    save: 'Save',
+    saving: 'Saving',
+    saved: 'Workflow saved',
+    saveFailed: 'Failed to save workflow',
+    unsavedHint: 'Unsaved changes',
+
+    // Node palette — exactly 3 creatable kinds. The other 9
+    // WorkbenchWorkflowNodeKind values are deliberately not offered here.
+    paletteHeading: 'Add node',
+    addTrigger: 'Add trigger',
+    addCondition: 'Add condition',
+    addOutput: 'Add output',
+
+    nodeNames: {
+      manual_trigger: 'Trigger',
+      condition: 'Condition',
+      output: 'Output'
+    } as Record<string, string>,
+
+    conditionExpressionLabel: 'Expression (not evaluated)',
+    conditionExpressionPlaceholder: 'e.g. status == "approved"',
+    outputLabelLabel: 'Label',
+    outputLabelPlaceholder: 'e.g. Final result',
+
+    deleteNode: 'Delete node',
+    deleteEdge: 'Delete connection'
+  },
+
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).
   statusBar: {

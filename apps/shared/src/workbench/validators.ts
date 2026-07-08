@@ -11,11 +11,15 @@ import type {
   WriteWorkbenchDesignSettingsRequest,
   CreateWorkbenchWriteProjectRequest,
   UpdateWorkbenchWriteProjectRequest,
+  CreateWorkbenchWorkflowRequest,
+  UpdateWorkbenchWorkflowRequest,
   WorkbenchRequirementStatus,
   WorkbenchChangeSetStatus,
   WorkbenchChangeSource,
   WorkbenchPlanOperation,
-  WorkbenchDesignSettings
+  WorkbenchDesignSettings,
+  WorkbenchWorkflowNode,
+  WorkbenchWorkflowNodeKind
 } from './types'
 import { isSafeWorkbenchRelativePath } from './paths'
 
@@ -69,6 +73,31 @@ const VALID_DENSITY_VALUES: readonly NonNullable<WorkbenchDesignSettings['densit
 const VALID_FONT_STYLE_VALUES: readonly NonNullable<WorkbenchDesignSettings['fontStyle']>[] = [
   'system', 'geometric', 'humanist', 'serif', 'mono'
 ]
+
+// Workflow Designer (Slice M). The backend/validator layer stays PERMISSIVE of
+// all 12 declared node kinds — the UI-side restriction to 3 creatable kinds
+// (manual_trigger/condition/output) is enforced only in the node palette
+// (workflow-panel.tsx), not here, since later slices will need to persist
+// ai_agent/code/etc. nodes too. This validator never interprets `config`.
+const VALID_WORKFLOW_NODE_KINDS: readonly WorkbenchWorkflowNodeKind[] = [
+  'manual_trigger', 'schedule_trigger', 'webhook_trigger', 'ai_agent',
+  'human_approval', 'condition', 'http_request', 'code', 'delay', 'loop',
+  'subworkflow', 'output'
+]
+
+// 500 nodes is a generous ceiling for a hand-authored graph (no execution
+// engine exists to make a larger graph useful yet); it exists only to reject
+// pathological/malicious payloads, not to constrain real usage.
+const MAX_WORKFLOW_NODES = 500
+// Edges are naturally denser than nodes in a real graph (multiple connections
+// per node); 2000 keeps headroom well above what 500 nodes could plausibly
+// need while still rejecting absurd payloads.
+const MAX_WORKFLOW_EDGES = 2000
+const MAX_NODE_NAME_LENGTH = 200
+// `config` is authoring-time-only data (e.g. a condition's expression text, an
+// output's label) — capped like any other free-text field. It is NEVER
+// evaluated/executed by any code in this slice.
+const MAX_NODE_CONFIG_JSON_LENGTH = 50_000
 
 // ---------------------------------------------------------------------------
 // Validation result
@@ -375,6 +404,151 @@ export function validateUpdateWriteProjectRequest(
   if (input.title) {
     const titleCheck = validateTitle(input.title)
     if (!titleCheck.ok) return titleCheck
+  }
+
+  return ok()
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Designer validators (Slice M — AUTHORING ONLY, go-forward plan §5)
+//
+// A WorkbenchWorkflow is a document + metadata, the same structural model as
+// a Requirement/Write project. These validators never interpret, evaluate, or
+// execute any node's `config` — they only bound its size like any other
+// free-text field. Fail closed on missing workspace root, empty/oversized
+// title, invalid node kinds, and absurdly large graphs.
+// ---------------------------------------------------------------------------
+
+function validateWorkflowNodes(nodes: unknown): ValidationResult {
+  if (!Array.isArray(nodes)) {
+    return fail('nodes must be an array', 'INVALID_NODES')
+  }
+
+  if (nodes.length > MAX_WORKFLOW_NODES) {
+    return fail('too many nodes', 'TOO_MANY_NODES')
+  }
+
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') {
+      return fail('each node must be an object', 'INVALID_NODE')
+    }
+
+    const candidate = node as Partial<WorkbenchWorkflowNode>
+
+    if (!candidate.id || typeof candidate.id !== 'string') {
+      return fail('node.id is required', 'MISSING_NODE_ID')
+    }
+
+    if (!candidate.type || !VALID_WORKFLOW_NODE_KINDS.includes(candidate.type)) {
+      return fail('invalid node type', 'INVALID_NODE_TYPE')
+    }
+
+    if (!candidate.name || typeof candidate.name !== 'string' || candidate.name.length > MAX_NODE_NAME_LENGTH) {
+      return fail('node.name is required and must be a reasonable length', 'INVALID_NODE_NAME')
+    }
+
+    if (
+      !candidate.position ||
+      typeof candidate.position.x !== 'number' ||
+      typeof candidate.position.y !== 'number'
+    ) {
+      return fail('node.position must have numeric x/y', 'INVALID_NODE_POSITION')
+    }
+
+    if (candidate.config !== undefined) {
+      if (typeof candidate.config !== 'object' || candidate.config === null) {
+        return fail('node.config must be an object', 'INVALID_NODE_CONFIG')
+      }
+
+      if (JSON.stringify(candidate.config).length > MAX_NODE_CONFIG_JSON_LENGTH) {
+        return fail('node.config exceeds size limit', 'NODE_CONFIG_TOO_LARGE')
+      }
+    }
+  }
+
+  return ok()
+}
+
+function validateWorkflowEdges(edges: unknown, nodes: WorkbenchWorkflowNode[]): ValidationResult {
+  if (!Array.isArray(edges)) {
+    return fail('edges must be an array', 'INVALID_EDGES')
+  }
+
+  if (edges.length > MAX_WORKFLOW_EDGES) {
+    return fail('too many edges', 'TOO_MANY_EDGES')
+  }
+
+  const nodeIds = new Set(nodes.map(node => node.id))
+
+  for (const edge of edges) {
+    if (!edge || typeof edge !== 'object') {
+      return fail('each edge must be an object', 'INVALID_EDGE')
+    }
+
+    const candidate = edge as { id?: unknown; source?: unknown; target?: unknown }
+
+    if (!candidate.id || typeof candidate.id !== 'string') {
+      return fail('edge.id is required', 'MISSING_EDGE_ID')
+    }
+
+    if (!candidate.source || typeof candidate.source !== 'string' || !candidate.target || typeof candidate.target !== 'string') {
+      return fail('edge.source and edge.target are required', 'INVALID_EDGE_ENDPOINTS')
+    }
+
+    if (!nodeIds.has(candidate.source) || !nodeIds.has(candidate.target)) {
+      return fail('edge references an unknown node', 'EDGE_UNKNOWN_NODE')
+    }
+  }
+
+  return ok()
+}
+
+export function validateCreateWorkflowRequest(
+  input: CreateWorkbenchWorkflowRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  const titleCheck = validateTitle(input.title)
+  if (!titleCheck.ok) return titleCheck
+
+  const nodes = input.nodes ?? []
+  const nodesCheck = validateWorkflowNodes(nodes)
+  if (!nodesCheck.ok) return nodesCheck
+
+  const edgesCheck = validateWorkflowEdges(input.edges ?? [], nodes)
+  if (!edgesCheck.ok) return edgesCheck
+
+  if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
+    return fail('enabled must be a boolean', 'INVALID_ENABLED')
+  }
+
+  return ok()
+}
+
+export function validateUpdateWorkflowRequest(
+  input: UpdateWorkbenchWorkflowRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  if (!input.workflowId || !input.workflowId.trim()) {
+    return fail('workflowId is required', 'MISSING_WORKFLOW_ID')
+  }
+
+  if (input.title) {
+    const titleCheck = validateTitle(input.title)
+    if (!titleCheck.ok) return titleCheck
+  }
+
+  const nodesCheck = validateWorkflowNodes(input.nodes)
+  if (!nodesCheck.ok) return nodesCheck
+
+  const edgesCheck = validateWorkflowEdges(input.edges, input.nodes)
+  if (!edgesCheck.ok) return edgesCheck
+
+  if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
+    return fail('enabled must be a boolean', 'INVALID_ENABLED')
   }
 
   return ok()

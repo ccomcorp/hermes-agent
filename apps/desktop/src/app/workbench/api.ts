@@ -20,6 +20,9 @@ import type {
   WorkbenchRequirement,
   WorkbenchRequirementStatus,
   WorkbenchRequirementTrace,
+  WorkbenchWorkflow,
+  WorkbenchWorkflowEdge,
+  WorkbenchWorkflowNode,
   WorkbenchWriteProject,
   WorkbenchWriteRecentEdit
 } from '@hermes/shared'
@@ -291,4 +294,64 @@ export function updateWriteProject(
   input: UpdateWorkbenchWriteProjectInput
 ): Promise<WorkbenchIpcResult<{ id: string; title?: string; contentHash: string; updatedAt: string }>> {
   return window.hermesDesktop.workbench.write.update(input)
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Designer — AUTHORING ONLY (Slice M, go-forward plan §5).
+//
+// A WorkbenchWorkflow is a document + metadata (the whole graph: nodes +
+// edges), the same structural model as a Requirement/Write project — a list
+// of workflows per workspace, CRUD only. No function here ever calls a
+// run/execute/model/skill/agent API: creating, reading, or saving a workflow
+// is a pure JSON document write, never an interpretation of any node's
+// `config`. There is no "run workflow" function in this file or anywhere in
+// this slice.
+// ---------------------------------------------------------------------------
+
+export interface CreateWorkbenchWorkflowInput {
+  workspaceRoot: string
+  title: string
+  nodes?: WorkbenchWorkflowNode[]
+  edges?: WorkbenchWorkflowEdge[]
+  enabled?: boolean
+}
+
+export interface UpdateWorkbenchWorkflowInput {
+  workspaceRoot: string
+  workflowId: string
+  nodes: WorkbenchWorkflowNode[]
+  edges: WorkbenchWorkflowEdge[]
+  title?: string
+  enabled?: boolean
+}
+
+export interface UpdateWorkbenchWorkflowResult {
+  id: string
+  title: string
+  enabled: boolean
+  contentHash: string
+  updatedAt: string
+}
+
+export function listWorkflows(workspaceRoot: string): Promise<WorkbenchIpcResult<WorkbenchManifestEntry[]>> {
+  return window.hermesDesktop.workbench.workflow.list({ workspaceRoot })
+}
+
+export function createWorkflow(
+  input: CreateWorkbenchWorkflowInput
+): Promise<WorkbenchIpcResult<{ workflow: WorkbenchWorkflow }>> {
+  return window.hermesDesktop.workbench.workflow.create(input)
+}
+
+export function readWorkflow(
+  workspaceRoot: string,
+  workflowId: string
+): Promise<WorkbenchIpcResult<WorkbenchWorkflow>> {
+  return window.hermesDesktop.workbench.workflow.read({ workspaceRoot, workflowId })
+}
+
+export function updateWorkflow(
+  input: UpdateWorkbenchWorkflowInput
+): Promise<WorkbenchIpcResult<UpdateWorkbenchWorkflowResult>> {
+  return window.hermesDesktop.workbench.workflow.update(input)
 }

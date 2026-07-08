@@ -538,3 +538,133 @@ test('listWriteProjects returns manifest rows', () => {
     cleanup(ws)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Workflow Designer — AUTHORING ONLY (Slice M)
+// ---------------------------------------------------------------------------
+
+test('createWorkflow creates a JSON document and manifest entry', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { workflow } = store.createWorkflow(ws, {
+      title: 'Test Workflow',
+      nodes: [{ id: 'n1', type: 'manual_trigger', name: 'Trigger', position: { x: 0, y: 0 }, config: {} }],
+      edges: []
+    })
+
+    assert.ok(workflow.id)
+    assert.strictEqual(workflow.title, 'Test Workflow')
+    assert.strictEqual(workflow.enabled, true)
+    assert.strictEqual(workflow.nodes.length, 1)
+
+    const filePath = path.join(ws, '.hermes', 'workbench', 'workflows', `${workflow.id}.json`)
+    assert.ok(fs.existsSync(filePath))
+
+    const manifest = store.readManifest(ws)
+    assert.strictEqual(manifest.workflows.length, 1)
+    assert.strictEqual(manifest.workflows[0].id, workflow.id)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createWorkflow defaults to empty nodes/edges and enabled true', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { workflow } = store.createWorkflow(ws, { title: 'Empty Workflow' })
+
+    assert.deepStrictEqual(workflow.nodes, [])
+    assert.deepStrictEqual(workflow.edges, [])
+    assert.strictEqual(workflow.enabled, true)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readWorkflow returns the workflow document', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { workflow } = store.createWorkflow(ws, { title: 'Read Test' })
+
+    const result = store.readWorkflow(ws, workflow.id)
+    assert.strictEqual(result.ok, true)
+    if (result.ok) {
+      assert.strictEqual(result.value.title, 'Read Test')
+    }
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readWorkflow returns NOT_FOUND for a missing workflow', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.readWorkflow(ws, 'nonexistent')
+    assert.strictEqual(result.ok, false)
+    if (!result.ok) assert.strictEqual(result.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateWorkflow persists new nodes/edges and title', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { workflow } = store.createWorkflow(ws, { title: 'Update Test' })
+
+    const nodes = [
+      { id: 'n1', type: 'manual_trigger', name: 'Trigger', position: { x: 0, y: 0 }, config: {} },
+      { id: 'n2', type: 'output', name: 'Output', position: { x: 200, y: 0 }, config: { label: 'Done' } }
+    ]
+    const edges = [{ id: 'e1', source: 'n1', target: 'n2' }]
+
+    const updateResult = store.updateWorkflow(ws, workflow.id, { title: 'Renamed', nodes, edges })
+    assert.strictEqual(updateResult.ok, true)
+    if (updateResult.ok) {
+      assert.strictEqual(updateResult.value.title, 'Renamed')
+      assert.ok(updateResult.value.contentHash)
+    }
+
+    const readResult = store.readWorkflow(ws, workflow.id)
+    assert.strictEqual(readResult.ok, true)
+    if (readResult.ok) {
+      assert.strictEqual(readResult.value.title, 'Renamed')
+      assert.strictEqual(readResult.value.nodes.length, 2)
+      assert.strictEqual(readResult.value.edges.length, 1)
+    }
+
+    // Manifest entry refreshed, not duplicated.
+    const manifest = store.readManifest(ws)
+    assert.strictEqual(manifest.workflows.length, 1)
+    assert.strictEqual(manifest.workflows[0].title, 'Renamed')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateWorkflow returns NOT_FOUND for a missing workflow', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.updateWorkflow(ws, 'nonexistent', { nodes: [], edges: [] })
+    assert.strictEqual(result.ok, false)
+    if (!result.ok) assert.strictEqual(result.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('listWorkflows returns manifest rows', () => {
+  const ws = createTempWorkspace()
+  try {
+    store.createWorkflow(ws, { title: 'Workflow A' })
+    store.createWorkflow(ws, { title: 'Workflow B' })
+
+    const result = store.listWorkflows(ws)
+    assert.strictEqual(result.ok, true)
+    if (result.ok) {
+      assert.strictEqual(result.value.length, 2)
+    }
+  } finally {
+    cleanup(ws)
+  }
+})
