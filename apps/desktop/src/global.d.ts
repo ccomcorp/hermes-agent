@@ -294,11 +294,12 @@ declare global {
             }
           }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
         }
-        }
-        }
-        }
+      }
+    }
+  }
+}
 
-        export interface DesktopMarketplaceSearchItem {
+export interface DesktopMarketplaceSearchItem {
   extensionId: string
   displayName: string
   publisher: string
