@@ -316,6 +316,21 @@ declare global {
               approval?: { kind: string; decision: string; reason?: string }
             }
           }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          // Slice E — writes each eligible file's diff to the REAL workspace
+          // (requires status 'accepted'; fails closed otherwise). Per-file
+          // outcomes are reported on the returned changeset's `files[]`
+          // (`applyResult`/`applyMessage`), not just an overall pass/fail.
+          apply: (payload: {
+            workspaceRoot: string
+            changesetId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          // Slice E — a separate, explicit action (never auto-triggered by
+          // apply). Stages+commits only the files this changeset applied.
+          commit: (payload: {
+            workspaceRoot: string
+            changesetId: string
+            message?: string
+          }) => Promise<WorkbenchIpcResult<{ committed: boolean; files: string[]; message: string }>>
         }
         // Design SETTINGS only (Slice F) — a single per-workspace document,
         // not a list. No generation/preview/changeset-apply channel exists.

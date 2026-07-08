@@ -11,6 +11,7 @@ const { ipcMain, BrowserWindow } = require('electron')
 
 const store = require('./workbench-artifacts.cjs')
 const { exportWriteDocument } = require('./workbench-write-export.cjs')
+const { applyChangeSet, commitChangeSet } = require('./workbench-changeset-apply.cjs')
 
 // Shared validators — imported from the compiled shared package.
 // In the Electron main process (.cjs context) we can't import .ts directly,
@@ -257,7 +258,14 @@ function normalize(result) {
 // Register all workbench IPC handlers
 // ---------------------------------------------------------------------------
 
-function registerWorkbenchIpc() {
+// `options.gitBin` mirrors how main.cjs threads `resolveGitBinary()` into
+// every other git-backed IPC handler (see git-review-ops.cjs's call sites in
+// main.cjs) — Slice E's apply/commit handlers below need the same resolved
+// binary so packaged Windows builds find `git.exe` the same way the coding
+// rail does.
+function registerWorkbenchIpc(options = {}) {
+  const gitBin = options.gitBin
+
   // -- Requirements ----------------------------------------------------------
 
   ipcMain.handle('hermes:workbench:requirements:list', (_event, payload) => {
@@ -528,6 +536,59 @@ function registerWorkbenchIpc() {
     } catch (err) {
       return { ok: false, message: 'Failed to update changeset: ' + err.message, code: 'INTERNAL_ERROR' }
     }
+  })
+
+  // -- ChangeSets — Apply + Commit (Slice E) ---------------------------------
+  //
+  // Apply is a SEPARATE, ADDITIONAL action from accept/reject above — it does
+  // not change how a changeset becomes `accepted`, and it is the first
+  // Workbench write that reaches the user's REAL project files instead of
+  // `.hermes/workbench/`. Fail closed: workspaceRoot + changesetId are
+  // required, and workbench-changeset-apply.cjs itself independently refuses
+  // to run unless the changeset is already `accepted`.
+  //
+  // Deliberately NOT declared `async` (same reasoning as write:export above):
+  // every validation failure below returns a plain synchronous result, and
+  // only the final success path returns a Promise, which `ipcMain.handle`
+  // awaits natively.
+  ipcMain.handle('hermes:workbench:changesets:apply', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.changesetId || !payload.changesetId.trim()) {
+      return { ok: false, message: 'changesetId is required', code: 'MISSING_CHANGESET_ID' }
+    }
+
+    return applyChangeSet(payload.workspaceRoot, payload.changesetId, { gitBin })
+      .then(result => normalize(result))
+      .catch(err => ({ ok: false, message: 'Failed to apply changeset: ' + err.message, code: 'INTERNAL_ERROR' }))
+  })
+
+  // Commit is a further separate, explicit action — never auto-triggered by
+  // apply above. Stages+commits only the files this changeset applied.
+  ipcMain.handle('hermes:workbench:changesets:commit', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.changesetId || !payload.changesetId.trim()) {
+      return { ok: false, message: 'changesetId is required', code: 'MISSING_CHANGESET_ID' }
+    }
+
+    if (payload.message !== undefined && (typeof payload.message !== 'string' || payload.message.length > 2000)) {
+      return { ok: false, message: 'message is invalid', code: 'INVALID_MESSAGE' }
+    }
+
+    return commitChangeSet(payload.workspaceRoot, payload.changesetId, { gitBin, message: payload.message })
+      .then(result => normalize(result))
+      .catch(err => ({ ok: false, message: 'Failed to commit changeset: ' + err.message, code: 'INTERNAL_ERROR' }))
   })
 
   // -- Design settings (Slice F — settings only, never briefs/prototypes) ----

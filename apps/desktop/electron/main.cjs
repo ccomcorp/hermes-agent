@@ -7636,8 +7636,10 @@ app.whenReady().then(() => {
   ensureWslWindowsFonts()
   configureSpellChecker()
   registerPowerResumeListeners()
-  // AIOS: Hermes Workbench — register IPC handlers before createWindow
-  registerWorkbenchIpc()
+  // AIOS: Hermes Workbench — register IPC handlers before createWindow.
+  // Slice E's apply/commit handlers need the resolved git binary, same as
+  // every other git-backed IPC call site above.
+  registerWorkbenchIpc({ gitBin: resolveGitBinary() })
   createWindow()
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.

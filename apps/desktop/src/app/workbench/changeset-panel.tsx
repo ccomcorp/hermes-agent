@@ -1,18 +1,23 @@
-import type { WorkbenchChangeSet } from '@hermes/shared'
+import type { WorkbenchChangedFile, WorkbenchChangeSet } from '@hermes/shared'
 /**
- * ChangeSet panel — Slice D, REVIEW/STATUS ONLY (go-forward plan §5 Slice D).
+ * ChangeSet panel — Slice D (review/status) + Slice E (apply + commit).
  *
  * Lists ChangeSets (via api.ts -> preload -> IPC ->
  * `.hermes/workbench/changesets/<id>.json` on disk, never an in-memory mock),
  * opens one, and renders its `files` list as a READ-ONLY metadata summary —
  * path/status/hash, not a real diff viewer. Accept/Reject call
- * `updateChangeSetStatus` to flip the changeset's OWN status file only.
+ * `updateChangeSetStatus` to flip the changeset's OWN status file only — this
+ * behavior and its UI copy (`reviewNote` below) are UNCHANGED from Slice D:
+ * accept/reject still never write to the user's project files and never run
+ * git.
  *
- * Hard scope boundary (see go-forward plan §5's Slice D/E split): this panel
- * must never write/patch a file outside `.hermes/workbench/`, never call any
- * git IPC, and never call any terminal/execute API. Applying a changeset's
- * real file patches + git staging is Slice E, a separate, not-yet-started
- * piece of work — nothing here reaches toward it.
+ * Apply and Commit (Slice E) are SEPARATE, ADDITIONAL actions layered on top:
+ * - Apply is only offered once a changeset is already `accepted` (Slice D's
+ *   own flow — Apply never changes how a changeset becomes accepted). It is
+ *   the first Workbench action anywhere that writes to the user's REAL
+ *   project files, via `applyChangeSet` (api.ts -> `changesets:apply` IPC).
+ * - Commit is only offered once the workspace is a real git repo AND at
+ *   least one file is `applied`; it is never auto-triggered by Apply.
  *
  * ChangeSets are workspace-wide, not scoped to the open requirement (see the
  * comment in store.ts) — this panel therefore always renders once a
@@ -29,11 +34,19 @@ import { Badge } from '@/components/ui/badge'
 import type { BadgeProps } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Input } from '@/components/ui/input'
 import { notify, notifyError } from '@/store/notifications'
 
 import { PanelEmpty, PanelListRow } from '../overlays/panel'
 
-import { listChangeSets, readChangeSet, updateChangeSetStatus } from './api'
+import {
+  applyChangeSet,
+  commitChangeSet,
+  isWorkspaceGitRepo,
+  listChangeSets,
+  readChangeSet,
+  updateChangeSetStatus
+} from './api'
 import {
   $workbenchActiveChangeSetId,
   $workbenchChangeSets,
@@ -70,6 +83,29 @@ export function ChangeSetPanel({ workspaceRoot }: ChangeSetPanelProps) {
   const [detail, setDetail] = useState<null | WorkbenchChangeSet>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [deciding, setDeciding] = useState<Decision | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [committing, setCommitting] = useState(false)
+  const [commitMessage, setCommitMessage] = useState('')
+  // Null while the check hasn't resolved yet — treated as "not a repo" for
+  // gating purposes so the Commit button never flashes on before we know.
+  const [isGitRepo, setIsGitRepo] = useState<boolean | null>(null)
+
+  // Gate the Commit button on whether the workspace is actually a git repo.
+  // Reuses the existing coding-rail git surface (see api.ts
+  // `isWorkspaceGitRepo`) rather than adding a bespoke new IPC channel.
+  useEffect(() => {
+    let cancelled = false
+
+    void isWorkspaceGitRepo(workspaceRoot).then(result => {
+      if (!cancelled) {
+        setIsGitRepo(result)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceRoot])
 
   const load = useCallback(async () => {
     setWorkbenchChangeSetsLoading(true)
@@ -120,7 +156,14 @@ export function ChangeSetPanel({ workspaceRoot }: ChangeSetPanelProps) {
     [workspaceRoot]
   )
 
-  // The ONLY write path in this file: a pure status-JSON transition via
+  // Seed a default commit message from the changeset's own title whenever a
+  // different changeset is opened — the user can still edit it before
+  // committing.
+  useEffect(() => {
+    setCommitMessage(detail?.title ?? '')
+  }, [detail?.id, detail?.title])
+
+  // The ONLY write path Slice D performs: a pure status-JSON transition via
   // updateChangeSetStatus. No file-apply, no git, no terminal/execute call.
   const decide = useCallback(
     async (decision: Decision) => {
@@ -168,6 +211,68 @@ export function ChangeSetPanel({ workspaceRoot }: ChangeSetPanelProps) {
     [detail, load, workspaceRoot]
   )
 
+  // Slice E — a SEPARATE, additional action from accept/reject above. Only
+  // reachable once `detail.status === 'accepted'` (enforced again below in
+  // the render, and independently by the backend). This is the first write
+  // in this file that reaches the user's real project files.
+  const doApply = useCallback(async () => {
+    if (!detail) {
+      return
+    }
+
+    setApplying(true)
+
+    try {
+      const res = await applyChangeSet({ changesetId: detail.id, workspaceRoot })
+
+      if (res.ok) {
+        setDetail(res.value)
+        notify({ kind: 'success', message: '', title: s.changesets.applied })
+        // Re-list so the row's updatedAt/status reflects exactly what the
+        // backend persisted, same discipline as accept/reject above.
+        void load()
+      } else {
+        notify({ kind: 'error', message: res.message, title: s.changesets.applyFailed })
+      }
+    } catch (err) {
+      notifyError(err, s.changesets.applyFailed)
+    } finally {
+      setApplying(false)
+    }
+  }, [detail, load, workspaceRoot])
+
+  // Slice E — a further separate, explicit action. Never called by
+  // `doApply` above.
+  const doCommit = useCallback(async () => {
+    if (!detail) {
+      return
+    }
+
+    setCommitting(true)
+
+    try {
+      const res = await commitChangeSet({
+        changesetId: detail.id,
+        message: commitMessage.trim() || undefined,
+        workspaceRoot
+      })
+
+      if (res.ok) {
+        notify({
+          kind: 'success',
+          message: res.value.message,
+          title: s.changesets.committedFiles(res.value.files.length)
+        })
+      } else {
+        notify({ kind: 'error', message: res.message, title: s.changesets.commitFailed })
+      }
+    } catch (err) {
+      notifyError(err, s.changesets.commitFailed)
+    } finally {
+      setCommitting(false)
+    }
+  }, [commitMessage, detail, workspaceRoot])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       <div className="flex shrink-0 items-center justify-between gap-2">
@@ -202,9 +307,16 @@ export function ChangeSetPanel({ workspaceRoot }: ChangeSetPanelProps) {
           <PanelEmpty description={s.changesets.selectPrompt} icon="note" title={s.changesets.heading} />
         ) : (
           <ChangeSetDetailView
+            applying={applying}
+            commitMessage={commitMessage}
+            committing={committing}
             deciding={deciding}
             detail={detail}
+            isGitRepo={isGitRepo}
             onAccept={() => void decide('accept')}
+            onApply={() => void doApply()}
+            onCommit={() => void doCommit()}
+            onCommitMessageChange={setCommitMessage}
             onReject={() => void decide('reject')}
           />
         )}
@@ -214,16 +326,34 @@ export function ChangeSetPanel({ workspaceRoot }: ChangeSetPanelProps) {
 }
 
 function ChangeSetDetailView({
+  applying,
+  commitMessage,
+  committing,
   deciding,
   detail,
+  isGitRepo,
   onAccept,
+  onApply,
+  onCommit,
+  onCommitMessageChange,
   onReject
 }: {
+  applying: boolean
+  commitMessage: string
+  committing: boolean
   deciding: Decision | null
   detail: WorkbenchChangeSet
+  isGitRepo: boolean | null
   onAccept: () => void
+  onApply: () => void
+  onCommit: () => void
+  onCommitMessageChange: (value: string) => void
   onReject: () => void
 }) {
+  const canApply = detail.status === 'accepted'
+  const hasAppliedFile = detail.files.some(file => file.status === 'applied')
+  const canCommit = isGitRepo === true && hasAppliedFile
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -248,6 +378,39 @@ function ChangeSetDetailView({
 
       <p className="text-[0.62rem] leading-relaxed text-muted-foreground/50">{s.changesets.reviewNote}</p>
 
+      {canApply ? (
+        <div className="flex flex-col gap-1 rounded border border-(--ui-stroke-tertiary) p-2">
+          <Button disabled={applying} onClick={onApply} size="sm" variant="outline">
+            <Codicon name={applying ? 'loading' : 'check-all'} size="0.8125rem" spinning={applying} />
+            {applying ? s.changesets.applying : s.changesets.apply}
+          </Button>
+          <p className="text-[0.62rem] leading-relaxed text-muted-foreground/50">{s.changesets.applyNote}</p>
+        </div>
+      ) : null}
+
+      {hasAppliedFile ? (
+        <div className="flex flex-col gap-1 rounded border border-(--ui-stroke-tertiary) p-2">
+          {isGitRepo === false ? (
+            <p className="text-[0.62rem] text-muted-foreground/60">{s.changesets.commitNotRepoHint}</p>
+          ) : (
+            <>
+              <label className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground/50">
+                {s.changesets.commitMessageLabel}
+              </label>
+              <Input
+                onChange={event => onCommitMessageChange(event.target.value)}
+                size="sm"
+                value={commitMessage}
+              />
+              <Button disabled={!canCommit || committing} onClick={onCommit} size="sm" variant="outline">
+                <Codicon name={committing ? 'loading' : 'git-commit'} size="0.8125rem" spinning={committing} />
+                {committing ? s.changesets.committing : s.changesets.commit}
+              </Button>
+            </>
+          )}
+        </div>
+      ) : null}
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground/50">
           {s.changesets.filesHeading}
@@ -271,6 +434,15 @@ function ChangeSetDetailView({
                     {file.afterHash ? `after ${file.afterHash}` : null}
                   </div>
                 ) : null}
+                {/* Per-file Apply outcome (Slice E) — shown distinctly from
+                    `file.status` since a partial apply can leave some files
+                    applied and others in conflict/error within one changeset. */}
+                {file.applyResult ? (
+                  <div className="mt-0.5 text-muted-foreground/60">
+                    <span className="font-medium">{fileResultLabel(file)}</span>
+                    {file.applyMessage ? `: ${file.applyMessage}` : null}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -278,4 +450,12 @@ function ChangeSetDetailView({
       </div>
     </div>
   )
+}
+
+function fileResultLabel(file: WorkbenchChangedFile): string {
+  if (!file.applyResult) {
+    return ''
+  }
+
+  return s.changesets.fileResultNames[file.applyResult] ?? file.applyResult
 }

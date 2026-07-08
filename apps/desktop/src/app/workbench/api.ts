@@ -218,6 +218,59 @@ export function updateChangeSetStatus(
 }
 
 // ---------------------------------------------------------------------------
+// ChangeSets — Apply + Commit (Slice E, go-forward plan §5 Slice E).
+//
+// Apply is a SEPARATE, ADDITIONAL action from accept/reject above — it is
+// only valid once a changeset is already `accepted`, and it is the first
+// Workbench write that reaches the user's REAL project files. Commit is a
+// further separate, explicit action; it is never called by `applyChangeSet`.
+// ---------------------------------------------------------------------------
+
+export interface ApplyChangeSetInput {
+  workspaceRoot: string
+  changesetId: string
+}
+
+export function applyChangeSet(input: ApplyChangeSetInput): Promise<WorkbenchIpcResult<WorkbenchChangeSet>> {
+  return window.hermesDesktop.workbench.changesets.apply(input)
+}
+
+export interface CommitChangeSetInput {
+  workspaceRoot: string
+  changesetId: string
+  message?: string
+}
+
+export interface CommitChangeSetResult {
+  committed: boolean
+  files: string[]
+  message: string
+}
+
+export function commitChangeSet(
+  input: CommitChangeSetInput
+): Promise<WorkbenchIpcResult<CommitChangeSetResult>> {
+  return window.hermesDesktop.workbench.changesets.commit(input)
+}
+
+// Git-repo detection deliberately reuses the EXISTING coding-rail git surface
+// (`window.hermesDesktop.git.repoStatus`, already wired for the review pane)
+// instead of adding a new "is this a repo" IPC channel — `repoStatus` already
+// resolves to `null` for a non-repo/remote backend (see git-review-ops.cjs
+// `repoStatus`). Used to gate the Commit button's visibility.
+export async function isWorkspaceGitRepo(workspaceRoot: string): Promise<boolean> {
+  const repoStatus = window.hermesDesktop.git?.repoStatus
+
+  if (!repoStatus) {
+    return false
+  }
+
+  const status = await repoStatus(workspaceRoot)
+
+  return status !== null
+}
+
+// ---------------------------------------------------------------------------
 // Design Studio — SETTINGS only (Slice F, go-forward plan §5).
 //
 // There is exactly ONE WorkbenchDesignSettings document per workspace, so

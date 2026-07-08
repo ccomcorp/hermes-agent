@@ -57,6 +57,9 @@ const CH = {
   csList: 'hermes:workbench:changesets:list',
   csCreate: 'hermes:workbench:changesets:create',
   csRead: 'hermes:workbench:changesets:read',
+  csUpdate: 'hermes:workbench:changesets:update',
+  csApply: 'hermes:workbench:changesets:apply',
+  csCommit: 'hermes:workbench:changesets:commit',
   designRead: 'hermes:workbench:design:settings:read',
   designWrite: 'hermes:workbench:design:settings:write',
   writeList: 'hermes:workbench:write:list',
@@ -286,6 +289,90 @@ test('changesets create/read/list return normalized shape', () => {
     assertNormalized(list)
     assert.strictEqual(list.ok, true)
     assert.strictEqual(list.value.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// Slice E — apply/commit IPC handlers. Deliberately NOT declared `async` (see
+// the module comment), so validation failures return a plain object exactly
+// like every other handler's denial path — no `await` needed here either.
+test('changesets:apply and changesets:commit are rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullApply = invoke(CH.csApply, null)
+    assertNormalized(nullApply)
+    assert.strictEqual(nullApply.ok, false)
+    assert.strictEqual(nullApply.code, 'INVALID_PAYLOAD')
+
+    const noRootApply = invoke(CH.csApply, { changesetId: 'cs-1' })
+    assert.strictEqual(noRootApply.ok, false)
+    assert.strictEqual(noRootApply.code, 'MISSING_WORKSPACE_ROOT')
+
+    const noIdApply = invoke(CH.csApply, { workspaceRoot: ws })
+    assert.strictEqual(noIdApply.ok, false)
+    assert.strictEqual(noIdApply.code, 'MISSING_CHANGESET_ID')
+
+    const nullCommit = invoke(CH.csCommit, null)
+    assert.strictEqual(nullCommit.ok, false)
+    assert.strictEqual(nullCommit.code, 'INVALID_PAYLOAD')
+
+    const noIdCommit = invoke(CH.csCommit, { workspaceRoot: ws })
+    assert.strictEqual(noIdCommit.ok, false)
+    assert.strictEqual(noIdCommit.code, 'MISSING_CHANGESET_ID')
+
+    const badMessage = invoke(CH.csCommit, {
+      workspaceRoot: ws,
+      changesetId: 'cs-1',
+      message: 'x'.repeat(2001)
+    })
+    assert.strictEqual(badMessage.ok, false)
+    assert.strictEqual(badMessage.code, 'INVALID_MESSAGE')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// End-to-end through the real IPC handler (not the apply module directly):
+// proves `changesets:apply` is refused for a non-accepted changeset, and that
+// a genuinely `accepted` changeset can be applied through the handler.
+test('changesets:apply end-to-end through the IPC handler', async () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.csCreate, {
+      workspaceRoot: ws,
+      source: 'agent',
+      title: 'Some changes',
+      summary: 'changes',
+      files: [{ diff: 'hello from apply\n', path: 'apply-me.txt', status: 'pending' }]
+    })
+    assert.strictEqual(created.ok, true)
+
+    // Not yet accepted — apply must be refused.
+    const tooEarly = await invoke(CH.csApply, { workspaceRoot: ws, changesetId: created.value.id })
+    assert.strictEqual(tooEarly.ok, false)
+    assert.strictEqual(tooEarly.code, 'NOT_ACCEPTED')
+
+    const accepted = invoke(CH.csUpdate, {
+      workspaceRoot: ws,
+      changesetId: created.value.id,
+      statusPatch: { status: 'accepted' }
+    })
+    assert.strictEqual(accepted.ok, true)
+
+    const applied = await invoke(CH.csApply, { workspaceRoot: ws, changesetId: created.value.id })
+    assertNormalized(applied)
+    assert.strictEqual(applied.ok, true)
+    assert.strictEqual(applied.value.status, 'applied')
+    assert.strictEqual(
+      fs.readFileSync(path.join(ws, 'apply-me.txt'), 'utf8'),
+      'hello from apply\n'
+    )
+
+    // Not a git repo — commit must be refused, not throw.
+    const commitResult = await invoke(CH.csCommit, { workspaceRoot: ws, changesetId: created.value.id })
+    assert.strictEqual(commitResult.ok, false)
+    assert.strictEqual(commitResult.code, 'NOT_A_REPO')
   } finally {
     cleanup(ws)
   }

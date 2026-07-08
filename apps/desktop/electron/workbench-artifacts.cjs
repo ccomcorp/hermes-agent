@@ -704,6 +704,28 @@ function listChangeSets(workspaceRoot) {
   return { ok: true, value: manifest.changesets }
 }
 
+// Persists a full, already-mutated changeset object back to disk. Used by
+// workbench-changeset-apply.cjs (Slice E) after it mutates per-file
+// status/applyResult and the overall changeset status in memory — this
+// function owns the actual path/atomic-write mechanics (same discipline as
+// every other write in this file), the caller owns the apply/commit
+// semantics. Not used by updateChangeSetStatus above, which does its own
+// narrower read-patch-write for the Slice D status-transition path.
+function writeChangeSet(workspaceRoot, changeset) {
+  const relativePath = `${CHANGESETS_DIR}/${sanitizeId(changeset.id)}.json`
+  const fullPath = resolveWorkspacePath(workspaceRoot, relativePath)
+
+  atomicWriteJSON(fullPath, changeset)
+
+  updateManifest(workspaceRoot, (m) => {
+    const idx = m.changesets.findIndex((c) => c.id === changeset.id)
+    if (idx >= 0) m.changesets[idx].updatedAt = changeset.updatedAt
+    return m
+  })
+
+  return { ok: true, value: changeset }
+}
+
 // ---------------------------------------------------------------------------
 // Design Studio — SETTINGS only (Slice F, go-forward plan §5).
 //
@@ -1188,6 +1210,7 @@ module.exports = {
   readChangeSet,
   updateChangeSetStatus,
   listChangeSets,
+  writeChangeSet,
   readDesignSettings,
   writeDesignSettings,
   createWriteProject,

@@ -144,7 +144,34 @@ export const workbenchStrings = {
       rejected: 'Rejected',
       applied: 'Applied',
       archived: 'Archived'
-    } as Record<string, string>
+    } as Record<string, string>,
+
+    // Apply + Commit (Slice E) — a SEPARATE, additional pair of actions from
+    // accept/reject above. Apply is only offered once a changeset is
+    // `accepted`; it is the first Workbench action that writes to the user's
+    // real project files. Commit is a further separate, explicit action,
+    // never auto-triggered by Apply.
+    apply: 'Apply',
+    applying: 'Applying',
+    applyFailed: 'Failed to apply changeset',
+    applied: 'Changeset applied',
+    applyNote:
+      'Apply writes each file diff to your real project files. A file that changed on disk since this ChangeSet was proposed is skipped, never overwritten.',
+
+    fileResultNames: {
+      applied: 'Applied',
+      conflict: 'Conflict',
+      error: 'Error',
+      skipped: 'Skipped'
+    } as Record<string, string>,
+
+    commit: 'Commit',
+    committing: 'Committing',
+    commitFailed: 'Failed to commit changeset',
+    committed: 'Changeset committed',
+    committedFiles: (count: number) => `Committed ${count} file${count === 1 ? '' : 's'}`,
+    commitMessageLabel: 'Commit message',
+    commitNotRepoHint: 'Workspace is not a git repository — commit is unavailable.'
   },
 
   // Design Studio settings (Slice F — settings only; see go-forward plan §5

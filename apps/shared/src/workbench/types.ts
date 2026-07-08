@@ -192,6 +192,16 @@ export interface WorkbenchChangedFile {
   status: 'pending' | 'accepted' | 'rejected' | 'applied'
   language?: string
   binary?: boolean
+  // Slice E (ChangeSet Apply, go-forward plan §5 Slice E) — populated ONLY
+  // after an Apply attempt touches this file; absent before Apply ever runs,
+  // and never written by Accept/Reject (Slice D), which only ever changes
+  // `status` via a pure status transition. 'applied' mirrors
+  // `status === 'applied'`; 'conflict' means the mandatory beforeHash safety
+  // check refused to overwrite the file; 'error' means patch application
+  // itself failed (e.g. `git apply` rejected the diff, or a binary file was
+  // encountered); 'skipped' means there was no diff to apply.
+  applyResult?: 'applied' | 'conflict' | 'error' | 'skipped'
+  applyMessage?: string
 }
 
 export interface WorkbenchApprovalRecord {
@@ -210,6 +220,39 @@ export interface CreateWorkbenchChangeSetRequest {
   requirementId?: string
   planId?: string
   files: WorkbenchChangedFile[]
+}
+
+// ---------------------------------------------------------------------------
+// ChangeSet — Apply + Commit (Slice E, go-forward plan §5 Slice E)
+//
+// Apply is a SEPARATE, additional action from Accept/Reject (Slice D, which
+// remains a pure status transition — see changeset-panel.tsx's reviewNote
+// copy, unchanged by this slice). Apply requires the changeset to already be
+// in `accepted` status and writes real files under `workspaceRoot`; Commit is
+// a further separate, explicit action that stages+commits only the files
+// this changeset applied, never triggered automatically by Apply.
+// ---------------------------------------------------------------------------
+
+export interface ApplyWorkbenchChangeSetRequest {
+  workspaceRoot: string
+  changesetId: string
+}
+
+export interface ApplyWorkbenchChangeSetResponse {
+  changeset: WorkbenchChangeSet
+}
+
+export interface CommitWorkbenchChangeSetRequest {
+  workspaceRoot: string
+  changesetId: string
+  // Optional user-edited commit message; falls back to the changeset's title.
+  message?: string
+}
+
+export interface CommitWorkbenchChangeSetResponse {
+  committed: boolean
+  files: string[]
+  message: string
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +596,10 @@ export const WORKBENCH_IPC_CHANNELS = {
   changesetsCreate: 'hermes:workbench:changesets:create',
   changesetsRead: 'hermes:workbench:changesets:read',
   changesetsUpdate: 'hermes:workbench:changesets:update',
+  // Slice E — apply a changeset's file diffs to the REAL workspace, and a
+  // separate, explicit git commit of exactly the files that got applied.
+  changesetsApply: 'hermes:workbench:changesets:apply',
+  changesetsCommit: 'hermes:workbench:changesets:commit',
   designSettingsRead: 'hermes:workbench:design:settings:read',
   designSettingsWrite: 'hermes:workbench:design:settings:write',
   writeProjectsList: 'hermes:workbench:write:list',

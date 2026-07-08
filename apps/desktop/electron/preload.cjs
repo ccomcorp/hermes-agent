@@ -245,7 +245,12 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       list: payload => ipcRenderer.invoke('hermes:workbench:changesets:list', payload),
       create: payload => ipcRenderer.invoke('hermes:workbench:changesets:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:changesets:read', payload),
-      update: payload => ipcRenderer.invoke('hermes:workbench:changesets:update', payload)
+      update: payload => ipcRenderer.invoke('hermes:workbench:changesets:update', payload),
+      // Slice E — apply a changeset's file diffs to the REAL workspace
+      // (requires status 'accepted'), and a separate, explicit commit of
+      // exactly the files that got applied. Never auto-triggered by apply.
+      apply: payload => ipcRenderer.invoke('hermes:workbench:changesets:apply', payload),
+      commit: payload => ipcRenderer.invoke('hermes:workbench:changesets:commit', payload)
     },
     design: {
       settings: {
