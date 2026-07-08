@@ -1,0 +1,139 @@
+import { describe, it, expect } from 'vitest'
+import {
+  normalizeWorkbenchRelativePath,
+  isSafeWorkbenchRelativePath,
+  buildRequirementRelativeDir,
+  buildRequirementDraftRelativePath,
+  buildRequirementTraceRelativePath,
+  buildPlanRelativePath,
+  buildChangeSetRelativePath,
+  sanitizeId,
+  resolveWorkbenchPath
+} from './paths'
+
+describe('normalizeWorkbenchRelativePath', () => {
+  it('normalizes backslashes to forward slashes', () => {
+    expect(normalizeWorkbenchRelativePath('a\\b\\c')).toBe('a/b/c')
+  })
+
+  it('strips leading ./ and /', () => {
+    expect(normalizeWorkbenchRelativePath('./a/b')).toBe('a/b')
+    expect(normalizeWorkbenchRelativePath('/a/b')).toBe('a/b')
+    expect(normalizeWorkbenchRelativePath('././a')).toBe('a')
+  })
+
+  it('collapses duplicate slashes', () => {
+    expect(normalizeWorkbenchRelativePath('a//b///c')).toBe('a/b/c')
+  })
+
+  it('strips trailing slash', () => {
+    expect(normalizeWorkbenchRelativePath('a/b/')).toBe('a/b')
+  })
+
+  it('returns empty string for empty/whitespace input', () => {
+    expect(normalizeWorkbenchRelativePath('')).toBe('')
+    expect(normalizeWorkbenchRelativePath('   ')).toBe('')
+    expect(normalizeWorkbenchRelativePath(null as unknown as string)).toBe('')
+  })
+})
+
+describe('isSafeWorkbenchRelativePath', () => {
+  it('accepts normal relative paths', () => {
+    expect(isSafeWorkbenchRelativePath('requirements/abc/requirement.md')).toBe(true)
+    expect(isSafeWorkbenchRelativePath('plans/my-plan.md')).toBe(true)
+  })
+
+  it('accepts paths with backslash separators', () => {
+    expect(isSafeWorkbenchRelativePath('requirements\\abc\\requirement.md')).toBe(true)
+  })
+
+  it('rejects path traversal with ..', () => {
+    expect(isSafeWorkbenchRelativePath('../etc/passwd')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('a/../../b')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('a/../b')).toBe(true) // stays within root
+  })
+
+  it('rejects absolute paths', () => {
+    expect(isSafeWorkbenchRelativePath('C:/Users/test')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('\\\\server\\share')).toBe(false)
+  })
+
+  it('rejects empty strings', () => {
+    expect(isSafeWorkbenchRelativePath('')).toBe(false)
+    expect(isSafeWorkbenchRelativePath('   ')).toBe(false)
+  })
+})
+
+describe('buildRequirementRelativeDir', () => {
+  it('builds correct path', () => {
+    expect(buildRequirementRelativeDir('req-001')).toBe('.hermes/workbench/requirements/req-001')
+  })
+
+  it('sanitizes the ID', () => {
+    expect(buildRequirementRelativeDir('REQ 001!')).toBe('.hermes/workbench/requirements/req-001')
+  })
+})
+
+describe('buildRequirementDraftRelativePath', () => {
+  it('builds correct path', () => {
+    expect(buildRequirementDraftRelativePath('req-001')).toBe(
+      '.hermes/workbench/requirements/req-001/requirement.md'
+    )
+  })
+})
+
+describe('buildRequirementTraceRelativePath', () => {
+  it('builds correct path', () => {
+    expect(buildRequirementTraceRelativePath('req-001')).toBe(
+      '.hermes/workbench/requirements/req-001/trace.json'
+    )
+  })
+})
+
+describe('buildPlanRelativePath', () => {
+  it('builds correct path', () => {
+    expect(buildPlanRelativePath('plan-001')).toBe('.hermes/workbench/plans/plan-001.md')
+  })
+})
+
+describe('buildChangeSetRelativePath', () => {
+  it('builds correct path', () => {
+    expect(buildChangeSetRelativePath('cs-001')).toBe('.hermes/workbench/changesets/cs-001.json')
+  })
+})
+
+describe('sanitizeId', () => {
+  it('lowercases and replaces unsafe chars', () => {
+    expect(sanitizeId('My Req 001!')).toBe('my-req-001')
+  })
+
+  it('collapses multiple hyphens', () => {
+    expect(sanitizeId('a---b')).toBe('a-b')
+  })
+
+  it('strips leading/trailing hyphens', () => {
+    expect(sanitizeId('--a--')).toBe('a')
+  })
+
+  it('handles empty input', () => {
+    expect(sanitizeId('')).toBe('')
+  })
+})
+
+describe('resolveWorkbenchPath', () => {
+  it('joins workspace root and relative path', () => {
+    expect(resolveWorkbenchPath('C:/proj', 'requirements/abc/requirement.md')).toBe(
+      'C:/proj/requirements/abc/requirement.md'
+    )
+  })
+
+  it('handles trailing slash in workspace root', () => {
+    expect(resolveWorkbenchPath('C:/proj/', 'requirements/abc')).toBe(
+      'C:/proj/requirements/abc'
+    )
+  })
+
+  it('normalizes backslashes in workspace root', () => {
+    expect(resolveWorkbenchPath('C:\\proj', 'a/b')).toBe('C:/proj/a/b')
+  })
+})
