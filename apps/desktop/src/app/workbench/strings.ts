@@ -68,11 +68,47 @@ export const workbenchStrings = {
     archived: 'Archived'
   } as Record<string, string>,
 
-  // Right rail (Plans/ChangeSets land in a later slice).
-  traceHeading: 'Trace & linked artifacts',
-  traceStub: 'Plans, ChangeSets, and other linked artifacts arrive in a later slice.',
-  traceHistoryHeading: 'History',
-  traceEmpty: 'No trace history yet.',
+  // Right rail — Workbench Plans linked to the open requirement (Slice C).
+  // ChangeSets/Design/Write/Workflow artifacts remain later slices.
+  plans: {
+    heading: 'Plans',
+    selectRequirementTitle: 'No requirement open',
+    selectRequirementDesc: 'Open a requirement to see and create its Plans.',
+    selectPlanPrompt: 'Select a plan to view it, or create a new one.',
+
+    loading: 'Loading plans',
+    loadFailed: 'Failed to load plans',
+    openFailed: 'Failed to open plan',
+    newPlan: 'New plan',
+    emptyTitle: 'No plans yet',
+    emptyDesc: 'Create the first Workbench Plan for this requirement.',
+
+    createTitle: 'New plan',
+    createDialogDesc:
+      'Workbench Plans capture how a requirement will be approached, in Markdown. Creating a plan writes a file only — it never runs or implements anything.',
+    titleLabel: 'Title (optional)',
+    titlePlaceholder: 'Plan title',
+    markdownLabel: 'Plan (Markdown)',
+    markdownPlaceholder: '# Describe the approach…',
+    defaultMarkdown: '# Plan\n\n> Describe the approach here.\n',
+    create: 'Create',
+    creating: 'Creating',
+    createFailed: 'Failed to create plan',
+    createdTitle: (title: string) => `"${title}" created`,
+
+    refine: 'Refine',
+    refining: 'Refining',
+    refineTitle: 'Refine plan',
+    refineDialogDesc:
+      'Refine writes a NEW version linked to this one — the current version is kept, never overwritten.',
+    refineFailed: 'Failed to refine plan',
+    refined: (version: number) => `Refined to v${version}`,
+
+    revealFile: 'Reveal file',
+    versionBadge: (version: number) => `v${version}`,
+    supersedes: (priorId: string) => `Supersedes ${priorId}`,
+    historyHeading: 'Version history'
+  },
 
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).

@@ -22,6 +22,7 @@ import { $currentCwd } from '@/store/session'
 import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
+import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
 import { workbenchStrings as s } from './strings'
@@ -119,11 +120,14 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
           </div>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_16rem]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_20rem]">
           <RequirementPanel workspaceRoot={workspaceRoot} />
-          <aside className="hidden min-h-0 flex-col overflow-y-auto border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
-            <h2 className="text-xs font-semibold text-foreground">{s.traceHeading}</h2>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground/70">{s.traceStub}</p>
+          {/* Plans linked to whichever requirement RequirementPanel has open
+              (Slice C) — widened from the Slice B trace stub's 16rem so the
+              plan editor/version history has room; still the same right-rail
+              region, not a redesign of the shell's two-column layout. */}
+          <aside className="hidden min-h-0 flex-col border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
+            <PlanPanel workspaceRoot={workspaceRoot} />
           </aside>
         </div>
       )}

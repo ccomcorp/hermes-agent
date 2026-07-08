@@ -13,6 +13,7 @@
 // workspace root plus a requirement id, never a path.
 import type {
   WorkbenchManifestEntry,
+  WorkbenchPlan,
   WorkbenchRequirement,
   WorkbenchRequirementStatus,
   WorkbenchRequirementTrace
@@ -78,4 +79,76 @@ export function updateRequirement(
   input: UpdateWorkbenchRequirementInput
 ): Promise<WorkbenchIpcResult<WorkbenchRequirementUpdateResult>> {
   return window.hermesDesktop.workbench.requirements.update(input)
+}
+
+// ---------------------------------------------------------------------------
+// Plans (Slice C)
+//
+// `plans:list` does not filter server-side even when a requirementId is
+// passed (see workbench-artifacts.cjs `listPlans` — it's a TODO there) and the
+// manifest-entry shape it returns has no requirementId field (go-forward plan
+// §3.6). "Plans linked to this requirement" is derived in store.ts by
+// cross-referencing the open requirement's trace.linkedPlanIds against the
+// full list this returns, not by trusting server-side filtering.
+// ---------------------------------------------------------------------------
+
+export interface WorkbenchPlanDetail {
+  id: string
+  markdown: string
+  relativePath: string
+  contentHash: string
+  byteSize: number
+  savedAt: string
+  version: number
+  supersedesPlanId?: string
+}
+
+export interface CreateWorkbenchPlanInput {
+  workspaceRoot: string
+  markdown: string
+  title?: string
+  sourceRequest?: string
+  requirementId?: string
+}
+
+// Refine keeps history (locked decision §3.2): this is never an overwrite. The
+// backend writes a NEW plan version file linked to `planId` via
+// `supersedesPlanId` and returns that new version's id/version in the result —
+// callers must treat the response `plan.id` as the new "current" plan, not the
+// one they passed in.
+export interface RefineWorkbenchPlanInput {
+  workspaceRoot: string
+  planId: string
+  markdown: string
+  title?: string
+  sourceRequest?: string
+  requirementId?: string
+}
+
+export function listPlans(
+  workspaceRoot: string,
+  requirementId?: string
+): Promise<WorkbenchIpcResult<WorkbenchManifestEntry[]>> {
+  return window.hermesDesktop.workbench.plans.list({ workspaceRoot, requirementId })
+}
+
+// `operation: 'draft'` is fixed here — this function only ever creates a first
+// version. It is a pure file write: no command, tool call, or implementation
+// action is triggered by creating a plan.
+export function createPlan(
+  input: CreateWorkbenchPlanInput
+): Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>> {
+  return window.hermesDesktop.workbench.plans.create({ ...input, operation: 'draft' })
+}
+
+export function readPlan(workspaceRoot: string, planId: string): Promise<WorkbenchIpcResult<WorkbenchPlanDetail>> {
+  return window.hermesDesktop.workbench.plans.read({ workspaceRoot, planId })
+}
+
+// Also a pure file write — routes to the versioned `plans:update` channel,
+// never to any run/execute API.
+export function refinePlan(
+  input: RefineWorkbenchPlanInput
+): Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>> {
+  return window.hermesDesktop.workbench.plans.update({ ...input, operation: 'refine' })
 }

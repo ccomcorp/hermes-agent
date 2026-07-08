@@ -1,6 +1,6 @@
 /**
- * Workbench — Requirement Units backed by the `.hermes/workbench` artifact
- * store (Slice B of the go-forward plan: Requirements only — Plans,
+ * Workbench — Requirement Units and Workbench Plans backed by the
+ * `.hermes/workbench` artifact store (Slices B+C of the go-forward plan —
  * ChangeSets, Design Studio, Write Workspace, and Workflow Designer are later
  * slices). Thin route root: layout lives in shell.tsx, state in store.ts.
  */

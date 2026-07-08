@@ -36,11 +36,13 @@ import { createRequirement, listRequirements, readRequirement, updateRequirement
 import type { WorkbenchRequirementDetail } from './api'
 import {
   $workbenchActiveRequirementId,
+  $workbenchActiveRequirementTrace,
   $workbenchListError,
   $workbenchListLoading,
   $workbenchRequirements,
   patchWorkbenchManifestEntry,
   setWorkbenchActiveRequirementId,
+  setWorkbenchActiveRequirementTrace,
   setWorkbenchListError,
   setWorkbenchListLoading,
   setWorkbenchRequirements,
@@ -123,6 +125,10 @@ export function RequirementPanel({ workspaceRoot }: RequirementPanelProps) {
           setDraftMarkdown(res.value.markdown)
           setDraftTitle(res.value.trace?.title ?? requirementId)
           setDraftStatus(res.value.trace?.status ?? 'draft')
+          // Mirror the trace into the store so plan-panel.tsx (a sibling, not
+          // a child) can derive "plans linked to this requirement" from
+          // trace.linkedPlanIds.
+          setWorkbenchActiveRequirementTrace(res.value.trace)
         } else {
           notify({ kind: 'error', title: s.openFailed, message: res.message })
         }
@@ -166,6 +172,10 @@ export function RequirementPanel({ workspaceRoot }: RequirementPanelProps) {
           draftRelativePath: requirement.draftRelativePath,
           traceRelativePath: requirement.traceRelativePath
         })
+        // setWorkbenchActiveRequirementId() above already clears the trace
+        // mirror for the previous requirement — set it to the freshly created
+        // one now that it exists.
+        setWorkbenchActiveRequirementTrace(trace)
         setDraftMarkdown(createMarkdown || `# ${title}\n\n> Describe the requirement here.\n`)
         setDraftTitle(title)
         setDraftStatus('draft')
@@ -224,6 +234,21 @@ export function RequirementPanel({ workspaceRoot }: RequirementPanelProps) {
         }
 
         patchWorkbenchManifestEntry(activeId, patch)
+
+        // Keep the trace mirror's title/status current too — linkedPlanIds
+        // are untouched by a requirement save, so this only refreshes the
+        // fields updateRequirement() actually changed.
+        const currentTrace = $workbenchActiveRequirementTrace.get()
+
+        if (currentTrace) {
+          setWorkbenchActiveRequirementTrace({
+            ...currentTrace,
+            status: draftStatus,
+            title: trimmedTitle || currentTrace.title,
+            updatedAt: res.value.updatedAt
+          })
+        }
+
         notify({ kind: 'success', title: s.saved, message: '' })
       } else {
         notify({ kind: 'error', title: s.saveFailed, message: res.message })
