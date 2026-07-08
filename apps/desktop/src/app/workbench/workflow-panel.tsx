@@ -1,29 +1,42 @@
 /**
- * Workflow Designer panel — Slice M (go-forward plan §5). AUTHORING ONLY.
+ * Workflow Designer panel — Slice M (authoring, go-forward plan §5) + Slice N
+ * (bounded manual Run — this is the first execution capability in the whole
+ * Workbench feature, gated on a dedicated multi-method risk elicitation
+ * before it was built; see workflow-run-engine.ts for the full rationale).
  *
  * A WorkbenchWorkflow is a graph (nodes + edges) that is created, saved,
- * loaded, and edited — and NEVER RUN. There is no "Run" button, no execution
- * engine, and no interpreter for any node's `config` anywhere in this file.
- * The canvas is `@xyflow/react` (React Flow), the sourced dependency choice
- * documented in 00-go-forward-plan.md (Kun's own confirmed `^12.11.0`).
+ * loaded, and edited. The canvas is `@xyflow/react` (React Flow), the sourced
+ * dependency choice documented in 00-go-forward-plan.md (Kun's own confirmed
+ * `^12.11.0`).
  *
  * The node palette offers exactly 3 creatable kinds: Trigger (`manual_trigger`,
- * an inert authoring placeholder — it represents "this is where a run would
- * start" and does nothing when clicked beyond normal graph editing),
- * Condition, and Output. `WorkbenchWorkflowNodeKind` has 12 declared kinds in
- * `@hermes/shared` — this UI intentionally exposes only 3 of them; the other
- * 9 (`ai_agent`, `code`, `http_request`, `webhook_trigger`,
- * `schedule_trigger`, `human_approval`, `delay`, `loop`, `subworkflow`) are
- * NOT offered here, even as disabled stubs. The backend validator stays
+ * the entry point a Run starts from), Condition, and Output.
+ * `WorkbenchWorkflowNodeKind` has 12 declared kinds in `@hermes/shared` — this
+ * UI intentionally exposes only 3 of them; the other 9 (`ai_agent`, `code`,
+ * `http_request`, `webhook_trigger`, `schedule_trigger`, `human_approval`,
+ * `delay`, `loop`, `subworkflow`) are NOT offered here, even as disabled
+ * stubs, and `runWorkflow` (workflow-run-engine.ts) refuses to run any saved
+ * graph that somehow contains one of them. The backend validator stays
  * permissive of all 12 kinds (see apps/shared/src/workbench/validators.ts) —
- * this is a UI-only restriction.
+ * this is a UI/engine-only restriction.
  *
  * Node/edge drag, connect, and delete all go through React Flow's own
  * `onNodesChange`/`onEdgesChange`/`onConnect` handlers plus `applyNodeChanges`/
  * `applyEdgeChanges`/`addEdge` — no hand-rolled graph math. A Condition node's
- * expression text is stored in `config.expression` and a display-only
- * placeholder is shown for `config.label` on an Output node; neither is ever
- * evaluated by any code in this file.
+ * comparison is stored as STRUCTURED fields (`config.leftExpr`/`operator`/
+ * `rightValue`/`caseSensitive` — see workflow-run-engine.ts) — this REPLACES
+ * the old free-text `config.expression` shape shipped in Slice M; that field
+ * is no longer written by this UI and is never read by the run engine (an
+ * old saved workflow with only `config.expression` loads fine and simply
+ * evaluates as "not configured yet", never as code). A display-only
+ * placeholder is shown for `config.label` on an Output node.
+ *
+ * Running a workflow (`handleRun` in `WorkflowEditor`) only ever calls the
+ * pure, synchronous, in-memory `runWorkflow` from workflow-run-engine.ts — no
+ * model/skill/agent/HTTP/terminal/git/cron/child_process API is reachable
+ * from this file. The Output node's "received value" is shown in an ephemeral
+ * run-log dialog (`RunResultDialog`) that is local React state, cleared on
+ * dialog close or the next Run — nothing from a run is ever written to disk.
  *
  * No raw filesystem path ever appears here — every call goes through a
  * workflow id plus the workspace root the shell already validated.
@@ -63,6 +76,8 @@ import {
   upsertWorkbenchWorkflowManifestEntry
 } from './store'
 import { workbenchStrings as s } from './strings'
+import { CONDITION_OPERATORS, readConditionConfig, runWorkflow } from './workflow-run-engine'
+import type { RunWorkflowResult } from './workflow-run-engine'
 
 // The 3 creatable kinds — see the module comment above for the full scope
 // boundary on why the other 9 declared kinds are never offered here.
@@ -114,26 +129,71 @@ function OutputNode({ data }: NodeProps<WorkflowNode>) {
   )
 }
 
+// Structured comparison fields — REPLACES the old free-text `config.expression`
+// input from Slice M (see the module docstring and workflow-run-engine.ts).
+// An old saved node with only `config.expression` simply shows these fields
+// empty/unset ("no comparison configured yet") rather than crashing.
 function ConditionNode({ data, id }: NodeProps<WorkflowNode>) {
   const { updateNodeConfig } = useContext(WorkflowNodeActionsContext)
-  const expression = typeof data.config.expression === 'string' ? data.config.expression : ''
+  const { caseSensitive, leftExpr, operator, rightValue } = readConditionConfig(data.config)
 
   return (
-    <div className="min-w-40 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-chat-surface-background) px-3 py-2 text-xs shadow-sm">
+    <div className="min-w-56 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-chat-surface-background) px-3 py-2 text-xs shadow-sm">
       <Handle position={Position.Left} type="target" />
       <div className="flex items-center gap-1.5 font-medium text-foreground">
         <Codicon name="git-branch" size="0.75rem" />
         {data.name}
       </div>
-      <label className="mt-1.5 block text-[0.62rem] text-muted-foreground/60">
-        {s.workflow.conditionExpressionLabel}
+
+      <label className="nodrag mt-1.5 block text-[0.62rem] text-muted-foreground/60">
+        {s.workflow.conditionLeftLabel}
         <input
-          className="nodrag mt-0.5 w-full rounded border border-(--ui-stroke-tertiary) bg-transparent px-1.5 py-1 text-[0.68rem] text-foreground outline-none"
-          onChange={event => updateNodeConfig(id, { expression: event.target.value })}
-          placeholder={s.workflow.conditionExpressionPlaceholder}
-          value={expression}
+          className="mt-0.5 w-full rounded border border-(--ui-stroke-tertiary) bg-transparent px-1.5 py-1 text-[0.68rem] text-foreground outline-none"
+          onChange={event => updateNodeConfig(id, { leftExpr: event.target.value })}
+          placeholder={s.workflow.conditionLeftPlaceholder}
+          value={leftExpr ?? ''}
         />
       </label>
+
+      <label className="nodrag mt-1.5 block text-[0.62rem] text-muted-foreground/60">
+        {s.workflow.conditionOperatorLabel}
+        <select
+          className="mt-0.5 w-full rounded border border-(--ui-stroke-tertiary) bg-transparent px-1.5 py-1 text-[0.68rem] text-foreground outline-none"
+          onChange={event => updateNodeConfig(id, { operator: event.target.value })}
+          value={operator ?? ''}
+        >
+          <option disabled value="">
+            {s.workflow.conditionOperatorPlaceholder}
+          </option>
+          {CONDITION_OPERATORS.map(op => (
+            <option key={op} value={op}>
+              {s.workflow.operatorNames[op] ?? op}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {operator !== 'is_empty' && (
+        <label className="nodrag mt-1.5 block text-[0.62rem] text-muted-foreground/60">
+          {s.workflow.conditionRightLabel}
+          <input
+            className="mt-0.5 w-full rounded border border-(--ui-stroke-tertiary) bg-transparent px-1.5 py-1 text-[0.68rem] text-foreground outline-none"
+            onChange={event => updateNodeConfig(id, { rightValue: event.target.value })}
+            placeholder={s.workflow.conditionRightPlaceholder}
+            value={rightValue ?? ''}
+          />
+        </label>
+      )}
+
+      <label className="nodrag mt-1.5 flex items-center gap-1 text-[0.62rem] text-muted-foreground/60">
+        <input
+          checked={caseSensitive ?? false}
+          onChange={event => updateNodeConfig(id, { caseSensitive: event.target.checked })}
+          type="checkbox"
+        />
+        {s.workflow.conditionCaseSensitiveLabel}
+      </label>
+
       <Handle position={Position.Right} type="source" />
     </div>
   )
@@ -171,6 +231,31 @@ function toFlowEdges(edges: WorkbenchWorkflowEdge[]): Edge[] {
   }))
 }
 
+// Inverse of toFlowNodes/toFlowEdges — used by both Save (persist to disk)
+// and Run (in-memory only, see workflow-run-engine.ts) so the two always
+// agree on what the current canvas state actually is.
+function fromFlowNodes(nodes: WorkflowNode[]): WorkbenchWorkflowNode[] {
+  return nodes.map(node => ({ config: node.data.config, id: node.id, name: node.data.name, position: node.position, type: node.data.kind }))
+}
+
+function fromFlowEdges(edges: Edge[]): WorkbenchWorkflowEdge[] {
+  return edges.map(edge => ({
+    id: edge.id,
+    source: edge.source,
+    ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
+    target: edge.target,
+    ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {})
+  }))
+}
+
+const RUN_STATUS_ICON: Record<RunWorkflowResult['status'], string> = {
+  completed: 'check',
+  halted_cycle: 'warning',
+  halted_max_steps: 'warning',
+  nothing_to_run: 'circle-slash',
+  refused_unsupported_node: 'error'
+}
+
 interface WorkflowEditorProps {
   initial: WorkbenchWorkflow
   onSaved: (result: UpdateWorkbenchWorkflowResult) => void
@@ -188,6 +273,11 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
   const [edges, setEdges] = useState<Edge[]>(() => toFlowEdges(initial.edges))
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Run result — transient, view-local state only (requirement 3 of Slice
+  // N): never persisted, cleared whenever a new run starts or the dialog is
+  // closed. See handleRun/RunResultDialog below.
+  const [runResult, setRunResult] = useState<null | RunWorkflowResult>(null)
+  const [runDialogOpen, setRunDialogOpen] = useState(false)
 
   useEffect(() => {
     setTitle(initial.title)
@@ -238,25 +328,9 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
     setSaving(true)
 
     try {
-      const nodesForSave: WorkbenchWorkflowNode[] = nodes.map(node => ({
-        config: node.data.config,
-        id: node.id,
-        name: node.data.name,
-        position: node.position,
-        type: node.data.kind
-      }))
-
-      const edgesForSave: WorkbenchWorkflowEdge[] = edges.map(edge => ({
-        id: edge.id,
-        source: edge.source,
-        ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
-        target: edge.target,
-        ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {})
-      }))
-
       const res = await updateWorkflow({
-        edges: edgesForSave,
-        nodes: nodesForSave,
+        edges: fromFlowEdges(edges),
+        nodes: fromFlowNodes(nodes),
         title: title.trim() || initial.title,
         workflowId: initial.id,
         workspaceRoot
@@ -275,6 +349,30 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
       setSaving(false)
     }
   }, [edges, initial.id, initial.title, nodes, onSaved, title, workspaceRoot])
+
+  // Runs the CURRENT in-editor graph (including unsaved changes — testing a
+  // workflow does not require saving it first) through the pure, synchronous,
+  // in-memory engine in workflow-run-engine.ts. No IPC call is made; nothing
+  // here can touch disk, network, or a real project file. Any new run first
+  // clears the previous result (requirement 3 — ephemeral only).
+  const handleRun = useCallback(() => {
+    setRunResult(null)
+
+    try {
+      const result = runWorkflow(fromFlowNodes(nodes), fromFlowEdges(edges))
+
+      setRunResult(result)
+      setRunDialogOpen(true)
+    } catch (err) {
+      notifyError(err, s.workflow.runFailed)
+    }
+  }, [edges, nodes])
+
+  const closeRunDialog = useCallback(() => {
+    setRunDialogOpen(false)
+    // Cleared on close, not just on the next run — requirement 3.
+    setRunResult(null)
+  }, [])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
@@ -298,6 +396,10 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
           <Button onClick={() => addNode('output')} size="sm" variant="outline">
             <Codicon name="symbol-event" size="0.8125rem" />
             {s.workflow.addOutput}
+          </Button>
+          <Button onClick={handleRun} size="sm" variant="outline">
+            <Codicon name="debug-start" size="0.8125rem" />
+            {s.workflow.run}
           </Button>
           <Button disabled={saving || !dirty} onClick={() => void handleSave()} size="sm">
             <Codicon name={saving ? 'loading' : 'save'} size="0.875rem" spinning={saving} />
@@ -323,7 +425,79 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
           </ReactFlow>
         </WorkflowNodeActionsContext.Provider>
       </div>
+
+      <RunResultDialog onClose={closeRunDialog} open={runDialogOpen} result={runResult} />
     </div>
+  )
+}
+
+// Ephemeral run-log dialog — requirement 3 of Slice N: shows what the run did
+// (path taken, per-Output received value, completed vs halted) as transient
+// React state only. Nothing here is written to disk; closing the dialog (or
+// starting a new run) clears the underlying result in WorkflowEditor.
+function RunResultDialog({ onClose, open, result }: { onClose: () => void; open: boolean; result: null | RunWorkflowResult }) {
+  return (
+    <Dialog onOpenChange={next => !next && onClose()} open={open}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{s.workflow.runResultHeading}</DialogTitle>
+          <DialogDescription>
+            {result ? (
+              <span className="flex items-center gap-1.5">
+                <Codicon name={RUN_STATUS_ICON[result.status]} size="0.8125rem" />
+                {s.workflow.runStatusNames[result.status]}
+                {' — '}
+                {result.message}
+              </span>
+            ) : (
+              s.workflow.runResultEmpty
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        {result && (
+          <div className="grid max-h-96 gap-3 overflow-y-auto text-xs">
+            <div>
+              <div className="mb-1 font-medium text-foreground">{s.workflow.runStepsHeading}</div>
+              {result.steps.length === 0 ? (
+                <p className="text-muted-foreground/60">{s.workflow.runStepsEmpty}</p>
+              ) : (
+                <ol className="grid gap-1">
+                  {result.steps.map((step, index) => (
+                    <li className="rounded border border-(--ui-stroke-tertiary) px-2 py-1" key={`${step.nodeId}-${index}`}>
+                      <span className="font-medium text-foreground">{step.name}</span>
+                      <span className="text-muted-foreground/60"> ({step.kind}) — {step.detail}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-1 font-medium text-foreground">{s.workflow.runOutputsHeading}</div>
+              {result.outputs.length === 0 ? (
+                <p className="text-muted-foreground/60">{s.workflow.runOutputsEmpty}</p>
+              ) : (
+                <ul className="grid gap-1">
+                  {result.outputs.map(output => (
+                    <li className="rounded border border-(--ui-stroke-tertiary) px-2 py-1" key={output.nodeId}>
+                      <span className="font-medium text-foreground">{output.name}</span>
+                      <span className="text-muted-foreground/60"> — {output.receivedValue}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button onClick={onClose} variant="outline">
+            {s.cancel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -257,6 +257,18 @@ export const workbenchStrings = {
     viewPreview: 'Preview',
     viewSplit: 'Split',
 
+    // Export (Slice L) — HTML/PDF/DOCX/PNG, saved only to a path the user
+    // picks via the OS save dialog. No quick-actions/inline-edit/retrieval
+    // copy belongs here — that is Slice K.
+    export: 'Export',
+    exporting: 'Exporting',
+    exportHtml: 'Export as HTML',
+    exportPdf: 'Export as PDF',
+    exportDocx: 'Export as Word (.docx)',
+    exportPng: 'Export as PNG',
+    exportFailed: 'Failed to export document',
+    exported: (path: string) => `Exported to ${path}`,
+
     recentEditsHeading: 'Recent edits',
     recentEditsEmpty: 'No saves yet.',
     recentEditAgo: (ageMs: number) => {
@@ -280,13 +292,13 @@ export const workbenchStrings = {
     }
   },
 
-  // Workflow Designer (Slice M — AUTHORING ONLY; see go-forward plan §5
-  // Slice M/N split). A workflow is a graph (nodes + edges) that is created,
-  // saved, loaded, and edited — it is NEVER RUN. No "Run" copy, no execution
-  // status copy belongs here — that is Slice N, not started. The palette only
-  // ever offers 3 node kinds (Trigger/Condition/Output); the other 9 declared
-  // WorkbenchWorkflowNodeKind values are intentionally not named in this
-  // catalog.
+  // Workflow Designer (Slice M authoring + Slice N bounded manual Run; see
+  // go-forward plan §5). A workflow is a graph (nodes + edges) that is
+  // created, saved, loaded, edited, and — as of Slice N — run manually
+  // against a hard step cap with a cycle guard (workflow-run-engine.ts). The
+  // palette only ever offers 3 node kinds (Trigger/Condition/Output); the
+  // other 9 declared WorkbenchWorkflowNodeKind values are intentionally not
+  // named in this catalog, and a Run refuses to execute any of them.
   workflow: {
     heading: 'Workflows',
     navLabel: 'Workflows',
@@ -328,13 +340,54 @@ export const workbenchStrings = {
       output: 'Output'
     } as Record<string, string>,
 
-    conditionExpressionLabel: 'Expression (not evaluated)',
-    conditionExpressionPlaceholder: 'e.g. status == "approved"',
+    // Structured condition comparison — REPLACES the old free-text
+    // "Expression (not evaluated)" field from Slice M. See
+    // workflow-run-engine.ts for the fixed operator enum and comparison
+    // semantics (plain field comparison, never evaluated as code).
+    conditionLeftLabel: 'Left value',
+    conditionLeftPlaceholder: 'e.g. approved',
+    conditionOperatorLabel: 'Operator',
+    conditionOperatorPlaceholder: 'Choose an operator',
+    conditionRightLabel: 'Compare to',
+    conditionRightPlaceholder: 'e.g. approved',
+    conditionCaseSensitiveLabel: 'Case sensitive',
+
+    operatorNames: {
+      equals: 'Equals',
+      not_equals: 'Not equals',
+      contains: 'Contains',
+      greater_than: 'Greater than',
+      less_than: 'Less than',
+      is_empty: 'Is empty'
+    } as Record<string, string>,
+
     outputLabelLabel: 'Label',
     outputLabelPlaceholder: 'e.g. Final result',
 
     deleteNode: 'Delete node',
-    deleteEdge: 'Delete connection'
+    deleteEdge: 'Delete connection',
+
+    // Manual Run (Slice N) — a bounded, local, in-memory graph traversal;
+    // see workflow-run-engine.ts. No model/skill/agent/HTTP/terminal/git/
+    // cron/child_process API is ever reachable from a Run. Nothing from a
+    // run is written to disk — the result is ephemeral React state, cleared
+    // on dialog close or the next run.
+    run: 'Run',
+    runFailed: 'Run failed',
+    runResultHeading: 'Run result',
+    runResultEmpty: 'No run yet.',
+    runStepsHeading: 'Steps',
+    runStepsEmpty: 'No node was reached.',
+    runOutputsHeading: 'Outputs',
+    runOutputsEmpty: 'No output node was reached.',
+
+    runStatusNames: {
+      completed: 'Completed',
+      halted_cycle: 'Stopped — cycle detected',
+      halted_max_steps: 'Stopped — max steps reached',
+      nothing_to_run: 'Nothing to run',
+      refused_unsupported_node: 'Run refused'
+    } as Record<string, string>
   },
 
   // Status bar (each item labeled and shown separately — profiles are not a
