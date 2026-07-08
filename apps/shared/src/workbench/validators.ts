@@ -19,7 +19,9 @@ import type {
   WorkbenchPlanOperation,
   WorkbenchDesignSettings,
   WorkbenchWorkflowNode,
-  WorkbenchWorkflowNodeKind
+  WorkbenchWorkflowNodeKind,
+  WorkbenchWriteExportFormat,
+  WorkbenchWriteExportRequest
 } from './types'
 import { isSafeWorkbenchRelativePath } from './paths'
 
@@ -400,6 +402,54 @@ export function validateUpdateWriteProjectRequest(
 
   const mdCheck = validateMarkdown(input.markdown, true)
   if (!mdCheck.ok) return mdCheck
+
+  if (input.title) {
+    const titleCheck = validateTitle(input.title)
+    if (!titleCheck.ok) return titleCheck
+  }
+
+  return ok()
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace export validators (Slice L, go-forward plan §5)
+//
+// The export target path always comes from the OS save dialog — nothing here
+// validates or constructs a filesystem path. `workspaceRoot`/`writeProjectId`
+// get the same fail-closed checks every other request gets (defense in depth
+// backing the UI's "no open write project -> no export action" rule); `html`
+// is the already-rendered standalone document the renderer built.
+// ---------------------------------------------------------------------------
+
+const VALID_WRITE_EXPORT_FORMATS: readonly WorkbenchWriteExportFormat[] = ['html', 'pdf', 'docx', 'png']
+
+// A rendered export document is markdown-derived HTML, not user-pasted raw
+// text, so it can legitimately be a few times larger than MAX_MARKDOWN_LENGTH
+// once tags/CSS are included — 5 MB is a generous ceiling that only exists to
+// reject pathological/malicious payloads.
+const MAX_EXPORT_HTML_LENGTH = 5_000_000
+
+export function validateExportWriteProjectRequest(
+  input: WorkbenchWriteExportRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  if (!input.writeProjectId || !input.writeProjectId.trim()) {
+    return fail('writeProjectId is required', 'MISSING_WRITE_PROJECT_ID')
+  }
+
+  if (!input.format || !VALID_WRITE_EXPORT_FORMATS.includes(input.format)) {
+    return fail('invalid export format', 'INVALID_FORMAT')
+  }
+
+  if (!input.html || typeof input.html !== 'string' || !input.html.trim()) {
+    return fail('html is required', 'MISSING_HTML')
+  }
+
+  if (input.html.length > MAX_EXPORT_HTML_LENGTH) {
+    return fail('html exceeds size limit', 'HTML_TOO_LARGE')
+  }
 
   if (input.title) {
     const titleCheck = validateTitle(input.title)

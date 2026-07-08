@@ -7,9 +7,10 @@
 //
 // Do not trust renderer payloads. Every handler validates before writing.
 
-const { ipcMain } = require('electron')
+const { ipcMain, BrowserWindow } = require('electron')
 
 const store = require('./workbench-artifacts.cjs')
+const { exportWriteDocument } = require('./workbench-write-export.cjs')
 
 // Shared validators — imported from the compiled shared package.
 // In the Electron main process (.cjs context) we can't import .ts directly,
@@ -130,6 +131,16 @@ function validateDesignSettings(settings) {
 
   return { ok: true }
 }
+
+// ---------------------------------------------------------------------------
+// Write Workspace export validators (mirror of validateExportWriteProjectRequest
+// in apps/shared/src/workbench/validators.ts). Slice L. The export target path
+// always comes from the OS save dialog inside workbench-write-export.cjs —
+// nothing here validates or constructs a filesystem path.
+// ---------------------------------------------------------------------------
+
+const VALID_WRITE_EXPORT_FORMATS = ['html', 'pdf', 'docx', 'png']
+const MAX_EXPORT_HTML_LENGTH = 5_000_000
 
 // ---------------------------------------------------------------------------
 // Workflow validators (mirror of validateCreate/UpdateWorkflowRequest in
@@ -632,6 +643,58 @@ function registerWorkbenchIpc() {
     } catch (err) {
       return { ok: false, message: 'Failed to update write project: ' + err.message, code: 'INTERNAL_ERROR' }
     }
+  })
+
+  // -- Write Workspace export (Slice L) --------------------------------------
+  //
+  // Renders to HTML/PDF/DOCX/PNG and writes ONLY to a path the user picks via
+  // the OS save dialog — see workbench-write-export.cjs. `workspaceRoot`/
+  // `writeProjectId` get the same fail-closed validation as every other
+  // request; they are never used to build the target path here.
+
+  // Deliberately NOT declared `async`: every validation failure below returns
+  // a plain (synchronous) result, exactly like every other handler in this
+  // file, and only the final success path returns a Promise (which
+  // `ipcMain.handle` awaits natively). This keeps validation-denial testing
+  // synchronous like the rest of this suite instead of forcing every caller
+  // of this one channel to await a Promise just to see a validation error.
+  ipcMain.handle('hermes:workbench:write:export', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
+      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
+    }
+
+    if (!payload.format || !VALID_WRITE_EXPORT_FORMATS.includes(payload.format)) {
+      return { ok: false, message: 'invalid export format', code: 'INVALID_FORMAT' }
+    }
+
+    if (!payload.html || typeof payload.html !== 'string' || !payload.html.trim()) {
+      return { ok: false, message: 'html is required', code: 'MISSING_HTML' }
+    }
+
+    if (payload.html.length > MAX_EXPORT_HTML_LENGTH) {
+      return { ok: false, message: 'html exceeds size limit', code: 'HTML_TOO_LARGE' }
+    }
+
+    if (payload.title) {
+      const titleCheck = validateTitle(payload.title)
+      if (!isOk(titleCheck)) return fail(titleCheck)
+    }
+
+    const parentWindow = BrowserWindow.getFocusedWindow()
+
+    return exportWriteDocument(
+      { format: payload.format, html: payload.html, title: payload.title || 'export' },
+      { parentWindow }
+    )
+      .then(result => normalize(result))
+      .catch(err => ({ ok: false, message: 'Failed to export write project: ' + err.message, code: 'INTERNAL_ERROR' }))
   })
 
   // -- Workflow Designer — AUTHORING ONLY (Slice M) --------------------------

@@ -63,6 +63,7 @@ const CH = {
   writeCreate: 'hermes:workbench:write:create',
   writeRead: 'hermes:workbench:write:read',
   writeUpdate: 'hermes:workbench:write:update',
+  writeExport: 'hermes:workbench:write:export',
   wfList: 'hermes:workbench:workflows:list',
   wfCreate: 'hermes:workbench:workflows:create',
   wfRead: 'hermes:workbench:workflows:read',
@@ -363,6 +364,60 @@ test('write project handlers are rejected with structured errors on invalid payl
 })
 
 // ---------------------------------------------------------------------------
+// Write Workspace export (Slice L)
+//
+// Only validation-denial paths are exercised here: a valid payload reaches
+// `BrowserWindow.getFocusedWindow()` / `dialog.showSaveDialog`, which this
+// harness's fake `electron` module (ipcMain only, see the top of this file)
+// does not provide. Real export behavior (dialog + hidden BrowserWindow +
+// html-to-docx) is exercised via app-level/manual verification instead,
+// matching how other dialog-dependent Electron code is tested in this repo.
+// ---------------------------------------------------------------------------
+
+test('write export handler is rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.writeExport, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const noId = invoke(CH.writeExport, { workspaceRoot: ws, format: 'html', html: '<p>x</p>' })
+    assert.strictEqual(noId.ok, false)
+    assert.strictEqual(noId.code, 'MISSING_WRITE_PROJECT_ID')
+
+    const badFormat = invoke(CH.writeExport, {
+      workspaceRoot: ws,
+      writeProjectId: 'w1',
+      format: 'exe',
+      html: '<p>x</p>'
+    })
+    assert.strictEqual(badFormat.ok, false)
+    assert.strictEqual(badFormat.code, 'INVALID_FORMAT')
+
+    const noHtml = invoke(CH.writeExport, {
+      workspaceRoot: ws,
+      writeProjectId: 'w1',
+      format: 'html',
+      html: ''
+    })
+    assert.strictEqual(noHtml.ok, false)
+    assert.strictEqual(noHtml.code, 'MISSING_HTML')
+
+    const oversizedHtml = invoke(CH.writeExport, {
+      workspaceRoot: ws,
+      writeProjectId: 'w1',
+      format: 'html',
+      html: 'a'.repeat(5_000_001)
+    })
+    assert.strictEqual(oversizedHtml.ok, false)
+    assert.strictEqual(oversizedHtml.code, 'HTML_TOO_LARGE')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // (a) Workflow Designer — AUTHORING ONLY (Slice M)
 // ---------------------------------------------------------------------------
 
@@ -638,6 +693,7 @@ test('missing workspace root fails closed on every entry point', () => {
   for (const channel of [
     CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate,
     CH.designRead, CH.designWrite, CH.writeList, CH.writeCreate, CH.writeRead, CH.writeUpdate,
+    CH.writeExport,
     CH.wfList, CH.wfCreate, CH.wfRead, CH.wfUpdate
   ]) {
     const res = invoke(channel, {})

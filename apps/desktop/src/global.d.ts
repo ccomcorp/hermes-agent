@@ -8,6 +8,7 @@ import type {
   WorkbenchWorkflow,
   WorkbenchWorkflowEdge,
   WorkbenchWorkflowNode,
+  WorkbenchWriteExportFormat,
   WorkbenchWriteProject,
   WorkbenchWriteRecentEdit
 } from '@hermes/shared'
@@ -327,10 +328,10 @@ declare global {
             }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
           }
         }
-        // Write Workspace — CRUD only (Slice J). A write project is a single
-        // markdown document + metadata, same shape as a Requirement. No
-        // quick-actions/inline-edit/retrieval/export channel exists here —
-        // those are Slice K/L, not built in this slice.
+        // Write Workspace — CRUD (Slice J) + export (Slice L). A write project
+        // is a single markdown document + metadata, same shape as a
+        // Requirement. No quick-actions/inline-edit/retrieval channel exists
+        // here — that is Slice K, not built in this slice.
         write: {
           list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
           create: (payload: {
@@ -361,6 +362,23 @@ declare global {
             title?: string
             contentHash: string
             updatedAt: string
+          }>>
+          // Renders `html` (a complete standalone document the renderer
+          // already built) to the requested format and writes it ONLY to a
+          // path the user picks via the OS save dialog. `canceled: true`
+          // means the user dismissed the dialog — no file was written and
+          // this is not an error.
+          export: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+            format: WorkbenchWriteExportFormat
+            title: string
+            html: string
+          }) => Promise<WorkbenchIpcResult<{
+            canceled: boolean
+            path?: string
+            format?: WorkbenchWriteExportFormat
+            exportedAt?: string
           }>>
         }
         // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph

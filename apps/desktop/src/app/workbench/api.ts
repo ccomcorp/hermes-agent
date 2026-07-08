@@ -23,6 +23,7 @@ import type {
   WorkbenchWorkflow,
   WorkbenchWorkflowEdge,
   WorkbenchWorkflowNode,
+  WorkbenchWriteExportFormat,
   WorkbenchWriteProject,
   WorkbenchWriteRecentEdit
 } from '@hermes/shared'
@@ -294,6 +295,37 @@ export function updateWriteProject(
   input: UpdateWorkbenchWriteProjectInput
 ): Promise<WorkbenchIpcResult<{ id: string; title?: string; contentHash: string; updatedAt: string }>> {
   return window.hermesDesktop.workbench.write.update(input)
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace — export (Slice L, go-forward plan §5).
+//
+// `html` must already be a complete, standalone HTML document — this file
+// never renders markdown itself (see write-export.tsx, which reuses the same
+// renderer CompactMarkdown uses). The main process never constructs the
+// target path: it always comes from the OS save dialog, so `canceled: true`
+// in the response means the user dismissed that dialog, not an error.
+// ---------------------------------------------------------------------------
+
+export interface ExportWorkbenchWriteProjectInput {
+  workspaceRoot: string
+  writeProjectId: string
+  format: WorkbenchWriteExportFormat
+  title: string
+  html: string
+}
+
+export interface WorkbenchWriteExportResult {
+  canceled: boolean
+  path?: string
+  format?: WorkbenchWriteExportFormat
+  exportedAt?: string
+}
+
+export function exportWriteProject(
+  input: ExportWorkbenchWriteProjectInput
+): Promise<WorkbenchIpcResult<WorkbenchWriteExportResult>> {
+  return window.hermesDesktop.workbench.write.export(input)
 }
 
 // ---------------------------------------------------------------------------

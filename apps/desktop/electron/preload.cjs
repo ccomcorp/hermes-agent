@@ -256,12 +256,15 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       }
     },
     write: {
-      // Write Workspace — CRUD only (Slice J). No quick-actions, inline-edit,
-      // retrieval, or export channel exists here — those are Slice K/L.
+      // Write Workspace — CRUD (Slice J) + export (Slice L). No quick-actions,
+      // inline-edit, or retrieval channel exists here — those are Slice K.
       list: payload => ipcRenderer.invoke('hermes:workbench:write:list', payload),
       create: payload => ipcRenderer.invoke('hermes:workbench:write:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:write:read', payload),
-      update: payload => ipcRenderer.invoke('hermes:workbench:write:update', payload)
+      update: payload => ipcRenderer.invoke('hermes:workbench:write:update', payload),
+      // Renders to HTML/PDF/DOCX/PNG and writes ONLY to a path the user picks
+      // via the OS save dialog (main-process side) — never a fixed location.
+      export: payload => ipcRenderer.invoke('hermes:workbench:write:export', payload)
     },
     workflow: {
       // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph

@@ -1,4 +1,4 @@
-import type { WorkbenchWriteRecentEdit } from '@hermes/shared'
+import type { WorkbenchWriteExportFormat, WorkbenchWriteRecentEdit } from '@hermes/shared'
 /**
  * Write Workspace panel — list existing WorkbenchWriteProjects (via api.ts ->
  * preload -> IPC -> `.hermes/workbench/write/<id>/{document.md,project.json}`
@@ -12,13 +12,21 @@ import type { WorkbenchWriteRecentEdit } from '@hermes/shared'
  * backend's `recentEdits`), NOT an undo-an-AI-edit mechanism — there is no AI
  * edit flow in this slice to undo.
  *
+ * Slice L adds Export (HTML/PDF/DOCX/PNG) — see `./write-export.tsx` for the
+ * markdown -> HTML rendering (reusing CompactMarkdown) and `./api.ts`'s
+ * `exportWriteProject` for the IPC call. Export is only ever offered from
+ * inside `WriteEditor`, which only renders when a write project is open, so
+ * there is no open project -> no export action, by construction.
+ *
  * Hard scope boundary: no quick actions (polish/explain/reformat/distill/
- * strengthen/soften/critique), no selection-aware inline edit, no retrieval
- * from workspace sources, and no export (HTML/PDF/DOCX/PNG) live here — those
- * are Slice K/L. This file never calls a model/skill/agent API.
+ * strengthen/soften/critique), no selection-aware inline edit, and no
+ * retrieval from workspace sources live here — those are Slice K. This file
+ * never calls a model/skill/agent API.
  *
  * No raw filesystem path ever appears here — every call goes through a write
- * project id plus the workspace root the shell already validated.
+ * project id plus the workspace root the shell already validated. Export's
+ * target path is chosen entirely by the user via the OS save dialog on the
+ * main-process side; this file never sees or constructs that path.
  */
 import { useStore } from '@nanostores/react'
 import type * as React from 'react'
@@ -36,6 +44,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { notify, notifyError } from '@/store/notifications'
@@ -43,7 +52,13 @@ import { notify, notifyError } from '@/store/notifications'
 import { ListColumn, MasterDetail } from '../master-detail'
 import { PanelEmpty, PanelListRow } from '../overlays/panel'
 
-import { createWriteProject, listWriteProjects, readWriteProject, updateWriteProject } from './api'
+import {
+  createWriteProject,
+  exportWriteProject,
+  listWriteProjects,
+  readWriteProject,
+  updateWriteProject
+} from './api'
 import type { WorkbenchWriteProjectDetail } from './api'
 import {
   $workbenchActiveWriteProjectId,
@@ -58,6 +73,7 @@ import {
   upsertWorkbenchWriteProjectManifestEntry
 } from './store'
 import { workbenchStrings as s } from './strings'
+import { renderWriteExportHtml } from './write-export'
 
 type SplitMode = 'source' | 'preview' | 'split'
 
@@ -77,6 +93,7 @@ export function WritePanel({ workspaceRoot }: WritePanelProps) {
   const [draftTitle, setDraftTitle] = useState('')
   const [saving, setSaving] = useState(false)
   const [viewMode, setViewMode] = useState<SplitMode>('split')
+  const [exportingFormat, setExportingFormat] = useState<WorkbenchWriteExportFormat | null>(null)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createTitle, setCreateTitle] = useState('')
@@ -224,6 +241,52 @@ export function WritePanel({ workspaceRoot }: WritePanelProps) {
     }
   }, [activeId, draftMarkdown, draftTitle, openProject, workspaceRoot])
 
+  // Renders the current draft to a standalone HTML document (client-side,
+  // reusing CompactMarkdown) and hands it to the main process, which shows
+  // the OS save dialog and writes ONLY to whatever path the user picks there
+  // — this function never sees or builds a filesystem path itself. Only
+  // reachable while a write project is open (see WriteEditor below), so
+  // there is no separate "no open project" guard needed here beyond the
+  // `!activeId` early return.
+  const handleExport = useCallback(
+    async (format: WorkbenchWriteExportFormat) => {
+      if (!activeId) {
+        return
+      }
+
+      const title = draftTitle.trim() || detail?.title || 'Untitled document'
+
+      setExportingFormat(format)
+
+      try {
+        const html = renderWriteExportHtml(draftMarkdown, title)
+
+        const res = await exportWriteProject({
+          workspaceRoot,
+          writeProjectId: activeId,
+          format,
+          title,
+          html
+        })
+
+        if (res.ok) {
+          // A canceled OS dialog is not an error — stay silent, matching
+          // normal save-dialog-cancel UX.
+          if (!res.value.canceled && res.value.path) {
+            notify({ kind: 'success', title: s.write.exported(res.value.path), message: '' })
+          }
+        } else {
+          notify({ kind: 'error', title: s.write.exportFailed, message: res.message })
+        }
+      } catch (err) {
+        notifyError(err, s.write.exportFailed)
+      } finally {
+        setExportingFormat(null)
+      }
+    },
+    [activeId, detail, draftMarkdown, draftTitle, workspaceRoot]
+  )
+
   const dirty = detail !== null && (draftMarkdown !== detail.markdown || draftTitle !== detail.title)
 
   return (
@@ -290,6 +353,8 @@ export function WritePanel({ workspaceRoot }: WritePanelProps) {
               dirty={dirty}
               draftMarkdown={draftMarkdown}
               draftTitle={draftTitle}
+              exportingFormat={exportingFormat}
+              onExport={format => void handleExport(format)}
               onMarkdownChange={setDraftMarkdown}
               onSave={() => void handleSave()}
               onTitleChange={setDraftTitle}
@@ -362,11 +427,48 @@ function RecentEditsList({ recentEdits }: { recentEdits: WorkbenchWriteRecentEdi
   )
 }
 
+function ExportMenu({
+  exportingFormat,
+  onExport
+}: {
+  exportingFormat: WorkbenchWriteExportFormat | null
+  onExport: (format: WorkbenchWriteExportFormat) => void
+}) {
+  const exporting = exportingFormat !== null
+
+  const items: { format: WorkbenchWriteExportFormat; label: string }[] = [
+    { format: 'html', label: s.write.exportHtml },
+    { format: 'pdf', label: s.write.exportPdf },
+    { format: 'docx', label: s.write.exportDocx },
+    { format: 'png', label: s.write.exportPng }
+  ]
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button disabled={exporting} size="sm" variant="outline">
+          <Codicon name={exporting ? 'loading' : 'export'} size="0.875rem" spinning={exporting} />
+          {exporting ? s.write.exporting : s.write.export}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {items.map(item => (
+          <DropdownMenuItem disabled={exporting} key={item.format} onSelect={() => onExport(item.format)}>
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function WriteEditor({
   detail,
   dirty,
   draftMarkdown,
   draftTitle,
+  exportingFormat,
+  onExport,
   onMarkdownChange,
   onSave,
   onTitleChange,
@@ -378,6 +480,8 @@ function WriteEditor({
   dirty: boolean
   draftMarkdown: string
   draftTitle: string
+  exportingFormat: WorkbenchWriteExportFormat | null
+  onExport: (format: WorkbenchWriteExportFormat) => void
   onMarkdownChange: (value: string) => void
   onSave: () => void
   onTitleChange: (value: string) => void
@@ -400,6 +504,7 @@ function WriteEditor({
         {dirty && <span className="text-[0.65rem] text-muted-foreground/60">{s.write.unsavedHint}</span>}
         <div className="ml-auto flex items-center gap-2">
           <ViewModeToggle onChange={onViewModeChange} value={viewMode} />
+          <ExportMenu exportingFormat={exportingFormat} onExport={onExport} />
           <Button disabled={saving || !dirty} onClick={onSave} size="sm">
             <Codicon name={saving ? 'loading' : 'save'} size="0.875rem" spinning={saving} />
             {saving ? s.write.saving : s.write.save}

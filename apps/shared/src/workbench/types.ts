@@ -348,6 +348,42 @@ export interface WorkbenchWriteRecentEdit {
 }
 
 // ---------------------------------------------------------------------------
+// Write Workspace — export (Slice L, go-forward plan §5 Slice J/K/L split)
+//
+// Export renders the ALREADY-OPEN write project's markdown to a standalone
+// document and writes it ONLY to a path the user picked via the OS save
+// dialog — never to a fixed location inside `.hermes/workbench/`. The
+// renderer does the markdown -> HTML rendering (reusing the same renderer
+// CompactMarkdown uses) and sends the finished, full standalone HTML document
+// string across IPC; the main process only converts/writes that string per
+// format and never constructs the target path itself (the OS dialog does).
+// `workspaceRoot`/`writeProjectId` are carried for the same fail-closed
+// validation every other Workbench request gets — they are NOT used to build
+// any filesystem path here.
+// ---------------------------------------------------------------------------
+
+export type WorkbenchWriteExportFormat = 'html' | 'pdf' | 'docx' | 'png'
+
+export interface WorkbenchWriteExportRequest {
+  workspaceRoot: string
+  writeProjectId: string
+  format: WorkbenchWriteExportFormat
+  title: string
+  // A complete, standalone HTML document (doctype/head/body), already
+  // rendered by the renderer from the write project's markdown.
+  html: string
+}
+
+export interface WorkbenchWriteExportResponse {
+  // True when the user dismissed the OS save dialog without choosing a path.
+  // No file is written in that case, and this is not an error.
+  canceled: boolean
+  path?: string
+  format?: WorkbenchWriteExportFormat
+  exportedAt?: string
+}
+
+// ---------------------------------------------------------------------------
 // Retrieval snippet
 // ---------------------------------------------------------------------------
 
@@ -523,6 +559,9 @@ export const WORKBENCH_IPC_CHANNELS = {
   writeProjectsCreate: 'hermes:workbench:write:create',
   writeProjectsRead: 'hermes:workbench:write:read',
   writeProjectsUpdate: 'hermes:workbench:write:update',
+  // Write Workspace export (Slice L) — HTML/PDF/DOCX/PNG, saved only to a
+  // user-chosen path from the OS save dialog.
+  writeProjectsExport: 'hermes:workbench:write:export',
   // Workflow Designer — AUTHORING ONLY (Slice M, go-forward plan §5). No
   // run/execute channel exists here or anywhere in this slice.
   workflowsList: 'hermes:workbench:workflows:list',

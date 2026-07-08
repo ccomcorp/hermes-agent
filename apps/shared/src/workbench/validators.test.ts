@@ -7,6 +7,7 @@ import {
   validateWriteDesignSettingsRequest,
   validateCreateWriteProjectRequest,
   validateUpdateWriteProjectRequest,
+  validateExportWriteProjectRequest,
   validateCreateWorkflowRequest,
   validateUpdateWorkflowRequest
 } from './validators'
@@ -18,6 +19,7 @@ import type {
   WriteWorkbenchDesignSettingsRequest,
   CreateWorkbenchWriteProjectRequest,
   UpdateWorkbenchWriteProjectRequest,
+  WorkbenchWriteExportRequest,
   CreateWorkbenchWorkflowRequest,
   UpdateWorkbenchWorkflowRequest,
   WorkbenchWorkflowNode
@@ -419,6 +421,67 @@ describe('validateUpdateWriteProjectRequest', () => {
 
   it('rejects an oversized title', () => {
     const result = validateUpdateWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Write Workspace export validators (Slice L)
+// ---------------------------------------------------------------------------
+
+describe('validateExportWriteProjectRequest', () => {
+  const valid: WorkbenchWriteExportRequest = {
+    workspaceRoot: 'C:/proj',
+    writeProjectId: 'write-001',
+    format: 'html',
+    title: 'My Document',
+    html: '<!doctype html><html><body><p>Hello</p></body></html>'
+  }
+
+  it('accepts a valid request', () => {
+    expect(validateExportWriteProjectRequest(valid)).toEqual({ ok: true })
+  })
+
+  it('accepts every declared export format', () => {
+    for (const format of ['html', 'pdf', 'docx', 'png'] as const) {
+      const result = validateExportWriteProjectRequest({ ...valid, format })
+      expect(result.ok, `format ${format} should be accepted`).toBe(true)
+    }
+  })
+
+  it('rejects missing workspaceRoot', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, workspaceRoot: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
+  })
+
+  it('rejects missing writeProjectId', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, writeProjectId: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_WRITE_PROJECT_ID')
+  })
+
+  it('rejects an invalid format', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, format: 'exe' as never })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_FORMAT')
+  })
+
+  it('rejects missing html', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, html: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_HTML')
+  })
+
+  it('rejects oversized html', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, html: 'a'.repeat(5_000_001) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('HTML_TOO_LARGE')
+  })
+
+  it('rejects an oversized title', () => {
+    const result = validateExportWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
   })
