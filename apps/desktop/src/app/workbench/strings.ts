@@ -246,9 +246,9 @@ export const workbenchStrings = {
     } as Record<string, string>
   },
 
-  // Write Workspace (Slice J — backend CRUD + editor only; see go-forward
-  // plan §5 Slice J/K/L split). No quick-actions/inline-edit/retrieval/export
-  // copy belongs here — that is Slice K/L.
+  // Write Workspace (Slice J — backend CRUD + editor; Slice K adds quick
+  // actions + selection-aware inline edit below. Retrieval from workspace
+  // sources is still deferred — a distinct, later slice.)
   write: {
     heading: 'Write Workspace',
     navLabel: 'Write',
@@ -317,6 +317,46 @@ export const workbenchStrings = {
 
       return `${Math.floor(hours / 24)}d ago`
     }
+  },
+
+  // Quick actions + selection-aware inline edit (Slice K, go-forward plan
+  // §5). Every rewrite action proposes a ChangeSet — reviewed via the
+  // existing ChangeSet Review panel (Slice D) and Apply (Slice E), never
+  // written directly. Explain/Critique are informational only.
+  writeQuickActions: {
+    menuLabel: 'Quick actions',
+    scopeSelection: 'selection',
+    scopeDocument: 'document',
+    disabledDirtyTitle: 'Save your changes before running a quick action',
+    disabledEmptyTitle: 'Open a write project to use quick actions',
+    nothingToActOn: 'Nothing to act on — the document is empty.',
+    running: (label: string) => `Running ${label}…`,
+    failed: (label: string) => `${label} failed`,
+    emptyModelResponse: 'The model returned an empty response.',
+
+    customInstruction: 'Custom instruction…',
+    customDialogTitle: 'Custom edit instruction',
+    customDialogDesc: 'Describe the edit in your own words (e.g. "make this more formal"). Applies to the selection, or the whole document if nothing is selected.',
+    customPlaceholder: 'e.g. Make this more formal',
+    customSubmit: 'Propose edit',
+    customApplying: 'Applying…',
+
+    proposedTitle: 'ChangeSet proposed',
+    proposedMessage: (scope: string) =>
+      `A rewrite of the ${scope} was proposed as a ChangeSet. Review it in ChangeSet Review before it changes the saved file.`,
+    proposeFailed: 'Failed to propose the ChangeSet',
+
+    resultDialogClose: 'Close',
+
+    labels: {
+      polish: 'Polish',
+      explain: 'Explain',
+      reformat: 'Reformat',
+      distill: 'Distill',
+      strengthen: 'Strengthen',
+      soften: 'Soften',
+      critique: 'Critique'
+    } as Record<string, string>
   },
 
   // Workflow Designer (Slice M authoring + Slice N bounded manual Run; see

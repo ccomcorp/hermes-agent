@@ -12,8 +12,10 @@
 // component may construct a raw filesystem path — every call here takes a
 // workspace root plus a requirement id, never a path.
 import type {
+  WorkbenchChangedFile,
   WorkbenchChangeSet,
   WorkbenchChangeSetStatus,
+  WorkbenchChangeSource,
   WorkbenchDesignSettings,
   WorkbenchManifestEntry,
   WorkbenchPlan,
@@ -268,6 +270,32 @@ export async function isWorkspaceGitRepo(workspaceRoot: string): Promise<boolean
   const status = await repoStatus(workspaceRoot)
 
   return status !== null
+}
+
+// ---------------------------------------------------------------------------
+// ChangeSets — create (Slice K, go-forward plan §5 Slice K).
+//
+// This wraps the `changesets:create` channel, which was already registered
+// end-to-end (IPC handler in workbench-ipc.cjs, preload bridge, main-process
+// `store.createChangeSet`) since Slice A/E — this is simply the first
+// renderer-side typed wrapper for it. Write Workspace quick actions/inline
+// edit (write-quick-actions-panel.tsx) are the first caller: every proposed
+// AI rewrite goes through this function as a `pending` ChangeSet, never a
+// direct write to the write project's saved file.
+// ---------------------------------------------------------------------------
+
+export interface CreateWorkbenchChangeSetInput {
+  files: WorkbenchChangedFile[]
+  planId?: string
+  requirementId?: string
+  source: WorkbenchChangeSource
+  summary: string
+  title: string
+  workspaceRoot: string
+}
+
+export function createChangeSet(input: CreateWorkbenchChangeSetInput): Promise<WorkbenchIpcResult<WorkbenchChangeSet>> {
+  return window.hermesDesktop.workbench.changesets.create(input)
 }
 
 // ---------------------------------------------------------------------------

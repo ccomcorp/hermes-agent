@@ -18,10 +18,14 @@ import type { WorkbenchWriteExportFormat, WorkbenchWriteRecentEdit } from '@herm
  * inside `WriteEditor`, which only renders when a write project is open, so
  * there is no open project -> no export action, by construction.
  *
- * Hard scope boundary: no quick actions (polish/explain/reformat/distill/
- * strengthen/soften/critique), no selection-aware inline edit, and no
- * retrieval from workspace sources live here — those are Slice K. This file
- * never calls a model/skill/agent API.
+ * Slice K adds quick actions (polish/explain/reformat/distill/strengthen/
+ * soften/critique) and selection-aware inline edit — see
+ * `./write-quick-actions-panel.tsx` (UI) and `./write-quick-actions.ts` (pure
+ * prompt/ChangeSet-building logic). Every rewrite action proposes a
+ * `WorkbenchChangeSet` via the existing `createChangeSet` API (never a direct
+ * write to `draftMarkdown`/the saved file); Explain/Critique only display the
+ * model's response. Retrieval from workspace text/PDF sources is still
+ * deferred — a distinct, later slice.
  *
  * No raw filesystem path ever appears here — every call goes through a write
  * project id plus the workspace root the shell already validated. Export's
@@ -30,7 +34,7 @@ import type { WorkbenchWriteExportFormat, WorkbenchWriteRecentEdit } from '@herm
  */
 import { useStore } from '@nanostores/react'
 import type * as React from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CompactMarkdown } from '@/components/chat/compact-markdown'
 import { PageLoader } from '@/components/page-loader'
@@ -74,6 +78,7 @@ import {
 } from './store'
 import { workbenchStrings as s } from './strings'
 import { renderWriteExportHtml } from './write-export'
+import { WriteQuickActionsBar } from './write-quick-actions-panel'
 
 type SplitMode = 'source' | 'preview' | 'split'
 
@@ -361,6 +366,7 @@ export function WritePanel({ workspaceRoot }: WritePanelProps) {
               onViewModeChange={setViewMode}
               saving={saving}
               viewMode={viewMode}
+              workspaceRoot={workspaceRoot}
             />
           )}
         </main>
@@ -474,7 +480,8 @@ function WriteEditor({
   onTitleChange,
   onViewModeChange,
   saving,
-  viewMode
+  viewMode,
+  workspaceRoot
 }: {
   detail: WorkbenchWriteProjectDetail
   dirty: boolean
@@ -488,9 +495,14 @@ function WriteEditor({
   onViewModeChange: (mode: SplitMode) => void
   saving: boolean
   viewMode: SplitMode
+  workspaceRoot: string
 }) {
   const showSource = viewMode === 'source' || viewMode === 'split'
   const showPreview = viewMode === 'preview' || viewMode === 'split'
+  // Selection-aware inline edit (Slice K) reads selectionStart/selectionEnd
+  // off this ref at the moment a quick action fires — no continuous
+  // selection tracking in React state, so plain typing never re-renders.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
@@ -504,6 +516,7 @@ function WriteEditor({
         {dirty && <span className="text-[0.65rem] text-muted-foreground/60">{s.write.unsavedHint}</span>}
         <div className="ml-auto flex items-center gap-2">
           <ViewModeToggle onChange={onViewModeChange} value={viewMode} />
+          <WriteQuickActionsBar detail={detail} dirty={dirty} textareaRef={textareaRef} workspaceRoot={workspaceRoot} />
           <ExportMenu exportingFormat={exportingFormat} onExport={onExport} />
           <Button disabled={saving || !dirty} onClick={onSave} size="sm">
             <Codicon name={saving ? 'loading' : 'save'} size="0.875rem" spinning={saving} />
@@ -518,6 +531,7 @@ function WriteEditor({
             aria-label={s.write.markdownLabel}
             className="min-h-64 flex-1 resize-none font-mono text-xs"
             onChange={event => onMarkdownChange(event.target.value)}
+            ref={textareaRef}
             value={draftMarkdown}
           />
         )}
