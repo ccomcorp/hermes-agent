@@ -153,11 +153,11 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
         if (!document.querySelector('link[data-hermes-plugin="hermes-canvas"]')) {
           const link = document.createElement('link')
           link.rel = 'stylesheet'
-          link.href = canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/style.css?v=8')
+          link.href = canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/style.css?v=9')
           link.dataset.hermesPlugin = 'hermes-canvas'
           document.head.appendChild(link)
         }
-        const resp = await fetch(canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/index.js?v=10'))
+        const resp = await fetch(canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/index.js?v=11'))
         const code = await resp.text()
         new Function(code)()
       } catch (err) {
