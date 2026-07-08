@@ -61,6 +61,9 @@ export function setWorkbenchWorkspaceRoot(root: null | string) {
   $workbenchActivePlanId.set(null)
   $workbenchPlansError.set(null)
   $workbenchActiveRequirementTrace.set(null)
+  $workbenchChangeSets.set([])
+  $workbenchActiveChangeSetId.set(null)
+  $workbenchChangeSetsError.set(null)
 }
 
 export function setWorkbenchRequirements(entries: WorkbenchManifestEntry[]) {
@@ -184,4 +187,36 @@ export function addLinkedPlanId(planId: string) {
   }
 
   $workbenchActiveRequirementTrace.set({ ...trace, linkedPlanIds: [...trace.linkedPlanIds, planId] })
+}
+
+// ---------------------------------------------------------------------------
+// ChangeSets (Slice D — review/status only)
+//
+// ChangeSets are workspace-wide, not requirement-scoped — same shape of
+// reasoning as Plans (see the comment above `$workbenchPlans`), except there
+// isn't even a `trace.linkedChangeSetIds` population to derive from yet (see
+// api.ts): `createChangeSet` never links back into the source requirement's
+// trace.json the way `createPlan`/`refinePlan` do. So this is not scoped to
+// the active requirement at all; it lists every changeset in the workspace.
+// ---------------------------------------------------------------------------
+
+export const $workbenchChangeSets = atom<WorkbenchManifestEntry[]>([])
+export const $workbenchChangeSetsLoading = atom(false)
+export const $workbenchChangeSetsError = atom<null | string>(null)
+export const $workbenchActiveChangeSetId = atom<null | string>(null)
+
+export function setWorkbenchChangeSets(entries: WorkbenchManifestEntry[]) {
+  $workbenchChangeSets.set(entries)
+}
+
+export function setWorkbenchChangeSetsLoading(loading: boolean) {
+  $workbenchChangeSetsLoading.set(loading)
+}
+
+export function setWorkbenchChangeSetsError(message: null | string) {
+  $workbenchChangeSetsError.set(message)
+}
+
+export function setWorkbenchActiveChangeSetId(id: null | string) {
+  $workbenchActiveChangeSetId.set(id)
 }

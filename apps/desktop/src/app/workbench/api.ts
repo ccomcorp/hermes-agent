@@ -12,6 +12,8 @@
 // component may construct a raw filesystem path — every call here takes a
 // workspace root plus a requirement id, never a path.
 import type {
+  WorkbenchChangeSet,
+  WorkbenchChangeSetStatus,
   WorkbenchManifestEntry,
   WorkbenchPlan,
   WorkbenchRequirement,
@@ -151,4 +153,59 @@ export function refinePlan(
   input: RefineWorkbenchPlanInput
 ): Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>> {
   return window.hermesDesktop.workbench.plans.update({ ...input, operation: 'refine' })
+}
+
+// ---------------------------------------------------------------------------
+// ChangeSets (Slice D — review/status ONLY, see go-forward plan §5 Slice D)
+//
+// `changesets:list` is workspace-wide — the channel takes only `workspaceRoot`
+// (see global.d.ts; there is no requirementId param the way `plans:list` has
+// one) and returns manifest-entry rows exactly like requirements/plans
+// (workbench-artifacts.cjs `listChangeSets` reads `manifest.changesets`
+// as-is). Unlike plans, `createChangeSet` never records a link back into the
+// source requirement's trace.json — there is no changeset equivalent of
+// `linkPlanToRequirement` — so `trace.linkedChangeSetIds` is never populated
+// today and there is nothing to derive a "changesets linked to this
+// requirement" view from. This panel therefore lists every changeset in the
+// workspace, matching how Plans behaves today per the go-forward plan's own
+// fallback guidance.
+//
+// No function here ever calls a file-write/git/terminal/execute API.
+// `updateChangeSetStatus` ONLY flips the changeset's own status JSON under
+// `.hermes/workbench/changesets/<id>.json` — it must never be used to apply
+// the changeset's file patches to the user's real project. That is Slice E,
+// explicitly out of scope for this slice.
+// ---------------------------------------------------------------------------
+
+export interface UpdateChangeSetStatusInput {
+  workspaceRoot: string
+  changesetId: string
+  statusPatch: {
+    status?: WorkbenchChangeSetStatus
+    fileUpdates?: { path: string; status: 'accepted' | 'applied' | 'pending' | 'rejected' }[]
+    approval?: {
+      kind: 'approval_service' | 'system' | 'user'
+      decision: 'approved' | 'denied' | 'timed_out'
+      reason?: string
+    }
+  }
+}
+
+export function listChangeSets(workspaceRoot: string): Promise<WorkbenchIpcResult<WorkbenchManifestEntry[]>> {
+  return window.hermesDesktop.workbench.changesets.list({ workspaceRoot })
+}
+
+export function readChangeSet(
+  workspaceRoot: string,
+  changesetId: string
+): Promise<WorkbenchIpcResult<WorkbenchChangeSet>> {
+  return window.hermesDesktop.workbench.changesets.read({ workspaceRoot, changesetId })
+}
+
+// Status-transition ONLY — see the module-level comment above. This is the
+// one and only write this slice performs against a ChangeSet.
+export function updateChangeSetStatus(
+  input: UpdateChangeSetStatusInput
+): Promise<WorkbenchIpcResult<WorkbenchChangeSet>> {
+  return window.hermesDesktop.workbench.changesets.update(input)
 }

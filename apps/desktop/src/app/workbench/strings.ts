@@ -110,6 +110,43 @@ export const workbenchStrings = {
     historyHeading: 'Version history'
   },
 
+  // ChangeSet review (Slice D) — status-only: accept/reject just transition
+  // the changeset's own status file. No file-apply/git action lives behind
+  // any of this copy (that is Slice E, not built here).
+  changesets: {
+    heading: 'ChangeSets',
+    loading: 'Loading changesets',
+    loadFailed: 'Failed to load changesets',
+    openFailed: 'Failed to open changeset',
+    emptyTitle: 'No changesets yet',
+    emptyDesc: 'ChangeSets created by other Workbench flows will appear here for review.',
+    selectPrompt: 'Select a changeset to review it.',
+
+    filesHeading: 'Files',
+    noFiles: 'This changeset has no files.',
+
+    accept: 'Accept',
+    accepting: 'Accepting',
+    reject: 'Reject',
+    rejecting: 'Rejecting',
+    acceptFailed: 'Failed to accept changeset',
+    rejectFailed: 'Failed to reject changeset',
+    accepted: 'Changeset accepted',
+    rejected: 'Changeset rejected',
+
+    reviewNote:
+      'Accept or reject only changes this ChangeSet status here — it never writes to your project files and never runs git.',
+
+    statusNames: {
+      pending: 'Pending',
+      partially_accepted: 'Partially accepted',
+      accepted: 'Accepted',
+      rejected: 'Rejected',
+      applied: 'Applied',
+      archived: 'Archived'
+    } as Record<string, string>
+  },
+
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).
   statusBar: {

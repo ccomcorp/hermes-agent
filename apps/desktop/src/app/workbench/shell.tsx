@@ -22,6 +22,7 @@ import { $currentCwd } from '@/store/session'
 import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
+import { ChangeSetPanel } from './changeset-panel'
 import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
@@ -122,12 +123,21 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_20rem]">
           <RequirementPanel workspaceRoot={workspaceRoot} />
-          {/* Plans linked to whichever requirement RequirementPanel has open
-              (Slice C) — widened from the Slice B trace stub's 16rem so the
-              plan editor/version history has room; still the same right-rail
-              region, not a redesign of the shell's two-column layout. */}
-          <aside className="hidden min-h-0 flex-col border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
-            <PlanPanel workspaceRoot={workspaceRoot} />
+          {/* Right rail: Plans linked to whichever requirement RequirementPanel
+              has open (Slice C), stacked above ChangeSet review (Slice D,
+              status-only — see changeset-panel.tsx). ChangeSets are
+              workspace-wide rather than requirement-scoped (no backend
+              linkage to derive from yet, see store.ts), so they get their own
+              stacked section instead of requiring an open requirement — this
+              still fits the existing two-column shell without adding a new
+              region or a tab. */}
+          <aside className="hidden min-h-0 flex-col gap-3 border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <PlanPanel workspaceRoot={workspaceRoot} />
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-(--ui-stroke-tertiary) pt-3">
+              <ChangeSetPanel workspaceRoot={workspaceRoot} />
+            </div>
           </aside>
         </div>
       )}
