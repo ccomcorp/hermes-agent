@@ -3,13 +3,15 @@ import {
   validateCreateRequirementRequest,
   validateUpdateRequirementRequest,
   validateCreatePlanRequest,
-  validateCreateChangeSetRequest
+  validateCreateChangeSetRequest,
+  validateWriteDesignSettingsRequest
 } from './validators'
 import type {
   CreateWorkbenchRequirementRequest,
   UpdateWorkbenchRequirementRequest,
   CreateWorkbenchPlanRequest,
-  CreateWorkbenchChangeSetRequest
+  CreateWorkbenchChangeSetRequest,
+  WriteWorkbenchDesignSettingsRequest
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -178,5 +180,159 @@ describe('validateCreateChangeSetRequest', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('MISSING_FILE_PATH')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Design settings validators
+// ---------------------------------------------------------------------------
+
+describe('validateWriteDesignSettingsRequest', () => {
+  const valid: WriteWorkbenchDesignSettingsRequest = {
+    workspaceRoot: 'C:/proj',
+    settings: {
+      enabled: true,
+      defaultViewport: 'desktop',
+      designSystemPreset: 'none',
+      tone: ['minimal', 'confident'],
+      brandColor: '#336699',
+      radius: 'soft',
+      density: 'cozy',
+      fontStyle: 'geometric',
+      stackHint: 'react + tailwind',
+      sandboxHtmlPreview: true
+    }
+  }
+
+  it('accepts a valid request', () => {
+    expect(validateWriteDesignSettingsRequest(valid)).toEqual({ ok: true })
+  })
+
+  it('accepts a request with only required fields', () => {
+    const result = validateWriteDesignSettingsRequest({
+      workspaceRoot: 'C:/proj',
+      settings: {
+        enabled: false,
+        defaultViewport: 'mobile',
+        designSystemPreset: 'shadcn',
+        tone: [],
+        sandboxHtmlPreview: false
+      }
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects missing workspaceRoot', () => {
+    const result = validateWriteDesignSettingsRequest({ ...valid, workspaceRoot: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
+  })
+
+  it('rejects a missing settings object', () => {
+    const result = validateWriteDesignSettingsRequest({
+      workspaceRoot: 'C:/proj',
+      settings: undefined as never
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_SETTINGS')
+  })
+
+  it('rejects a non-boolean enabled flag', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, enabled: 'yes' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_ENABLED')
+  })
+
+  it('rejects an invalid defaultViewport', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, defaultViewport: 'ultrawide' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_VIEWPORT')
+  })
+
+  it('rejects an invalid designSystemPreset', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, designSystemPreset: 'bogus' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_PRESET')
+  })
+
+  it('rejects an oversized brandColor', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, brandColor: 'a'.repeat(65) }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_BRAND_COLOR')
+  })
+
+  it('rejects a non-array tone', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, tone: 'minimal' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_TONE')
+  })
+
+  it('rejects too many tone entries', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, tone: Array.from({ length: 21 }, (_, i) => `tone-${i}`) }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_TONE')
+  })
+
+  it('rejects an invalid radius', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, radius: 'square' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_RADIUS')
+  })
+
+  it('rejects an invalid density', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, density: 'roomy' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_DENSITY')
+  })
+
+  it('rejects an invalid fontStyle', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, fontStyle: 'comic-sans' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_FONT_STYLE')
+  })
+
+  it('rejects an oversized stackHint', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, stackHint: 'a'.repeat(201) }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_STACK_HINT')
+  })
+
+  it('rejects a non-boolean sandboxHtmlPreview flag', () => {
+    const result = validateWriteDesignSettingsRequest({
+      ...valid,
+      settings: { ...valid.settings, sandboxHtmlPreview: 'true' as never }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INVALID_SANDBOX_FLAG')
   })
 })

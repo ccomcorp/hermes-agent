@@ -14,6 +14,7 @@ export const HERMES_PLANS_DIR = '.hermes/workbench/plans'
 export const HERMES_CHANGESETS_DIR = '.hermes/workbench/changesets'
 export const HERMES_WRITE_DIR = '.hermes/workbench/write'
 export const HERMES_WORKFLOWS_DIR = '.hermes/workbench/workflows'
+export const HERMES_DESIGNS_DIR = '.hermes/workbench/designs'
 export const HERMES_MANIFEST_PATH = '.hermes/workbench/manifest.json'
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,21 @@ export interface WorkbenchDesignArtifact {
   contentHash: string
 }
 
+// Design SETTINGS only (Slice F, go-forward plan §5). There is exactly one
+// WorkbenchDesignSettings document per workspace (unlike requirements/plans/
+// changesets, which are lists) — read/write it as a whole object, not a
+// partial patch. This intentionally does not touch WorkbenchDesignArtifact
+// (briefs/prototypes/quality reports): generating those is Slice G/H/I, out
+// of scope here.
+export interface WriteWorkbenchDesignSettingsRequest {
+  workspaceRoot: string
+  settings: WorkbenchDesignSettings
+}
+
+export interface WriteWorkbenchDesignSettingsResponse {
+  settings: WorkbenchDesignSettings
+}
+
 // ---------------------------------------------------------------------------
 // Write Workspace
 // ---------------------------------------------------------------------------
@@ -434,5 +450,7 @@ export const WORKBENCH_IPC_CHANNELS = {
   changesetsCreate: 'hermes:workbench:changesets:create',
   changesetsRead: 'hermes:workbench:changesets:read',
   changesetsUpdate: 'hermes:workbench:changesets:update',
+  designSettingsRead: 'hermes:workbench:design:settings:read',
+  designSettingsWrite: 'hermes:workbench:design:settings:write',
   event: 'hermes:workbench:event'
 } as const

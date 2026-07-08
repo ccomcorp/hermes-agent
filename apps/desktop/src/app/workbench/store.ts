@@ -1,4 +1,4 @@
-import type { WorkbenchManifestEntry, WorkbenchRequirementTrace } from '@hermes/shared'
+import type { WorkbenchDesignSettings, WorkbenchManifestEntry, WorkbenchRequirementTrace } from '@hermes/shared'
 // Hermes Workbench feature state.
 //
 // Plain nanostores, mirroring the pattern in `../skills/store.ts` (persisted
@@ -64,6 +64,8 @@ export function setWorkbenchWorkspaceRoot(root: null | string) {
   $workbenchChangeSets.set([])
   $workbenchActiveChangeSetId.set(null)
   $workbenchChangeSetsError.set(null)
+  $workbenchDesignSettings.set(null)
+  $workbenchDesignSettingsError.set(null)
 }
 
 export function setWorkbenchRequirements(entries: WorkbenchManifestEntry[]) {
@@ -219,4 +221,28 @@ export function setWorkbenchChangeSetsError(message: null | string) {
 
 export function setWorkbenchActiveChangeSetId(id: null | string) {
   $workbenchActiveChangeSetId.set(id)
+}
+
+// ---------------------------------------------------------------------------
+// Design Studio settings (Slice F — settings only)
+//
+// Exactly one WorkbenchDesignSettings document per workspace (unlike
+// requirements/plans/changesets, this is not a list) — so there is a single
+// value atom, not a manifest-entry list + active-id pair.
+// ---------------------------------------------------------------------------
+
+export const $workbenchDesignSettings = atom<WorkbenchDesignSettings | null>(null)
+export const $workbenchDesignSettingsLoading = atom(false)
+export const $workbenchDesignSettingsError = atom<null | string>(null)
+
+export function setWorkbenchDesignSettings(settings: WorkbenchDesignSettings | null) {
+  $workbenchDesignSettings.set(settings)
+}
+
+export function setWorkbenchDesignSettingsLoading(loading: boolean) {
+  $workbenchDesignSettingsLoading.set(loading)
+}
+
+export function setWorkbenchDesignSettingsError(message: null | string) {
+  $workbenchDesignSettingsError.set(message)
 }

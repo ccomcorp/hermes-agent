@@ -260,6 +260,91 @@ test('updateChangeSetStatus updates file status', () => {
   }
 })
 
+test('readDesignSettings returns sensible defaults when none saved yet', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.readDesignSettings(ws)
+    assert.strictEqual(result.ok, true)
+    if (result.ok) {
+      assert.strictEqual(result.value.enabled, true)
+      assert.strictEqual(result.value.defaultViewport, 'desktop')
+      assert.strictEqual(result.value.designSystemPreset, 'none')
+      assert.deepStrictEqual(result.value.tone, [])
+      assert.strictEqual(result.value.sandboxHtmlPreview, true)
+    }
+
+    // Reading defaults must not write anything to disk.
+    const settingsPath = path.join(ws, '.hermes', 'workbench', 'designs', 'settings.json')
+    assert.ok(!fs.existsSync(settingsPath))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('writeDesignSettings persists settings and readDesignSettings returns them back', () => {
+  const ws = createTempWorkspace()
+  try {
+    const settings = {
+      enabled: true,
+      defaultViewport: 'mobile',
+      designSystemPreset: 'shadcn',
+      brandColor: '#336699',
+      tone: ['minimal', 'confident'],
+      radius: 'soft',
+      density: 'cozy',
+      fontStyle: 'geometric',
+      stackHint: 'react + tailwind',
+      sandboxHtmlPreview: false
+    }
+
+    const writeResult = store.writeDesignSettings(ws, settings)
+    assert.strictEqual(writeResult.ok, true)
+
+    const settingsPath = path.join(ws, '.hermes', 'workbench', 'designs', 'settings.json')
+    assert.ok(fs.existsSync(settingsPath))
+
+    const readResult = store.readDesignSettings(ws)
+    assert.strictEqual(readResult.ok, true)
+    if (readResult.ok) {
+      assert.strictEqual(readResult.value.defaultViewport, 'mobile')
+      assert.strictEqual(readResult.value.designSystemPreset, 'shadcn')
+      assert.strictEqual(readResult.value.brandColor, '#336699')
+      assert.deepStrictEqual(readResult.value.tone, ['minimal', 'confident'])
+    }
+
+    // Manifest's designs array carries exactly one entry for the singleton doc.
+    const manifest = store.readManifest(ws)
+    assert.strictEqual(manifest.designs.length, 1)
+    assert.strictEqual(manifest.designs[0].id, 'settings')
+
+    // Writing again updates the same manifest entry rather than appending.
+    store.writeDesignSettings(ws, { ...settings, defaultViewport: 'desktop' })
+    const manifestAfterSecondWrite = store.readManifest(ws)
+    assert.strictEqual(manifestAfterSecondWrite.designs.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('writeDesignSettings never writes outside .hermes/workbench/designs', () => {
+  const ws = createTempWorkspace()
+  try {
+    store.writeDesignSettings(ws, {
+      enabled: true,
+      defaultViewport: 'desktop',
+      designSystemPreset: 'none',
+      tone: [],
+      sandboxHtmlPreview: true
+    })
+
+    const designsDir = path.join(ws, '.hermes', 'workbench', 'designs')
+    assert.ok(fs.existsSync(designsDir))
+    assert.ok(fs.existsSync(path.join(designsDir, 'settings.json')))
+  } finally {
+    cleanup(ws)
+  }
+})
+
 test('atomicWriteFile does not leave partial target on error', () => {
   const ws = createTempWorkspace()
   try {

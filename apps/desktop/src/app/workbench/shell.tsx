@@ -23,6 +23,7 @@ import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { ChangeSetPanel } from './changeset-panel'
+import { DesignSettingsPanel } from './design-settings-panel'
 import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
@@ -125,18 +126,26 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
           <RequirementPanel workspaceRoot={workspaceRoot} />
           {/* Right rail: Plans linked to whichever requirement RequirementPanel
               has open (Slice C), stacked above ChangeSet review (Slice D,
-              status-only — see changeset-panel.tsx). ChangeSets are
-              workspace-wide rather than requirement-scoped (no backend
+              status-only — see changeset-panel.tsx), stacked above Design
+              Studio settings (Slice F, settings only — see
+              design-settings-panel.tsx). ChangeSets and Design settings are
+              both workspace-wide rather than requirement-scoped (no backend
               linkage to derive from yet, see store.ts), so they get their own
-              stacked section instead of requiring an open requirement — this
-              still fits the existing two-column shell without adding a new
-              region or a tab. */}
-          <aside className="hidden min-h-0 flex-col gap-3 border-l border-(--ui-stroke-tertiary) p-3 sm:flex">
+              stacked sections instead of requiring an open requirement —
+              Design settings uses a bounded/scrollable block rather than
+              flex-1 like Plans/ChangeSets since it's a single form, not a
+              list+detail split, so it doesn't need to compete for equal
+              vertical share. This still fits the existing two-column shell
+              without adding a new region or a tab. */}
+          <aside className="hidden min-h-0 flex-col gap-3 border-l border-(--ui-stroke-tertiary) p-3 sm:flex sm:overflow-y-auto">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <PlanPanel workspaceRoot={workspaceRoot} />
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-(--ui-stroke-tertiary) pt-3">
               <ChangeSetPanel workspaceRoot={workspaceRoot} />
+            </div>
+            <div className="flex shrink-0 flex-col border-t border-(--ui-stroke-tertiary) pt-3">
+              <DesignSettingsPanel workspaceRoot={workspaceRoot} />
             </div>
           </aside>
         </div>

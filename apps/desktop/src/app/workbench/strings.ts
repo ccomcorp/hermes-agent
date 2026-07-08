@@ -147,6 +147,78 @@ export const workbenchStrings = {
     } as Record<string, string>
   },
 
+  // Design Studio settings (Slice F — settings only; see go-forward plan §5
+  // Slice F/G/H/I split). This is a plain form over one settings document per
+  // workspace — no design-brief/prototype generation, no preview, and no
+  // ChangeSet-apply copy belongs here.
+  design: {
+    heading: 'Design settings',
+    loading: 'Loading design settings',
+    loadFailed: 'Failed to load design settings',
+    saveFailed: 'Failed to save design settings',
+    saved: 'Design settings saved',
+    emptyDesc: 'Design settings for this workspace will appear here once loaded.',
+
+    enabledLabel: 'Design Studio enabled',
+    presetLabel: 'Design system preset',
+    brandColorLabel: 'Brand color',
+    brandColorPlaceholder: '#3366ff',
+    toneLabel: 'Tone (comma-separated)',
+    tonePlaceholder: 'confident, minimal, playful',
+    densityLabel: 'Layout density',
+    radiusLabel: 'Corner radius',
+    fontStyleLabel: 'Typography style',
+    viewportLabel: 'Target viewport',
+    stackHintLabel: 'Framework / stack hint',
+    stackHintPlaceholder: 'react + tailwind',
+    sandboxLabel: 'Sandbox HTML preview',
+    unsetOption: 'Unset',
+
+    presetNames: {
+      none: 'None',
+      shadcn: 'shadcn/ui',
+      radix: 'Radix',
+      material: 'Material',
+      ios: 'iOS',
+      fluent: 'Fluent',
+      ant: 'Ant Design',
+      chakra: 'Chakra UI',
+      carbon: 'Carbon',
+      polaris: 'Polaris',
+      bootstrap: 'Bootstrap',
+      geist: 'Geist',
+      brutalism: 'Brutalism',
+      editorial: 'Editorial'
+    } as Record<string, string>,
+
+    densityNames: {
+      compact: 'Compact',
+      cozy: 'Cozy',
+      spacious: 'Spacious'
+    } as Record<string, string>,
+
+    radiusNames: {
+      sharp: 'Sharp',
+      soft: 'Soft',
+      rounded: 'Rounded',
+      pill: 'Pill'
+    } as Record<string, string>,
+
+    fontStyleNames: {
+      system: 'System',
+      geometric: 'Geometric',
+      humanist: 'Humanist',
+      serif: 'Serif',
+      mono: 'Mono'
+    } as Record<string, string>,
+
+    viewportNames: {
+      mobile: 'Mobile',
+      tablet: 'Tablet',
+      desktop: 'Desktop'
+    } as Record<string, string>
+  },
+
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).
   statusBar: {

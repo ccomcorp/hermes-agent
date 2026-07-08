@@ -57,6 +57,81 @@ function fail(result) {
 }
 
 // ---------------------------------------------------------------------------
+// Design settings validators (mirror of validateWriteDesignSettingsRequest in
+// apps/shared/src/workbench/validators.ts — see the comment at the top of
+// this file for why the .cjs context hand-writes a runtime copy).
+// ---------------------------------------------------------------------------
+
+const VALID_VIEWPORTS = ['mobile', 'tablet', 'desktop']
+const VALID_DESIGN_PRESETS = [
+  'none', 'shadcn', 'radix', 'material', 'ios', 'fluent', 'ant',
+  'chakra', 'carbon', 'polaris', 'bootstrap', 'geist', 'brutalism', 'editorial'
+]
+const VALID_RADIUS_VALUES = ['sharp', 'soft', 'rounded', 'pill']
+const VALID_DENSITY_VALUES = ['compact', 'cozy', 'spacious']
+const VALID_FONT_STYLE_VALUES = ['system', 'geometric', 'humanist', 'serif', 'mono']
+
+function validateDesignSettings(settings) {
+  if (!settings || typeof settings !== 'object') {
+    return { ok: false, message: 'settings is required', code: 'MISSING_SETTINGS' }
+  }
+
+  if (typeof settings.enabled !== 'boolean') {
+    return { ok: false, message: 'settings.enabled must be a boolean', code: 'INVALID_ENABLED' }
+  }
+
+  if (!VALID_VIEWPORTS.includes(settings.defaultViewport)) {
+    return { ok: false, message: 'invalid defaultViewport', code: 'INVALID_VIEWPORT' }
+  }
+
+  if (!VALID_DESIGN_PRESETS.includes(settings.designSystemPreset)) {
+    return { ok: false, message: 'invalid designSystemPreset', code: 'INVALID_PRESET' }
+  }
+
+  if (settings.brandColor !== undefined) {
+    if (typeof settings.brandColor !== 'string' || settings.brandColor.length > 64) {
+      return { ok: false, message: 'brandColor is invalid', code: 'INVALID_BRAND_COLOR' }
+    }
+  }
+
+  if (!Array.isArray(settings.tone)) {
+    return { ok: false, message: 'tone must be an array', code: 'INVALID_TONE' }
+  }
+
+  if (settings.tone.length > 20) {
+    return { ok: false, message: 'too many tone entries', code: 'INVALID_TONE' }
+  }
+
+  if (settings.tone.some((entry) => typeof entry !== 'string' || entry.length > 100)) {
+    return { ok: false, message: 'tone entries must be short strings', code: 'INVALID_TONE' }
+  }
+
+  if (settings.radius !== undefined && !VALID_RADIUS_VALUES.includes(settings.radius)) {
+    return { ok: false, message: 'invalid radius', code: 'INVALID_RADIUS' }
+  }
+
+  if (settings.density !== undefined && !VALID_DENSITY_VALUES.includes(settings.density)) {
+    return { ok: false, message: 'invalid density', code: 'INVALID_DENSITY' }
+  }
+
+  if (settings.fontStyle !== undefined && !VALID_FONT_STYLE_VALUES.includes(settings.fontStyle)) {
+    return { ok: false, message: 'invalid fontStyle', code: 'INVALID_FONT_STYLE' }
+  }
+
+  if (settings.stackHint !== undefined) {
+    if (typeof settings.stackHint !== 'string' || settings.stackHint.length > 200) {
+      return { ok: false, message: 'stackHint is invalid', code: 'INVALID_STACK_HINT' }
+    }
+  }
+
+  if (typeof settings.sandboxHtmlPreview !== 'boolean') {
+    return { ok: false, message: 'settings.sandboxHtmlPreview must be a boolean', code: 'INVALID_SANDBOX_FLAG' }
+  }
+
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
 // Response normalization (locked decision §3.5)
 //
 // Every workbench handler must return exactly ONE envelope shape to the
@@ -349,6 +424,37 @@ function registerWorkbenchIpc() {
       ))
     } catch (err) {
       return { ok: false, message: 'Failed to update changeset: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // -- Design settings (Slice F — settings only, never briefs/prototypes) ----
+
+  ipcMain.handle('hermes:workbench:design:settings:read', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(store.readDesignSettings(payload.workspaceRoot))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read design settings: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:design:settings:write', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    const settingsCheck = validateDesignSettings(payload.settings)
+    if (!isOk(settingsCheck)) return fail(settingsCheck)
+
+    try {
+      return normalize(store.writeDesignSettings(payload.workspaceRoot, payload.settings))
+    } catch (err) {
+      return { ok: false, message: 'Failed to write design settings: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
 }

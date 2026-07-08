@@ -9,7 +9,8 @@ import type {
   WorkbenchRequirementTrace,
   WorkbenchRequirementStatus,
   WorkbenchPlan,
-  WorkbenchChangeSet
+  WorkbenchChangeSet,
+  WorkbenchDesignSettings
 } from '@hermes/shared'
 
 export {}
@@ -308,6 +309,17 @@ declare global {
               approval?: { kind: string; decision: string; reason?: string }
             }
           }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+        }
+        // Design SETTINGS only (Slice F) — a single per-workspace document,
+        // not a list. No generation/preview/changeset-apply channel exists.
+        design: {
+          settings: {
+            read: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
+            write: (payload: {
+              workspaceRoot: string
+              settings: WorkbenchDesignSettings
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
+          }
         }
       }
     }

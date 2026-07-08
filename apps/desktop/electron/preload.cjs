@@ -246,6 +246,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       create: payload => ipcRenderer.invoke('hermes:workbench:changesets:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:changesets:read', payload),
       update: payload => ipcRenderer.invoke('hermes:workbench:changesets:update', payload)
+    },
+    design: {
+      settings: {
+        // Design SETTINGS only (Slice F) — a single object per workspace, not
+        // a list. No generation/preview/changeset-apply channel exists here.
+        read: payload => ipcRenderer.invoke('hermes:workbench:design:settings:read', payload),
+        write: payload => ipcRenderer.invoke('hermes:workbench:design:settings:write', payload)
+      }
     }
   }
 })

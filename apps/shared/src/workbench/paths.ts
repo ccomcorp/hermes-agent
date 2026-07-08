@@ -8,7 +8,8 @@
 import {
   HERMES_REQUIREMENTS_DIR,
   HERMES_PLANS_DIR,
-  HERMES_CHANGESETS_DIR
+  HERMES_CHANGESETS_DIR,
+  HERMES_DESIGNS_DIR
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -123,6 +124,17 @@ export function buildPlanRelativePath(planSlugOrId: string): string {
 export function buildChangeSetRelativePath(changesetId: string): string {
   const safeId = sanitizeId(changesetId)
   return `${HERMES_CHANGESETS_DIR}/${safeId}.json`
+}
+
+// ---------------------------------------------------------------------------
+// Design settings path builder
+//
+// A single settings document per workspace (not a list keyed by id) —
+// there is only ever one path.
+// ---------------------------------------------------------------------------
+
+export function buildDesignSettingsRelativePath(): string {
+  return `${HERMES_DESIGNS_DIR}/settings.json`
 }
 
 // ---------------------------------------------------------------------------

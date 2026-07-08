@@ -56,7 +56,9 @@ const CH = {
   planUpdate: 'hermes:workbench:plans:update',
   csList: 'hermes:workbench:changesets:list',
   csCreate: 'hermes:workbench:changesets:create',
-  csRead: 'hermes:workbench:changesets:read'
+  csRead: 'hermes:workbench:changesets:read',
+  designRead: 'hermes:workbench:design:settings:read',
+  designWrite: 'hermes:workbench:design:settings:write'
 }
 
 function invoke(channel, payload) {
@@ -164,6 +166,89 @@ test('plans create/read/list return normalized shape', () => {
     assertNormalized(list)
     assert.strictEqual(list.ok, true)
     assert.strictEqual(list.value.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design settings read returns defaults, write persists them', () => {
+  const ws = createTempWorkspace()
+  try {
+    const initial = invoke(CH.designRead, { workspaceRoot: ws })
+    assertNormalized(initial)
+    assert.strictEqual(initial.ok, true)
+    assert.strictEqual(initial.value.designSystemPreset, 'none')
+    assert.strictEqual(initial.value.defaultViewport, 'desktop')
+
+    const written = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'mobile',
+        designSystemPreset: 'shadcn',
+        brandColor: '#112233',
+        tone: ['bold'],
+        radius: 'pill',
+        density: 'compact',
+        fontStyle: 'mono',
+        stackHint: 'react native',
+        sandboxHtmlPreview: false
+      }
+    })
+    assertNormalized(written)
+    assert.strictEqual(written.ok, true)
+    assert.strictEqual(written.value.designSystemPreset, 'shadcn')
+
+    const reread = invoke(CH.designRead, { workspaceRoot: ws })
+    assert.strictEqual(reread.ok, true)
+    assert.strictEqual(reread.value.defaultViewport, 'mobile')
+    assert.strictEqual(reread.value.brandColor, '#112233')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design settings write is rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.designWrite, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const missingSettings = invoke(CH.designWrite, { workspaceRoot: ws })
+    assert.strictEqual(missingSettings.ok, false)
+    assert.strictEqual(missingSettings.code, 'MISSING_SETTINGS')
+
+    const badPreset = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'desktop',
+        designSystemPreset: 'bogus-preset',
+        tone: [],
+        sandboxHtmlPreview: true
+      }
+    })
+    assert.strictEqual(badPreset.ok, false)
+    assert.strictEqual(badPreset.code, 'INVALID_PRESET')
+
+    const badViewport = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'ultrawide',
+        designSystemPreset: 'none',
+        tone: [],
+        sandboxHtmlPreview: true
+      }
+    })
+    assert.strictEqual(badViewport.ok, false)
+    assert.strictEqual(badViewport.code, 'INVALID_VIEWPORT')
+
+    // Nothing should have been written to disk by any of the rejected calls.
+    const settingsPath = path.join(ws, '.hermes', 'workbench', 'designs', 'settings.json')
+    assert.ok(!fs.existsSync(settingsPath))
   } finally {
     cleanup(ws)
   }
@@ -328,7 +413,10 @@ test('invalid payloads return structured errors, not throws', () => {
 // ---------------------------------------------------------------------------
 
 test('missing workspace root fails closed on every entry point', () => {
-  for (const channel of [CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate]) {
+  for (const channel of [
+    CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate,
+    CH.designRead, CH.designWrite
+  ]) {
     const res = invoke(channel, {})
     assertNormalized(res)
     assert.strictEqual(res.ok, false, channel + ' must fail on missing workspaceRoot')

@@ -21,6 +21,8 @@ const WORKBENCH_DIR = '.hermes/workbench'
 const REQUIREMENTS_DIR = '.hermes/workbench/requirements'
 const PLANS_DIR = '.hermes/workbench/plans'
 const CHANGESETS_DIR = '.hermes/workbench/changesets'
+const DESIGNS_DIR = '.hermes/workbench/designs'
+const DESIGN_SETTINGS_RELATIVE_PATH = `${DESIGNS_DIR}/settings.json`
 const MANIFEST_PATH = '.hermes/workbench/manifest.json'
 
 // ---------------------------------------------------------------------------
@@ -701,6 +703,67 @@ function listChangeSets(workspaceRoot) {
 }
 
 // ---------------------------------------------------------------------------
+// Design Studio — SETTINGS only (Slice F, go-forward plan §5).
+//
+// Unlike requirements/plans/changesets, there is exactly ONE
+// WorkbenchDesignSettings document per workspace — not a list keyed by id.
+// readDesignSettings()/writeDesignSettings() read/write the whole object at
+// `.hermes/workbench/designs/settings.json`. This never touches
+// WorkbenchDesignArtifact (briefs/prototypes/quality reports) — generating
+// those is Slice G/H/I, explicitly out of scope here.
+// ---------------------------------------------------------------------------
+
+function defaultDesignSettings() {
+  return {
+    enabled: true,
+    defaultViewport: 'desktop',
+    designSystemPreset: 'none',
+    tone: [],
+    sandboxHtmlPreview: true
+  }
+}
+
+function readDesignSettings(workspaceRoot) {
+  const fullPath = resolveWorkspacePath(workspaceRoot, DESIGN_SETTINGS_RELATIVE_PATH)
+
+  if (!fs.existsSync(fullPath)) {
+    // Fail OPEN with sensible defaults here, not a NOT_FOUND error — a
+    // workspace with no saved design settings yet is the normal first-load
+    // state, matching the "show sensible defaults if none saved yet" UX,
+    // not a missing-artifact error.
+    return { ok: true, value: defaultDesignSettings() }
+  }
+
+  try {
+    const settings = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+    return { ok: true, value: settings }
+  } catch {
+    return { ok: false, message: 'Corrupt design settings file', code: 'CORRUPT' }
+  }
+}
+
+function writeDesignSettings(workspaceRoot, settings) {
+  const now = new Date().toISOString()
+  const fullPath = resolveWorkspacePath(workspaceRoot, DESIGN_SETTINGS_RELATIVE_PATH)
+
+  atomicWriteJSON(fullPath, settings)
+
+  // Keep the manifest's `designs` array in sync with a single settings entry
+  // — mirrors the bookkeeping every other artifact type gets, even though
+  // this is a singleton document rather than a list.
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.designs)) m.designs = []
+    const idx = m.designs.findIndex((d) => d.id === 'settings')
+    const entry = { id: 'settings', title: 'Design settings', relativePath: DESIGN_SETTINGS_RELATIVE_PATH, updatedAt: now }
+    if (idx >= 0) m.designs[idx] = entry
+    else m.designs.push(entry)
+    return m
+  })
+
+  return { ok: true, value: settings }
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -777,6 +840,8 @@ module.exports = {
   readChangeSet,
   updateChangeSetStatus,
   listChangeSets,
+  readDesignSettings,
+  writeDesignSettings,
   readManifest,
   ensureManifest,
   updateManifest,

@@ -8,10 +8,12 @@ import type {
   UpdateWorkbenchRequirementRequest,
   CreateWorkbenchPlanRequest,
   CreateWorkbenchChangeSetRequest,
+  WriteWorkbenchDesignSettingsRequest,
   WorkbenchRequirementStatus,
   WorkbenchChangeSetStatus,
   WorkbenchChangeSource,
-  WorkbenchPlanOperation
+  WorkbenchPlanOperation,
+  WorkbenchDesignSettings
 } from './types'
 import { isSafeWorkbenchRelativePath } from './paths'
 
@@ -26,6 +28,10 @@ const MAX_SUMMARY_LENGTH = 5_000
 const MAX_FILES_PER_CHANGESET = 500
 const MAX_INSTRUCTION_LENGTH = 5_000
 const MAX_FILE_PATH_LENGTH = 1_000
+const MAX_BRAND_COLOR_LENGTH = 64
+const MAX_STACK_HINT_LENGTH = 200
+const MAX_TONE_ITEMS = 20
+const MAX_TONE_ITEM_LENGTH = 100
 
 const VALID_REQUIREMENT_STATUSES: readonly WorkbenchRequirementStatus[] = [
   'draft', 'clarified', 'planned', 'in_progress',
@@ -42,6 +48,25 @@ const VALID_CHANGE_SOURCES: readonly WorkbenchChangeSource[] = [
 ]
 
 const VALID_PLAN_OPERATIONS: readonly WorkbenchPlanOperation[] = ['draft', 'refine']
+
+const VALID_VIEWPORTS: readonly WorkbenchDesignSettings['defaultViewport'][] = ['mobile', 'tablet', 'desktop']
+
+const VALID_DESIGN_PRESETS: readonly WorkbenchDesignSettings['designSystemPreset'][] = [
+  'none', 'shadcn', 'radix', 'material', 'ios', 'fluent', 'ant',
+  'chakra', 'carbon', 'polaris', 'bootstrap', 'geist', 'brutalism', 'editorial'
+]
+
+const VALID_RADIUS_VALUES: readonly NonNullable<WorkbenchDesignSettings['radius']>[] = [
+  'sharp', 'soft', 'rounded', 'pill'
+]
+
+const VALID_DENSITY_VALUES: readonly NonNullable<WorkbenchDesignSettings['density']>[] = [
+  'compact', 'cozy', 'spacious'
+]
+
+const VALID_FONT_STYLE_VALUES: readonly NonNullable<WorkbenchDesignSettings['fontStyle']>[] = [
+  'system', 'geometric', 'humanist', 'serif', 'mono'
+]
 
 // ---------------------------------------------------------------------------
 // Validation result
@@ -233,6 +258,77 @@ export function validateCreateChangeSetRequest(
 
   if (input.planId && !input.planId.trim()) {
     return fail('planId must not be empty if provided', 'EMPTY_PLAN_ID')
+  }
+
+  return ok()
+}
+
+// ---------------------------------------------------------------------------
+// Design settings validators (Slice F — settings only, not artifacts)
+// ---------------------------------------------------------------------------
+
+export function validateWriteDesignSettingsRequest(
+  input: WriteWorkbenchDesignSettingsRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  const settings = input.settings
+
+  if (!settings || typeof settings !== 'object') {
+    return fail('settings is required', 'MISSING_SETTINGS')
+  }
+
+  if (typeof settings.enabled !== 'boolean') {
+    return fail('settings.enabled must be a boolean', 'INVALID_ENABLED')
+  }
+
+  if (!VALID_VIEWPORTS.includes(settings.defaultViewport)) {
+    return fail('invalid defaultViewport', 'INVALID_VIEWPORT')
+  }
+
+  if (!VALID_DESIGN_PRESETS.includes(settings.designSystemPreset)) {
+    return fail('invalid designSystemPreset', 'INVALID_PRESET')
+  }
+
+  if (settings.brandColor !== undefined) {
+    if (typeof settings.brandColor !== 'string' || settings.brandColor.length > MAX_BRAND_COLOR_LENGTH) {
+      return fail('brandColor is invalid', 'INVALID_BRAND_COLOR')
+    }
+  }
+
+  if (!Array.isArray(settings.tone)) {
+    return fail('tone must be an array', 'INVALID_TONE')
+  }
+
+  if (settings.tone.length > MAX_TONE_ITEMS) {
+    return fail('too many tone entries', 'INVALID_TONE')
+  }
+
+  if (settings.tone.some(entry => typeof entry !== 'string' || entry.length > MAX_TONE_ITEM_LENGTH)) {
+    return fail('tone entries must be short strings', 'INVALID_TONE')
+  }
+
+  if (settings.radius !== undefined && !VALID_RADIUS_VALUES.includes(settings.radius)) {
+    return fail('invalid radius', 'INVALID_RADIUS')
+  }
+
+  if (settings.density !== undefined && !VALID_DENSITY_VALUES.includes(settings.density)) {
+    return fail('invalid density', 'INVALID_DENSITY')
+  }
+
+  if (settings.fontStyle !== undefined && !VALID_FONT_STYLE_VALUES.includes(settings.fontStyle)) {
+    return fail('invalid fontStyle', 'INVALID_FONT_STYLE')
+  }
+
+  if (settings.stackHint !== undefined) {
+    if (typeof settings.stackHint !== 'string' || settings.stackHint.length > MAX_STACK_HINT_LENGTH) {
+      return fail('stackHint is invalid', 'INVALID_STACK_HINT')
+    }
+  }
+
+  if (typeof settings.sandboxHtmlPreview !== 'boolean') {
+    return fail('settings.sandboxHtmlPreview must be a boolean', 'INVALID_SANDBOX_FLAG')
   }
 
   return ok()

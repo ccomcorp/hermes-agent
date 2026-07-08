@@ -14,6 +14,7 @@
 import type {
   WorkbenchChangeSet,
   WorkbenchChangeSetStatus,
+  WorkbenchDesignSettings,
   WorkbenchManifestEntry,
   WorkbenchPlan,
   WorkbenchRequirement,
@@ -208,4 +209,28 @@ export function updateChangeSetStatus(
   input: UpdateChangeSetStatusInput
 ): Promise<WorkbenchIpcResult<WorkbenchChangeSet>> {
   return window.hermesDesktop.workbench.changesets.update(input)
+}
+
+// ---------------------------------------------------------------------------
+// Design Studio — SETTINGS only (Slice F, go-forward plan §5).
+//
+// There is exactly ONE WorkbenchDesignSettings document per workspace, so
+// unlike requirements/plans/changesets there is no list/create pair — just
+// read the current settings (the backend returns sensible defaults when none
+// have been saved yet, see workbench-artifacts.cjs `readDesignSettings`) and
+// write the whole object back.
+//
+// No function here calls any design-generation, prototype-preview, or
+// changeset-apply API — those are Slice G/H/I, out of scope for this slice.
+// ---------------------------------------------------------------------------
+
+export function readDesignSettings(workspaceRoot: string): Promise<WorkbenchIpcResult<WorkbenchDesignSettings>> {
+  return window.hermesDesktop.workbench.design.settings.read({ workspaceRoot })
+}
+
+export function writeDesignSettings(
+  workspaceRoot: string,
+  settings: WorkbenchDesignSettings
+): Promise<WorkbenchIpcResult<WorkbenchDesignSettings>> {
+  return window.hermesDesktop.workbench.design.settings.write({ workspaceRoot, settings })
 }
