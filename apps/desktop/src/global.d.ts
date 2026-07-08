@@ -10,7 +10,9 @@ import type {
   WorkbenchRequirementStatus,
   WorkbenchPlan,
   WorkbenchChangeSet,
-  WorkbenchDesignSettings
+  WorkbenchDesignSettings,
+  WorkbenchWriteProject,
+  WorkbenchWriteRecentEdit
 } from '@hermes/shared'
 
 export {}
@@ -320,6 +322,42 @@ declare global {
               settings: WorkbenchDesignSettings
             }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
           }
+        }
+        // Write Workspace — CRUD only (Slice J). A write project is a single
+        // markdown document + metadata, same shape as a Requirement. No
+        // quick-actions/inline-edit/retrieval/export channel exists here —
+        // those are Slice K/L, not built in this slice.
+        write: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            markdown?: string
+          }) => Promise<WorkbenchIpcResult<{ project: WorkbenchWriteProject }>>
+          read: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title: string
+            markdown: string
+            rootRelativeDir: string
+            activeFileRelativePath?: string
+            createdAt: string
+            updatedAt: string
+            recentEdits: WorkbenchWriteRecentEdit[]
+          }>>
+          update: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+            markdown: string
+            title?: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title?: string
+            contentHash: string
+            updatedAt: string
+          }>>
         }
       }
     }

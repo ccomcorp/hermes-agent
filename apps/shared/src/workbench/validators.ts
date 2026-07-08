@@ -9,6 +9,8 @@ import type {
   CreateWorkbenchPlanRequest,
   CreateWorkbenchChangeSetRequest,
   WriteWorkbenchDesignSettingsRequest,
+  CreateWorkbenchWriteProjectRequest,
+  UpdateWorkbenchWriteProjectRequest,
   WorkbenchRequirementStatus,
   WorkbenchChangeSetStatus,
   WorkbenchChangeSource,
@@ -329,6 +331,50 @@ export function validateWriteDesignSettingsRequest(
 
   if (typeof settings.sandboxHtmlPreview !== 'boolean') {
     return fail('settings.sandboxHtmlPreview must be a boolean', 'INVALID_SANDBOX_FLAG')
+  }
+
+  return ok()
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace validators (Slice J — CRUD only, go-forward plan §5)
+//
+// A write project is a single markdown document + metadata, same shape and
+// same field limits as a Requirement. No AI-rewrite/export/retrieval fields
+// exist on these requests — that is Slice K/L, out of scope here.
+// ---------------------------------------------------------------------------
+
+export function validateCreateWriteProjectRequest(
+  input: CreateWorkbenchWriteProjectRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  const titleCheck = validateTitle(input.title)
+  if (!titleCheck.ok) return titleCheck
+
+  const mdCheck = validateMarkdown(input.markdown, false)
+  if (!mdCheck.ok) return mdCheck
+
+  return ok()
+}
+
+export function validateUpdateWriteProjectRequest(
+  input: UpdateWorkbenchWriteProjectRequest
+): ValidationResult {
+  const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
+  if (!rootCheck.ok) return rootCheck
+
+  if (!input.writeProjectId || !input.writeProjectId.trim()) {
+    return fail('writeProjectId is required', 'MISSING_WRITE_PROJECT_ID')
+  }
+
+  const mdCheck = validateMarkdown(input.markdown, true)
+  if (!mdCheck.ok) return mdCheck
+
+  if (input.title) {
+    const titleCheck = validateTitle(input.title)
+    if (!titleCheck.ok) return titleCheck
   }
 
   return ok()

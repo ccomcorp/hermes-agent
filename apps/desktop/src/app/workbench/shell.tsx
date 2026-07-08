@@ -10,7 +10,7 @@
  */
 import { useStore } from '@nanostores/react'
 import type * as React from 'react'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
@@ -28,6 +28,20 @@ import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
 import { workbenchStrings as s } from './strings'
+import { WritePanel } from './write-panel'
+
+// Top-level area switch (Requirements+Plans+ChangeSets+Design vs. Write
+// Workspace). LAYOUT DECISION (Slice J): Write Workspace's live source/preview
+// split needs real width to be usable — the existing 20rem right rail (which
+// already stacks Plans/ChangeSets/Design settings) has no room left for a
+// second editor pane. Rather than cram a fourth thing into that rail or force
+// a redesign of the existing Requirements-centric layout, Write Workspace gets
+// its own full-width area behind a simple two-way tab switch in the header,
+// the same kind of one-off layout call Slices C/D/F each made when a new
+// artifact type didn't fit the existing regions cleanly. Local component
+// state (not persisted) — matches how Slice J's split-mode toggle is also a
+// plain, non-persisted view state.
+type WorkbenchArea = 'requirements' | 'write'
 
 interface WorkbenchShellProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
@@ -38,6 +52,7 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
   const terminalCwd = useStore($currentCwd)
   const activeProfile = useStore($activeGatewayProfile)
   const backendMode = useStore($workbenchBackendMode)
+  const [area, setArea] = useState<WorkbenchArea>('requirements')
 
   // Four distinctly-labeled status items, mirroring how Files pushes a single
   // 'files-path' group (files/index.tsx) — never merged into one string, so
@@ -103,7 +118,35 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
           PAGE_INSET_X
         )}
       >
-        <h1 className="text-sm font-semibold text-foreground">{s.title}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-semibold text-foreground">{s.title}</h1>
+          {workspaceRoot && (
+            <div className="flex items-center gap-0.5 rounded-md border border-(--ui-stroke-secondary) p-0.5">
+              <button
+                className={
+                  area === 'requirements'
+                    ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.7rem] font-medium text-foreground'
+                    : 'rounded-[0.25rem] px-2 py-0.5 text-[0.7rem] font-medium text-muted-foreground/70 hover:text-foreground'
+                }
+                onClick={() => setArea('requirements')}
+                type="button"
+              >
+                {s.title}
+              </button>
+              <button
+                className={
+                  area === 'write'
+                    ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.7rem] font-medium text-foreground'
+                    : 'rounded-[0.25rem] px-2 py-0.5 text-[0.7rem] font-medium text-muted-foreground/70 hover:text-foreground'
+                }
+                onClick={() => setArea('write')}
+                type="button"
+              >
+                {s.write.navLabel}
+              </button>
+            </div>
+          )}
+        </div>
         <Button onClick={() => void pickWorkspace()} size="sm" variant="outline">
           <Codicon name="folder-opened" size="0.875rem" />
           {workspaceRoot ? s.changeWorkspace : s.selectWorkspace}
@@ -120,6 +163,10 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
               {s.selectWorkspace}
             </Button>
           </div>
+        </div>
+      ) : area === 'write' ? (
+        <div className="grid min-h-0 flex-1 grid-cols-1">
+          <WritePanel workspaceRoot={workspaceRoot} />
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_20rem]">

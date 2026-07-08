@@ -254,6 +254,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
         read: payload => ipcRenderer.invoke('hermes:workbench:design:settings:read', payload),
         write: payload => ipcRenderer.invoke('hermes:workbench:design:settings:write', payload)
       }
+    },
+    write: {
+      // Write Workspace — CRUD only (Slice J). No quick-actions, inline-edit,
+      // retrieval, or export channel exists here — those are Slice K/L.
+      list: payload => ipcRenderer.invoke('hermes:workbench:write:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:write:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:write:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:write:update', payload)
     }
   }
 })

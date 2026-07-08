@@ -19,7 +19,9 @@ import type {
   WorkbenchPlan,
   WorkbenchRequirement,
   WorkbenchRequirementStatus,
-  WorkbenchRequirementTrace
+  WorkbenchRequirementTrace,
+  WorkbenchWriteProject,
+  WorkbenchWriteRecentEdit
 } from '@hermes/shared'
 
 import type { WorkbenchIpcResult } from '@/global'
@@ -233,4 +235,60 @@ export function writeDesignSettings(
   settings: WorkbenchDesignSettings
 ): Promise<WorkbenchIpcResult<WorkbenchDesignSettings>> {
   return window.hermesDesktop.workbench.design.settings.write({ workspaceRoot, settings })
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace — CRUD only (Slice J, go-forward plan §5).
+//
+// A write project is a single markdown document + metadata (same shape as a
+// Requirement — see requirements above), not a multi-file tree. No function
+// here calls any AI-rewrite (quick actions / selection-aware inline edit),
+// retrieval, or export API — those are Slice K/L, explicitly out of scope.
+// ---------------------------------------------------------------------------
+
+export interface WorkbenchWriteProjectDetail {
+  id: string
+  title: string
+  markdown: string
+  rootRelativeDir: string
+  activeFileRelativePath?: string
+  createdAt: string
+  updatedAt: string
+  recentEdits: WorkbenchWriteRecentEdit[]
+}
+
+export interface CreateWorkbenchWriteProjectInput {
+  workspaceRoot: string
+  title: string
+  markdown?: string
+}
+
+export interface UpdateWorkbenchWriteProjectInput {
+  workspaceRoot: string
+  writeProjectId: string
+  markdown: string
+  title?: string
+}
+
+export function listWriteProjects(workspaceRoot: string): Promise<WorkbenchIpcResult<WorkbenchManifestEntry[]>> {
+  return window.hermesDesktop.workbench.write.list({ workspaceRoot })
+}
+
+export function createWriteProject(
+  input: CreateWorkbenchWriteProjectInput
+): Promise<WorkbenchIpcResult<{ project: WorkbenchWriteProject }>> {
+  return window.hermesDesktop.workbench.write.create(input)
+}
+
+export function readWriteProject(
+  workspaceRoot: string,
+  writeProjectId: string
+): Promise<WorkbenchIpcResult<WorkbenchWriteProjectDetail>> {
+  return window.hermesDesktop.workbench.write.read({ workspaceRoot, writeProjectId })
+}
+
+export function updateWriteProject(
+  input: UpdateWorkbenchWriteProjectInput
+): Promise<WorkbenchIpcResult<{ id: string; title?: string; contentHash: string; updatedAt: string }>> {
+  return window.hermesDesktop.workbench.write.update(input)
 }

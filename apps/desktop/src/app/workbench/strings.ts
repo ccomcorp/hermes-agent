@@ -219,6 +219,67 @@ export const workbenchStrings = {
     } as Record<string, string>
   },
 
+  // Write Workspace (Slice J — backend CRUD + editor only; see go-forward
+  // plan §5 Slice J/K/L split). No quick-actions/inline-edit/retrieval/export
+  // copy belongs here — that is Slice K/L.
+  write: {
+    heading: 'Write Workspace',
+    navLabel: 'Write',
+
+    loading: 'Loading write projects',
+    loadFailed: 'Failed to load write projects',
+    openFailed: 'Failed to open write project',
+    newProject: 'New write project',
+    emptyTitle: 'No write projects yet',
+    emptyDesc: 'Create the first Write Workspace document for this workspace.',
+    selectPrompt: 'Select a write project to view it, or create a new one.',
+
+    createTitle: 'New write project',
+    createDialogDesc: 'Write projects hold long-form Markdown documents. Creating one writes a file only.',
+    titleLabel: 'Title',
+    titlePlaceholder: 'Document title',
+    markdownLabel: 'Content (Markdown)',
+    markdownPlaceholder: '# Start writing…',
+    create: 'Create',
+    creating: 'Creating',
+    createFailed: 'Failed to create write project',
+    createdTitle: (title: string) => `"${title}" created`,
+
+    editTitleLabel: 'Title',
+    save: 'Save',
+    saving: 'Saving',
+    saved: 'Write project saved',
+    saveFailed: 'Failed to save write project',
+    unsavedHint: 'Unsaved changes',
+
+    // Split-mode toggle — a plain three-way view switch, not a rich editor.
+    viewSource: 'Source',
+    viewPreview: 'Preview',
+    viewSplit: 'Split',
+
+    recentEditsHeading: 'Recent edits',
+    recentEditsEmpty: 'No saves yet.',
+    recentEditAgo: (ageMs: number) => {
+      const minutes = Math.floor(ageMs / 60_000)
+
+      if (minutes < 1) {
+        return 'Just now'
+      }
+
+      if (minutes < 60) {
+        return `${minutes}m ago`
+      }
+
+      const hours = Math.floor(minutes / 60)
+
+      if (hours < 24) {
+        return `${hours}h ago`
+      }
+
+      return `${Math.floor(hours / 24)}d ago`
+    }
+  },
+
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).
   statusBar: {

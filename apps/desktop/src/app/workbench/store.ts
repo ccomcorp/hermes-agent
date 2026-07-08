@@ -1,4 +1,8 @@
-import type { WorkbenchDesignSettings, WorkbenchManifestEntry, WorkbenchRequirementTrace } from '@hermes/shared'
+import type {
+  WorkbenchDesignSettings,
+  WorkbenchManifestEntry,
+  WorkbenchRequirementTrace
+} from '@hermes/shared'
 // Hermes Workbench feature state.
 //
 // Plain nanostores, mirroring the pattern in `../skills/store.ts` (persisted
@@ -66,6 +70,9 @@ export function setWorkbenchWorkspaceRoot(root: null | string) {
   $workbenchChangeSetsError.set(null)
   $workbenchDesignSettings.set(null)
   $workbenchDesignSettingsError.set(null)
+  $workbenchWriteProjects.set([])
+  $workbenchActiveWriteProjectId.set(null)
+  $workbenchWriteProjectsError.set(null)
 }
 
 export function setWorkbenchRequirements(entries: WorkbenchManifestEntry[]) {
@@ -245,4 +252,46 @@ export function setWorkbenchDesignSettingsLoading(loading: boolean) {
 
 export function setWorkbenchDesignSettingsError(message: null | string) {
   $workbenchDesignSettingsError.set(message)
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace (Slice J — backend CRUD + editor)
+//
+// Write projects are a list, one per workspace, exactly like Requirements —
+// not a singleton like Design Studio settings. Loaded detail (markdown +
+// recent edits) is view-local state in write-panel.tsx, matching how
+// requirement-panel.tsx keeps its loaded detail local rather than global.
+// ---------------------------------------------------------------------------
+
+export const $workbenchWriteProjects = atom<WorkbenchManifestEntry[]>([])
+export const $workbenchWriteProjectsLoading = atom(false)
+export const $workbenchWriteProjectsError = atom<null | string>(null)
+export const $workbenchActiveWriteProjectId = atom<null | string>(null)
+
+export function setWorkbenchWriteProjects(entries: WorkbenchManifestEntry[]) {
+  $workbenchWriteProjects.set(entries)
+}
+
+export function setWorkbenchWriteProjectsLoading(loading: boolean) {
+  $workbenchWriteProjectsLoading.set(loading)
+}
+
+export function setWorkbenchWriteProjectsError(message: null | string) {
+  $workbenchWriteProjectsError.set(message)
+}
+
+export function setWorkbenchActiveWriteProjectId(id: null | string) {
+  $workbenchActiveWriteProjectId.set(id)
+}
+
+export function upsertWorkbenchWriteProjectManifestEntry(entry: WorkbenchManifestEntry) {
+  const current = $workbenchWriteProjects.get()
+  const next = [entry, ...current.filter(existing => existing.id !== entry.id)]
+  $workbenchWriteProjects.set(next)
+}
+
+export function patchWorkbenchWriteProjectManifestEntry(id: string, patch: Partial<WorkbenchManifestEntry>) {
+  $workbenchWriteProjects.set(
+    $workbenchWriteProjects.get().map(entry => (entry.id === id ? { ...entry, ...patch } : entry))
+  )
 }

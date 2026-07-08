@@ -390,3 +390,151 @@ test('ensureManifest recovers from corrupt manifest', () => {
     cleanup(ws)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Write Workspace — CRUD only (Slice J)
+// ---------------------------------------------------------------------------
+
+test('createWriteProject creates document + metadata files and manifest entry', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { project } = store.createWriteProject(ws, {
+      title: 'Test Write Project',
+      markdown: '# Test\n\nContent here'
+    })
+
+    assert.ok(project.id)
+    assert.strictEqual(project.title, 'Test Write Project')
+    assert.ok(project.rootRelativeDir)
+    assert.ok(project.activeFileRelativePath)
+
+    const docPath = path.join(ws, project.activeFileRelativePath)
+    assert.ok(fs.existsSync(docPath))
+    const doc = fs.readFileSync(docPath, 'utf8')
+    assert.ok(doc.includes('# Test'))
+
+    const metaPath = path.join(ws, project.rootRelativeDir, 'project.json')
+    assert.ok(fs.existsSync(metaPath))
+
+    const manifest = store.readManifest(ws)
+    assert.strictEqual(manifest.writeProjects.length, 1)
+    assert.strictEqual(manifest.writeProjects[0].id, project.id)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createWriteProject uses default markdown when none provided', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { project } = store.createWriteProject(ws, { title: 'Default Content' })
+
+    const docPath = path.join(ws, project.activeFileRelativePath)
+    const doc = fs.readFileSync(docPath, 'utf8')
+    assert.ok(doc.includes('# Default Content'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readWriteProject returns the document content and empty recent edits', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { project } = store.createWriteProject(ws, { title: 'Read Test', markdown: '# Read Me' })
+
+    const result = store.readWriteProject(ws, project.id)
+    assert.strictEqual(result.ok, true)
+    if (result.ok) {
+      assert.ok(result.value.markdown.includes('# Read Me'))
+      assert.deepStrictEqual(result.value.recentEdits, [])
+    }
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readWriteProject returns NOT_FOUND for a missing project', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.readWriteProject(ws, 'nonexistent')
+    assert.strictEqual(result.ok, false)
+    if (!result.ok) assert.strictEqual(result.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateWriteProject persists new content and records a passive recent-edit entry', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { project } = store.createWriteProject(ws, { title: 'Update Test', markdown: '# Original' })
+
+    const updateResult = store.updateWriteProject(ws, project.id, { markdown: '# Updated content' })
+    assert.strictEqual(updateResult.ok, true)
+    if (updateResult.ok) {
+      assert.ok(updateResult.value.contentHash)
+    }
+
+    const readResult = store.readWriteProject(ws, project.id)
+    assert.strictEqual(readResult.ok, true)
+    if (readResult.ok) {
+      assert.ok(readResult.value.markdown.includes('# Updated content'))
+      assert.strictEqual(readResult.value.recentEdits.length, 1)
+      assert.strictEqual(readResult.value.recentEdits[0].source, 'user')
+      assert.ok(readResult.value.recentEdits[0].ageMs >= 0)
+      assert.ok(readResult.value.recentEdits[0].insertedText.includes('Updated content'))
+    }
+
+    // Manifest entry refreshed, not duplicated.
+    const manifest = store.readManifest(ws)
+    assert.strictEqual(manifest.writeProjects.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateWriteProject caps recent edits history at 20 entries', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { project } = store.createWriteProject(ws, { title: 'History Cap Test', markdown: '# v0' })
+
+    for (let i = 1; i <= 25; i += 1) {
+      store.updateWriteProject(ws, project.id, { markdown: `# v${i}` })
+    }
+
+    const readResult = store.readWriteProject(ws, project.id)
+    assert.strictEqual(readResult.ok, true)
+    if (readResult.ok) {
+      assert.strictEqual(readResult.value.recentEdits.length, 20)
+    }
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateWriteProject returns NOT_FOUND for a missing project', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.updateWriteProject(ws, 'nonexistent', { markdown: '# x' })
+    assert.strictEqual(result.ok, false)
+    if (!result.ok) assert.strictEqual(result.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('listWriteProjects returns manifest rows', () => {
+  const ws = createTempWorkspace()
+  try {
+    store.createWriteProject(ws, { title: 'Write A' })
+    store.createWriteProject(ws, { title: 'Write B' })
+
+    const result = store.listWriteProjects(ws)
+    assert.strictEqual(result.ok, true)
+    if (result.ok) {
+      assert.strictEqual(result.value.length, 2)
+    }
+  } finally {
+    cleanup(ws)
+  }
+})

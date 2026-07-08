@@ -4,14 +4,18 @@ import {
   validateUpdateRequirementRequest,
   validateCreatePlanRequest,
   validateCreateChangeSetRequest,
-  validateWriteDesignSettingsRequest
+  validateWriteDesignSettingsRequest,
+  validateCreateWriteProjectRequest,
+  validateUpdateWriteProjectRequest
 } from './validators'
 import type {
   CreateWorkbenchRequirementRequest,
   UpdateWorkbenchRequirementRequest,
   CreateWorkbenchPlanRequest,
   CreateWorkbenchChangeSetRequest,
-  WriteWorkbenchDesignSettingsRequest
+  WriteWorkbenchDesignSettingsRequest,
+  CreateWorkbenchWriteProjectRequest,
+  UpdateWorkbenchWriteProjectRequest
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -334,5 +338,83 @@ describe('validateWriteDesignSettingsRequest', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('INVALID_SANDBOX_FLAG')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Write Workspace validators (Slice J)
+// ---------------------------------------------------------------------------
+
+describe('validateCreateWriteProjectRequest', () => {
+  const valid: CreateWorkbenchWriteProjectRequest = {
+    workspaceRoot: 'C:/proj',
+    title: 'My Write Project'
+  }
+
+  it('accepts a valid request', () => {
+    expect(validateCreateWriteProjectRequest(valid)).toEqual({ ok: true })
+  })
+
+  it('accepts optional markdown', () => {
+    expect(validateCreateWriteProjectRequest({ ...valid, markdown: '# Some content' })).toEqual({ ok: true })
+  })
+
+  it('rejects missing workspaceRoot', () => {
+    const result = validateCreateWriteProjectRequest({ ...valid, workspaceRoot: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
+  })
+
+  it('rejects missing title', () => {
+    const result = validateCreateWriteProjectRequest({ ...valid, title: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_TITLE')
+  })
+
+  it('rejects title that is only whitespace', () => {
+    const result = validateCreateWriteProjectRequest({ ...valid, title: '   ' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects an oversized title', () => {
+    const result = validateCreateWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
+  })
+
+  it('rejects oversized markdown', () => {
+    const result = validateCreateWriteProjectRequest({ ...valid, markdown: 'a'.repeat(1_000_001) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MARKDOWN_TOO_LARGE')
+  })
+})
+
+describe('validateUpdateWriteProjectRequest', () => {
+  const valid: UpdateWorkbenchWriteProjectRequest = {
+    workspaceRoot: 'C:/proj',
+    writeProjectId: 'write-001',
+    markdown: '# Updated content'
+  }
+
+  it('accepts a valid request', () => {
+    expect(validateUpdateWriteProjectRequest(valid)).toEqual({ ok: true })
+  })
+
+  it('rejects missing writeProjectId', () => {
+    const result = validateUpdateWriteProjectRequest({ ...valid, writeProjectId: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_WRITE_PROJECT_ID')
+  })
+
+  it('rejects missing markdown', () => {
+    const result = validateUpdateWriteProjectRequest({ ...valid, markdown: '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('MISSING_MARKDOWN')
+  })
+
+  it('rejects an oversized title', () => {
+    const result = validateUpdateWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
   })
 })

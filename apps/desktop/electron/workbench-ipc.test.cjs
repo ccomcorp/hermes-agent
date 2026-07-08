@@ -58,7 +58,11 @@ const CH = {
   csCreate: 'hermes:workbench:changesets:create',
   csRead: 'hermes:workbench:changesets:read',
   designRead: 'hermes:workbench:design:settings:read',
-  designWrite: 'hermes:workbench:design:settings:write'
+  designWrite: 'hermes:workbench:design:settings:write',
+  writeList: 'hermes:workbench:write:list',
+  writeCreate: 'hermes:workbench:write:create',
+  writeRead: 'hermes:workbench:write:read',
+  writeUpdate: 'hermes:workbench:write:update'
 }
 
 function invoke(channel, payload) {
@@ -282,6 +286,78 @@ test('changesets create/read/list return normalized shape', () => {
   }
 })
 
+test('write projects create/read/list/update return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.writeCreate, {
+      workspaceRoot: ws,
+      title: 'Blog draft',
+      markdown: '# Blog draft\n'
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.project.id)
+
+    const id = created.value.project.id
+
+    const read = invoke(CH.writeRead, { workspaceRoot: ws, writeProjectId: id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.ok(read.value.markdown.includes('Blog draft'))
+    assert.deepStrictEqual(read.value.recentEdits, [])
+
+    const list = invoke(CH.writeList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const updated = invoke(CH.writeUpdate, {
+      workspaceRoot: ws,
+      writeProjectId: id,
+      markdown: '# Updated draft\n',
+      title: 'Renamed draft'
+    })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.title, 'Renamed draft')
+
+    const reread = invoke(CH.writeRead, { workspaceRoot: ws, writeProjectId: id })
+    assert.strictEqual(reread.ok, true)
+    assert.ok(reread.value.markdown.includes('Updated draft'))
+    assert.strictEqual(reread.value.recentEdits.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('write project handlers are rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.writeCreate, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const noTitle = invoke(CH.writeCreate, { workspaceRoot: ws })
+    assert.strictEqual(noTitle.ok, false)
+    assert.strictEqual(noTitle.code, 'MISSING_TITLE')
+
+    const noId = invoke(CH.writeUpdate, { workspaceRoot: ws, markdown: '# x' })
+    assert.strictEqual(noId.ok, false)
+    assert.strictEqual(noId.code, 'MISSING_WRITE_PROJECT_ID')
+
+    const noMd = invoke(CH.writeUpdate, { workspaceRoot: ws, writeProjectId: 'anything' })
+    assert.strictEqual(noMd.ok, false)
+    assert.strictEqual(noMd.code, 'MISSING_MARKDOWN')
+
+    const missingRead = invoke(CH.writeRead, { workspaceRoot: ws, writeProjectId: 'nonexistent' })
+    assert.strictEqual(missingRead.ok, false)
+    assert.strictEqual(missingRead.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
 // ---------------------------------------------------------------------------
 // (a) Versioned refine keeps the prior version
 // ---------------------------------------------------------------------------
@@ -415,7 +491,7 @@ test('invalid payloads return structured errors, not throws', () => {
 test('missing workspace root fails closed on every entry point', () => {
   for (const channel of [
     CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate,
-    CH.designRead, CH.designWrite
+    CH.designRead, CH.designWrite, CH.writeList, CH.writeCreate, CH.writeRead, CH.writeUpdate
   ]) {
     const res = invoke(channel, {})
     assertNormalized(res)

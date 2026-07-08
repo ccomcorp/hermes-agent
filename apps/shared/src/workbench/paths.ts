@@ -9,7 +9,8 @@ import {
   HERMES_REQUIREMENTS_DIR,
   HERMES_PLANS_DIR,
   HERMES_CHANGESETS_DIR,
-  HERMES_DESIGNS_DIR
+  HERMES_DESIGNS_DIR,
+  HERMES_WRITE_DIR
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,29 @@ export function buildChangeSetRelativePath(changesetId: string): string {
 
 export function buildDesignSettingsRelativePath(): string {
   return `${HERMES_DESIGNS_DIR}/settings.json`
+}
+
+// ---------------------------------------------------------------------------
+// Write Workspace path builders (Slice J, go-forward plan §5)
+//
+// A write project is a single markdown document + metadata sidecar under its
+// own directory — the same shape as a Requirement (one directory per artifact
+// holding a content file plus a metadata file), not a multi-file tree.
+// ---------------------------------------------------------------------------
+
+export function buildWriteProjectRelativeDir(writeProjectId: string): string {
+  const safeId = sanitizeId(writeProjectId)
+  return `${HERMES_WRITE_DIR}/${safeId}`
+}
+
+export function buildWriteProjectDocumentRelativePath(writeProjectId: string): string {
+  const safeId = sanitizeId(writeProjectId)
+  return `${HERMES_WRITE_DIR}/${safeId}/document.md`
+}
+
+export function buildWriteProjectMetaRelativePath(writeProjectId: string): string {
+  const safeId = sanitizeId(writeProjectId)
+  return `${HERMES_WRITE_DIR}/${safeId}/project.json`
 }
 
 // ---------------------------------------------------------------------------

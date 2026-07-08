@@ -7,6 +7,9 @@ import {
   buildRequirementTraceRelativePath,
   buildPlanRelativePath,
   buildChangeSetRelativePath,
+  buildWriteProjectRelativeDir,
+  buildWriteProjectDocumentRelativePath,
+  buildWriteProjectMetaRelativePath,
   sanitizeId,
   resolveWorkbenchPath
 } from './paths'
@@ -178,5 +181,19 @@ describe('resolveWorkbenchPath', () => {
 
   it('normalizes backslashes in workspace root', () => {
     expect(resolveWorkbenchPath('C:\\proj', 'a/b')).toBe('C:/proj/a/b')
+  })
+})
+
+describe('Write Workspace path builders', () => {
+  it('builds the relative dir', () => {
+    expect(buildWriteProjectRelativeDir('My Doc')).toBe('.hermes/workbench/write/my-doc')
+  })
+
+  it('builds the document path', () => {
+    expect(buildWriteProjectDocumentRelativePath('My Doc')).toBe('.hermes/workbench/write/my-doc/document.md')
+  })
+
+  it('builds the metadata sidecar path', () => {
+    expect(buildWriteProjectMetaRelativePath('My Doc')).toBe('.hermes/workbench/write/my-doc/project.json')
   })
 })

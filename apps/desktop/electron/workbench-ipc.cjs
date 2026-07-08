@@ -457,6 +457,90 @@ function registerWorkbenchIpc() {
       return { ok: false, message: 'Failed to write design settings: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
+
+  // -- Write Workspace — CRUD only (Slice J) ---------------------------------
+  //
+  // A write project is a single markdown document + metadata, same shape as a
+  // Requirement. No quick-actions/inline-edit/retrieval/export channel exists
+  // here — those are Slice K/L, not built in this slice.
+
+  ipcMain.handle('hermes:workbench:write:list', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(store.listWriteProjects(payload.workspaceRoot))
+    } catch (err) {
+      return { ok: false, message: 'Failed to list write projects: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:write:create', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    const titleCheck = validateTitle(payload.title)
+    if (!isOk(titleCheck)) return fail(titleCheck)
+
+    const mdCheck = validateMarkdown(payload.markdown, false)
+    if (!isOk(mdCheck)) return fail(mdCheck)
+
+    try {
+      return normalize(store.createWriteProject(payload.workspaceRoot, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to create write project: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:write:read', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
+      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
+    }
+
+    try {
+      return normalize(store.readWriteProject(payload.workspaceRoot, payload.writeProjectId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read write project: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:write:update', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
+      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
+    }
+
+    const mdCheck = validateMarkdown(payload.markdown, true)
+    if (!isOk(mdCheck)) return fail(mdCheck)
+
+    if (payload.title) {
+      const titleCheck = validateTitle(payload.title)
+      if (!isOk(titleCheck)) return fail(titleCheck)
+    }
+
+    try {
+      return normalize(store.updateWriteProject(payload.workspaceRoot, payload.writeProjectId, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to update write project: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
 }
 
 module.exports = { registerWorkbenchIpc }

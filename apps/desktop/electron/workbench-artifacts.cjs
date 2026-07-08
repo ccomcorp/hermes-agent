@@ -23,6 +23,7 @@ const PLANS_DIR = '.hermes/workbench/plans'
 const CHANGESETS_DIR = '.hermes/workbench/changesets'
 const DESIGNS_DIR = '.hermes/workbench/designs'
 const DESIGN_SETTINGS_RELATIVE_PATH = `${DESIGNS_DIR}/settings.json`
+const WRITE_DIR = '.hermes/workbench/write'
 const MANIFEST_PATH = '.hermes/workbench/manifest.json'
 
 // ---------------------------------------------------------------------------
@@ -764,6 +765,234 @@ function writeDesignSettings(workspaceRoot, settings) {
 }
 
 // ---------------------------------------------------------------------------
+// Write Workspace — CRUD only (Slice J, go-forward plan §5).
+//
+// A WorkbenchWriteProject is a single markdown document + metadata, the same
+// shape as a Requirement: one directory per project holding a content file
+// (`document.md`) and a metadata sidecar (`project.json`, mirroring
+// requirement's trace.json / plan's meta.json). `project.json` also carries
+// `recentEdits` — a capped, PASSIVE history log of saves (title/content
+// snapshots truncated for size), never an undo-an-AI-edit mechanism (that
+// would require Slice K's inline-edit flow, which does not exist yet). No
+// generation, export, or retrieval API is called anywhere in this section.
+// ---------------------------------------------------------------------------
+
+const MAX_RECENT_EDITS = 20
+const RECENT_EDIT_PREVIEW_LENGTH = 500
+
+function writeProjectRelativeDir(id) {
+  return `${WRITE_DIR}/${id}`
+}
+
+function writeProjectDocRelativePath(id) {
+  return `${writeProjectRelativeDir(id)}/document.md`
+}
+
+function writeProjectMetaRelativePath(id) {
+  return `${writeProjectRelativeDir(id)}/project.json`
+}
+
+function readWriteProjectMeta(workspaceRoot, id) {
+  const fullPath = resolveWorkspacePath(workspaceRoot, writeProjectMetaRelativePath(id))
+  if (!fs.existsSync(fullPath)) return null
+  try {
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function previewText(text) {
+  if (typeof text !== 'string') return ''
+  return text.length > RECENT_EDIT_PREVIEW_LENGTH
+    ? text.slice(0, RECENT_EDIT_PREVIEW_LENGTH) + '…'
+    : text
+}
+
+// Appends one passive save-history entry (source is always 'user' here —
+// Slice J never produces an 'inline_edit' entry, that requires Slice K's
+// AI-edit flow) and caps the list so it never grows unbounded.
+function appendRecentEdit(meta, input) {
+  const entries = Array.isArray(meta.recentEdits) ? meta.recentEdits : []
+  entries.push({
+    at: new Date().toISOString(),
+    source: 'user',
+    fileRelativePath: input.fileRelativePath,
+    from: 0,
+    to: input.previousLength,
+    deletedText: previewText(input.previousMarkdown),
+    insertedText: previewText(input.nextMarkdown)
+  })
+  return entries.slice(-MAX_RECENT_EDITS)
+}
+
+// Converts stored (at-anchored) entries into the wire `WorkbenchWriteRecentEdit`
+// shape, computing `ageMs` at read time rather than persisting a value that
+// would go stale the instant it was written.
+function toRecentEditsResponse(entries) {
+  if (!Array.isArray(entries)) return []
+  const now = Date.now()
+  return entries.map((entry) => ({
+    source: entry.source,
+    ageMs: Math.max(0, now - new Date(entry.at).getTime()),
+    fileRelativePath: entry.fileRelativePath,
+    from: entry.from,
+    to: entry.to,
+    deletedText: entry.deletedText,
+    insertedText: entry.insertedText,
+    ...(entry.instruction ? { instruction: entry.instruction } : {})
+  }))
+}
+
+function createWriteProject(workspaceRoot, input) {
+  const now = new Date().toISOString()
+  const id = sanitizeId(input.title).slice(0, 20) || generateId('write')
+  const uniqueId = ensureUniqueId(workspaceRoot, id, WRITE_DIR)
+
+  const rootRelativeDir = writeProjectRelativeDir(uniqueId)
+  const activeFileRelativePath = writeProjectDocRelativePath(uniqueId)
+  const metaRelativePath = writeProjectMetaRelativePath(uniqueId)
+
+  const markdown = input.markdown || `# ${input.title}\n\n> Start writing here.\n`
+
+  const project = {
+    id: uniqueId,
+    workspaceRoot,
+    title: input.title,
+    rootRelativeDir,
+    activeFileRelativePath,
+    createdAt: now,
+    updatedAt: now
+  }
+
+  atomicWriteFile(resolveWorkspacePath(workspaceRoot, activeFileRelativePath), markdown)
+  atomicWriteJSON(resolveWorkspacePath(workspaceRoot, metaRelativePath), {
+    version: 1,
+    project,
+    recentEdits: []
+  })
+
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.writeProjects)) m.writeProjects = []
+    m.writeProjects.push({
+      id: uniqueId,
+      title: input.title,
+      relativePath: activeFileRelativePath,
+      updatedAt: now
+    })
+    return m
+  })
+
+  return { project }
+}
+
+function readWriteProject(workspaceRoot, writeProjectId) {
+  const safeId = sanitizeId(writeProjectId)
+  const activeFileRelativePath = writeProjectDocRelativePath(safeId)
+  const fullPath = resolveWorkspacePath(workspaceRoot, activeFileRelativePath)
+
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, message: 'Write project not found', code: 'NOT_FOUND' }
+  }
+
+  const markdown = fs.readFileSync(fullPath, 'utf8')
+  const meta = readWriteProjectMeta(workspaceRoot, safeId)
+  const project = (meta && meta.project) || {
+    id: safeId,
+    workspaceRoot,
+    title: safeId,
+    rootRelativeDir: writeProjectRelativeDir(safeId),
+    activeFileRelativePath,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+
+  return {
+    ok: true,
+    value: {
+      id: safeId,
+      title: project.title,
+      markdown,
+      rootRelativeDir: project.rootRelativeDir,
+      activeFileRelativePath: project.activeFileRelativePath,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      recentEdits: toRecentEditsResponse(meta && meta.recentEdits)
+    }
+  }
+}
+
+function updateWriteProject(workspaceRoot, writeProjectId, input) {
+  const safeId = sanitizeId(writeProjectId)
+  const activeFileRelativePath = writeProjectDocRelativePath(safeId)
+  const fullPath = resolveWorkspacePath(workspaceRoot, activeFileRelativePath)
+
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, message: 'Write project not found', code: 'NOT_FOUND' }
+  }
+
+  const now = new Date().toISOString()
+  const previousMarkdown = fs.readFileSync(fullPath, 'utf8')
+  const hash = contentHash(input.markdown)
+
+  atomicWriteFile(fullPath, input.markdown)
+
+  const metaRelativePath = writeProjectMetaRelativePath(safeId)
+  const metaFullPath = resolveWorkspacePath(workspaceRoot, metaRelativePath)
+  const meta = readWriteProjectMeta(workspaceRoot, safeId) || { version: 1, project: null, recentEdits: [] }
+
+  const project = meta.project || {
+    id: safeId,
+    workspaceRoot,
+    title: input.title || safeId,
+    rootRelativeDir: writeProjectRelativeDir(safeId),
+    activeFileRelativePath,
+    createdAt: now,
+    updatedAt: now
+  }
+
+  project.updatedAt = now
+  if (input.title) project.title = input.title
+
+  meta.project = project
+  meta.recentEdits = appendRecentEdit(meta, {
+    fileRelativePath: activeFileRelativePath,
+    previousLength: previousMarkdown.length,
+    previousMarkdown,
+    nextMarkdown: input.markdown
+  })
+
+  atomicWriteJSON(metaFullPath, meta)
+
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.writeProjects)) m.writeProjects = []
+    const idx = m.writeProjects.findIndex((w) => w.id === safeId)
+    if (idx >= 0) {
+      m.writeProjects[idx].title = project.title
+      m.writeProjects[idx].updatedAt = now
+    } else {
+      m.writeProjects.push({ id: safeId, title: project.title, relativePath: activeFileRelativePath, updatedAt: now })
+    }
+    return m
+  })
+
+  return {
+    ok: true,
+    value: {
+      id: safeId,
+      title: project.title,
+      contentHash: hash,
+      updatedAt: now
+    }
+  }
+}
+
+function listWriteProjects(workspaceRoot) {
+  const manifest = ensureManifest(workspaceRoot)
+  return { ok: true, value: manifest.writeProjects || [] }
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -842,6 +1071,10 @@ module.exports = {
   listChangeSets,
   readDesignSettings,
   writeDesignSettings,
+  createWriteProject,
+  readWriteProject,
+  updateWriteProject,
+  listWriteProjects,
   readManifest,
   ensureManifest,
   updateManifest,

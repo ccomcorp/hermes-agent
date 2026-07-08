@@ -282,6 +282,35 @@ export interface WorkbenchWriteProject {
   updatedAt: string
 }
 
+// Slice J (go-forward plan §5) — backend CRUD for a WorkbenchWriteProject,
+// mirroring the Requirement request/response naming convention exactly. A
+// write project is a single markdown document + metadata (same shape as a
+// Requirement), not the full file-tree/quick-actions/export experience —
+// those are Slice K/L, not built here.
+export interface CreateWorkbenchWriteProjectRequest {
+  workspaceRoot: string
+  title: string
+  markdown?: string
+}
+
+export interface CreateWorkbenchWriteProjectResponse {
+  project: WorkbenchWriteProject
+}
+
+export interface UpdateWorkbenchWriteProjectRequest {
+  workspaceRoot: string
+  writeProjectId: string
+  markdown: string
+  title?: string
+}
+
+export interface UpdateWorkbenchWriteProjectResponse {
+  id: string
+  title?: string
+  contentHash: string
+  updatedAt: string
+}
+
 export interface WorkbenchWriteInlineEditRequest {
   workspaceRoot: string
   fileRelativePath: string
@@ -452,5 +481,9 @@ export const WORKBENCH_IPC_CHANNELS = {
   changesetsUpdate: 'hermes:workbench:changesets:update',
   designSettingsRead: 'hermes:workbench:design:settings:read',
   designSettingsWrite: 'hermes:workbench:design:settings:write',
+  writeProjectsList: 'hermes:workbench:write:list',
+  writeProjectsCreate: 'hermes:workbench:write:create',
+  writeProjectsRead: 'hermes:workbench:write:read',
+  writeProjectsUpdate: 'hermes:workbench:write:update',
   event: 'hermes:workbench:event'
 } as const
