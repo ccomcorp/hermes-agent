@@ -4,8 +4,20 @@ import type {
   PetOverlayOpenRequest,
   PetOverlayStatePayload
 } from './store/pet-overlay'
+import type {
+  WorkbenchRequirement,
+  WorkbenchRequirementTrace,
+  WorkbenchRequirementStatus,
+  WorkbenchPlan,
+  WorkbenchChangeSet
+} from '@hermes/shared'
 
 export {}
+
+// AIOS: Hermes Workbench IPC result wrapper type
+export type WorkbenchIpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; message: string; code?: string }
 
 declare global {
   interface Window {
@@ -195,11 +207,93 @@ declare global {
         // returns the most-installed themes.
         searchMarketplace: (query: string) => Promise<DesktopMarketplaceSearchItem[]>
       }
-    }
-  }
-}
+      // AIOS: Hermes Workbench — artifact management IPC
+      workbench: {
+        requirements: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            markdown?: string
+            source?: 'user' | 'chat' | 'import'
+            sourceSessionId?: string
+          }) => Promise<WorkbenchIpcResult<{ requirement: WorkbenchRequirement; trace: WorkbenchRequirementTrace }>>
+          read: (payload: {
+            workspaceRoot: string
+            requirementId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            markdown: string
+            trace: WorkbenchRequirementTrace | null
+            draftRelativePath: string
+            traceRelativePath: string
+          }>>
+          update: (payload: {
+            workspaceRoot: string
+            requirementId: string
+            markdown: string
+            title?: string
+            status?: WorkbenchRequirementStatus
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title?: string
+            status?: WorkbenchRequirementStatus
+            contentHash: string
+            updatedAt: string
+          }>>
+        }
+        plans: {
+          list: (payload: { workspaceRoot: string; requirementId?: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            markdown: string
+            title?: string
+            sourceRequest?: string
+            operation: 'draft' | 'refine'
+            requirementId?: string
+          }) => Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>>
+          read: (payload: {
+            workspaceRoot: string
+            planId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            markdown: string
+            relativePath: string
+            contentHash: string
+            byteSize: number
+            savedAt: string
+          }>>
+        }
+        changesets: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            source: string
+            title: string
+            summary?: string
+            requirementId?: string
+            planId?: string
+            files: any[]
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          read: (payload: {
+            workspaceRoot: string
+            changesetId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          update: (payload: {
+            workspaceRoot: string
+            changesetId: string
+            statusPatch: {
+              status?: string
+              fileUpdates?: { path: string; status: string }[]
+              approval?: { kind: string; decision: string; reason?: string }
+            }
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+        }
+        }
+        }
+        }
 
-export interface DesktopMarketplaceSearchItem {
+        export interface DesktopMarketplaceSearchItem {
   extensionId: string
   displayName: string
   publisher: string

@@ -214,5 +214,24 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   themes: {
     fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
     searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
+  },
+  workbench: {
+    requirements: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:requirements:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:requirements:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:requirements:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:requirements:update', payload)
+    },
+    plans: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:plans:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:plans:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:plans:read', payload)
+    },
+    changesets: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:changesets:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:changesets:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:changesets:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:changesets:update', payload)
+    }
   }
 })

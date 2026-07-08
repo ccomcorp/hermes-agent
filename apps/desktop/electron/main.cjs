@@ -78,6 +78,9 @@ const { scanGitRepos } = require('./git-repo-scan.cjs')
 const { OFFICIAL_REPO_HTTPS_URL, isOfficialSshRemote } = require('./update-remote.cjs')
 const { resolveBehindCount, shouldCountCommits } = require('./update-count.cjs')
 const { runRebuildWithRetry } = require('./update-rebuild.cjs')
+
+// AIOS: Hermes Workbench IPC registration
+const { registerWorkbenchIpc } = require('./workbench-ipc.cjs')
 const {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -7531,6 +7534,8 @@ app.whenReady().then(() => {
   ensureWslWindowsFonts()
   configureSpellChecker()
   registerPowerResumeListeners()
+  // AIOS: Hermes Workbench — register IPC handlers before createWindow
+  registerWorkbenchIpc()
   createWindow()
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.
