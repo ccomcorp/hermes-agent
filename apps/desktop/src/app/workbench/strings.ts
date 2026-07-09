@@ -272,7 +272,17 @@ export const workbenchStrings = {
     } as Record<string, string>,
 
     sourceDialogClose: 'Close',
-    prototypeSourceHint: 'Raw HTML source — shown as read-only text, never rendered.'
+    prototypeSourceHint: 'Raw HTML source — shown as read-only text, never rendered.',
+
+    // Sandboxed live preview (Slice H — go-forward plan §5 Slice H). A
+    // SEPARATE, additional view alongside the read-only source text above,
+    // never a replacement for it. Gated on WorkbenchDesignSettings.
+    // sandboxHtmlPreview being true — see design-generation-panel.tsx.
+    viewSource: 'Source',
+    viewPreview: 'Preview',
+    previewDisabledHint: 'Turn on "Sandbox HTML preview" in Design settings to preview this prototype.',
+    previewSandboxBadge: 'Sandboxed preview — this content is isolated and cannot access Hermes or your files.',
+    previewIframeTitle: 'Sandboxed prototype preview'
   },
 
   // Write Workspace (Slice J — backend CRUD + editor; Slice K adds quick

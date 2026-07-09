@@ -22,11 +22,17 @@ import type { WorkbenchDesignArtifact } from '@hermes/shared'
  * as a diff. A failed model call surfaces an error notification and never
  * calls `createDesignArtifact` — there is no partial/corrupt artifact record.
  *
- * *** CRITICAL SAFETY BOUNDARY: this file NEVER renders or executes generated
- * HTML. No iframe, no webview, no dangerouslySetInnerHTML. A generated
- * `prototype` artifact's HTML is shown as raw, read-only SOURCE TEXT inside a
- * plain <pre> block below — never parsed as a live document. Sandboxed live
- * rendering is Slice H, separate and not built here. ***
+ * *** SAFETY BOUNDARY (updated for Slice H): the read-only SOURCE TEXT view
+ * below (a plain <pre> block, never dangerouslySetInnerHTML) remains the
+ * default and is never removed. Slice H (go-forward plan §5 Slice H) adds a
+ * SEPARATE, additional "Preview" view for `kind: 'prototype'` artifacts only,
+ * which renders the HTML live inside a sandboxed <iframe srcDoc> (see
+ * `./design-prototype-preview.tsx` for the exact sandbox attribute and
+ * reasoning) — no webview, still no dangerouslySetInnerHTML anywhere in this
+ * file. The preview is available ONLY when the workspace's
+ * `WorkbenchDesignSettings.sandboxHtmlPreview` is `true`; otherwise the
+ * Preview toggle is disabled with a hint pointing at Design settings — it
+ * never silently renders. ***
  */
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useState } from 'react'
@@ -42,10 +48,18 @@ import { PanelEmpty } from '../overlays/panel'
 import { createDesignArtifact, listDesignArtifacts, readDesignArtifact, readRequirement } from './api'
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
+import { DesignPrototypePreview } from './design-prototype-preview'
 import { $workbenchActiveRequirementId, $workbenchDesignSettings } from './store'
 import { workbenchStrings as s } from './strings'
 
 type DesignArtifactDetail = WorkbenchDesignArtifact & { content: string }
+
+// Source/preview toggle for the viewer dialog below — 'preview' is only ever
+// reachable for `kind: 'prototype'` artifacts AND only when
+// `WorkbenchDesignSettings.sandboxHtmlPreview` is true (see `previewAllowed`
+// in the component). Every other combination falls back to 'source', which
+// is always available.
+type ArtifactViewTab = 'preview' | 'source'
 
 interface DesignGenerationPanelProps {
   workspaceRoot: string
@@ -59,6 +73,13 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
   const [listLoading, setListLoading] = useState(false)
   const [busyKind, setBusyKind] = useState<DesignGenerationKind | null>(null)
   const [viewing, setViewing] = useState<DesignArtifactDetail | null>(null)
+  const [viewTab, setViewTab] = useState<ArtifactViewTab>('source')
+
+  // Fail closed: the Preview tab only ever exists for a 'prototype' artifact,
+  // and only when the workspace has explicitly turned on
+  // WorkbenchDesignSettings.sandboxHtmlPreview. A missing settings document
+  // (null — not yet saved for this workspace) is treated the same as "off".
+  const previewAllowed = viewing?.kind === 'prototype' && settings?.sandboxHtmlPreview === true
 
   const loadArtifacts = useCallback(
     async (reqId: string) => {
@@ -142,6 +163,10 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
 
         if (res.ok) {
           setViewing(res.value)
+          // Always open on Source — never remember a prior artifact's
+          // Preview selection (fail closed rather than assuming the newly
+          // opened artifact should render live).
+          setViewTab('source')
         } else {
           notify({ kind: 'error', title: s.designGeneration.readFailed, message: res.message })
         }
@@ -202,21 +227,65 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         )}
       </div>
 
-      {/* Read-only SOURCE TEXT viewer — a <pre> block only. This never uses
-          dangerouslySetInnerHTML, an <iframe>, or a <webview>: a generated
-          `prototype` artifact's HTML is displayed as plain text, never parsed
-          or rendered as a live document. See module header. */}
+      {/* Viewer dialog: read-only SOURCE TEXT (a <pre> block, unchanged from
+          Slice G) is always available and is the default tab. For
+          `kind: 'prototype'` artifacts ONLY, and only when the workspace's
+          WorkbenchDesignSettings.sandboxHtmlPreview is true, a second
+          "Preview" tab renders the HTML live inside a sandboxed
+          <iframe srcDoc> (see design-prototype-preview.tsx). Neither tab ever
+          uses dangerouslySetInnerHTML or a <webview>. */}
       <Dialog onOpenChange={next => !next && setViewing(null)} open={viewing !== null}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{viewing ? (s.designGeneration.kindLabels[viewing.kind] ?? viewing.kind) : ''}</DialogTitle>
           </DialogHeader>
+
           {viewing?.kind === 'prototype' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-0.5 rounded-md border border-(--ui-stroke-secondary) p-0.5">
+                <button
+                  className={
+                    viewTab === 'source'
+                      ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.68rem] font-medium text-foreground'
+                      : 'rounded-[0.25rem] px-2 py-0.5 text-[0.68rem] font-medium text-muted-foreground/70 hover:text-foreground'
+                  }
+                  onClick={() => setViewTab('source')}
+                  type="button"
+                >
+                  {s.designGeneration.viewSource}
+                </button>
+                <button
+                  className={
+                    viewTab === 'preview' && previewAllowed
+                      ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.68rem] font-medium text-foreground'
+                      : 'rounded-[0.25rem] px-2 py-0.5 text-[0.68rem] font-medium text-muted-foreground/40 cursor-not-allowed'
+                  }
+                  disabled={!previewAllowed}
+                  onClick={() => previewAllowed && setViewTab('preview')}
+                  title={previewAllowed ? undefined : s.designGeneration.previewDisabledHint}
+                  type="button"
+                >
+                  {s.designGeneration.viewPreview}
+                </button>
+              </div>
+              {!previewAllowed && (
+                <span className="text-[0.65rem] text-muted-foreground/60">{s.designGeneration.previewDisabledHint}</span>
+              )}
+            </div>
+          )}
+
+          {viewing?.kind === 'prototype' && (viewTab === 'source' || !previewAllowed) && (
             <p className="text-[0.7rem] text-muted-foreground/70">{s.designGeneration.prototypeSourceHint}</p>
           )}
-          <pre className="max-h-96 overflow-auto rounded-md border border-(--ui-stroke-secondary) p-3 text-xs whitespace-pre-wrap">
-            {viewing?.content}
-          </pre>
+
+          {viewTab === 'preview' && previewAllowed && viewing ? (
+            <DesignPrototypePreview html={viewing.content} />
+          ) : (
+            <pre className="max-h-96 overflow-auto rounded-md border border-(--ui-stroke-secondary) p-3 text-xs whitespace-pre-wrap">
+              {viewing?.content}
+            </pre>
+          )}
+
           <DialogFooter>
             <Button onClick={() => setViewing(null)} variant="outline">
               {s.designGeneration.sourceDialogClose}
