@@ -68,6 +68,7 @@ import { createDesignArtifact, listDesignArtifacts, readDesignArtifact, readRequ
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
 import { buildDesignHandoffMessage } from './design-handoff'
+import { sendDesignToKanban } from './design-kanban'
 import { DesignPrototypePreview } from './design-prototype-preview'
 import { $workbenchActiveRequirementId, $workbenchDesignSettings } from './store'
 import { workbenchStrings as s } from './strings'
@@ -94,6 +95,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
   const [busyKind, setBusyKind] = useState<DesignGenerationKind | null>(null)
   const [viewing, setViewing] = useState<DesignArtifactDetail | null>(null)
   const [viewTab, setViewTab] = useState<ArtifactViewTab>('source')
+  const [kanbanBusy, setKanbanBusy] = useState(false)
 
   // Fail closed: the Preview tab only ever exists for a 'prototype' artifact,
   // and only when the workspace has explicitly turned on
@@ -219,6 +221,35 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
     setViewing(null)
   }, [viewing, workspaceRoot])
 
+  // "Send to Kanban" (additive sibling of "Send to code agent") — creates a
+  // card on the multi-agent board assigned to the dev orchestrator via the
+  // existing kanban plugin endpoint (see design-kanban.ts). Same brief/
+  // prototype gating; a null gateway connection fails closed inside
+  // sendDesignToKanban with a clear error (no card). On success we notify and
+  // close the dialog, mirroring the code-agent handoff.
+  const handleSendToKanban = useCallback(async () => {
+    if (!viewing || (viewing.kind !== 'brief' && viewing.kind !== 'prototype') || kanbanBusy) {
+      return
+    }
+
+    setKanbanBusy(true)
+
+    try {
+      await sendDesignToKanban({
+        workspaceRoot,
+        requirementId: viewing.requirementId,
+        kind: viewing.kind,
+        content: viewing.content
+      })
+      notify({ kind: 'success', title: s.designGeneration.sentToKanban, message: '' })
+      setViewing(null)
+    } catch (err) {
+      notifyError(err, s.designGeneration.sendToKanbanFailed)
+    } finally {
+      setKanbanBusy(false)
+    }
+  }, [kanbanBusy, viewing, workspaceRoot])
+
   if (!requirementId) {
     return null
   }
@@ -333,6 +364,12 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
               <Button onClick={handleSendToCodeAgent} variant="default">
                 <Codicon name="arrow-right" size="0.8125rem" />
                 {s.designGeneration.sendToCodeAgent}
+              </Button>
+            )}
+            {handoffAllowed && (
+              <Button disabled={kanbanBusy} onClick={() => void handleSendToKanban()} variant="outline">
+                <Codicon name={kanbanBusy ? 'loading' : 'project'} size="0.8125rem" spinning={kanbanBusy} />
+                {kanbanBusy ? s.designGeneration.sendingToKanban : s.designGeneration.sendToKanban}
               </Button>
             )}
             <Button onClick={() => setViewing(null)} variant="outline">

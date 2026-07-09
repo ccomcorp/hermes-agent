@@ -52,3 +52,43 @@ export function buildDesignHandoffMessage(kind: DesignGenerationKind, content: s
 
   return `${INSTRUCTION_PREFIX} ${BRIEF_NOTE}\n\n${trimmed}`
 }
+
+// Human-readable noun per generation kind, used only for the Kanban card
+// title. Kept alongside buildDesignHandoffMessage so both handoff surfaces
+// (code-agent + Kanban) share the same design vocabulary.
+const KANBAN_CARD_NOUN: Record<DesignGenerationKind, string> = {
+  brief: 'brief',
+  prototype: 'prototype'
+}
+
+export interface DesignKanbanCard {
+  title: string
+  body: string
+}
+
+/**
+ * Builds the `{ title, body }` for a "Send to Kanban" card from a generated
+ * design artifact — the SECOND handoff option alongside "Send to code agent".
+ *
+ * Pure string-building (no IPC, no DOM, no fetch) so it is unit-testable the
+ * same way `buildDesignHandoffMessage` is (see design-handoff.test.ts). The
+ * body REUSES `buildDesignHandoffMessage` verbatim, so the card carries the
+ * exact same "Implement this design as real code…" instruction + brief prose
+ * or prototype HTML that the code-agent handoff does. The card's assignee and
+ * workspace scoping are added by the POST layer (design-kanban.ts), not here.
+ *
+ * `requirementId` is used only to give the card a stable, identifiable title;
+ * the artifact does not carry a human requirement title at this layer.
+ */
+export function buildDesignKanbanCard(
+  kind: DesignGenerationKind,
+  requirementId: string,
+  content: string
+): DesignKanbanCard {
+  const noun = KANBAN_CARD_NOUN[kind] ?? 'design'
+
+  return {
+    title: `Implement design (${noun}): ${requirementId}`,
+    body: buildDesignHandoffMessage(kind, content)
+  }
+}

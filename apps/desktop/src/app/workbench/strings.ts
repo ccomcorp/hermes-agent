@@ -280,6 +280,14 @@ export const workbenchStrings = {
     // design-generation-panel.tsx's handleSendToCodeAgent.
     sendToCodeAgent: 'Send to code agent',
 
+    // "Send to Kanban" handoff — the SECOND, additive handoff option alongside
+    // "Send to code agent". Creates a card on the multi-agent board assigned to
+    // the dev orchestrator (see design-kanban.ts). Same brief/prototype gating.
+    sendToKanban: 'Send to Kanban',
+    sendingToKanban: 'Sending to Kanban',
+    sentToKanban: 'Sent to Kanban — card created for the dev team',
+    sendToKanbanFailed: 'Failed to send to Kanban',
+
     // Sandboxed live preview (Slice H — go-forward plan §5 Slice H). A
     // SEPARATE, additional view alongside the read-only source text above,
     // never a replacement for it. Gated on WorkbenchDesignSettings.
