@@ -12,14 +12,16 @@ import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
+import { Pane, PaneMain, PaneShell } from '@/components/pane-shell'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { cn } from '@/lib/utils'
 import { notifyError } from '@/store/notifications'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import { $currentCwd } from '@/store/session'
 
-import { PAGE_INSET_X } from '../layout-constants'
+import { PAGE_INSET_X, SIDEBAR_COLLAPSE_MEDIA_QUERY } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { ChangeSetPanel } from './changeset-panel'
@@ -46,6 +48,21 @@ import { WritePanel } from './write-panel'
 // how Slice J's split-mode toggle is also a plain, non-persisted view state.
 type WorkbenchArea = 'requirements' | 'workflow' | 'write'
 
+// Right rail (Plans/ChangeSets/Design Settings/Design Generation): resizable
+// via the same <Pane> drag-resize primitive the chat's preview rail uses
+// (chat/right-rail/preview.tsx) rather than a separately-invented drag
+// handler — own pane id so its width persists independently of the chat's
+// panes (see store/panes.ts, keyed by id). Min matches the old fixed 20rem —
+// that width was reported as already-cramped, so resizing should never go
+// narrower than the previous default. Max is a generous fixed cap rather
+// than a vw-relative one like the preview rail's 50vw: this rail stacks a
+// settings form plus two list+detail panels, not a document/browser preview
+// that benefits from claiming half the window.
+const WORKBENCH_RIGHT_RAIL_PANE_ID = 'workbench-right-rail'
+const WORKBENCH_RIGHT_RAIL_MIN_WIDTH = '20rem'
+const WORKBENCH_RIGHT_RAIL_MAX_WIDTH = '40rem'
+const WORKBENCH_RIGHT_RAIL_DEFAULT_WIDTH = '20rem'
+
 interface WorkbenchShellProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
 }
@@ -56,6 +73,10 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
   const activeProfile = useStore($activeGatewayProfile)
   const backendMode = useStore($workbenchBackendMode)
   const [area, setArea] = useState<WorkbenchArea>('requirements')
+  // Below this width the right rail leaves no room for the requirement list —
+  // same shared breakpoint the chat shell's own docked rails collapse at
+  // (layout-constants.ts), so Workbench doesn't invent its own threshold.
+  const narrowViewport = useMediaQuery(SIDEBAR_COLLAPSE_MEDIA_QUERY)
 
   // Four distinctly-labeled status items, mirroring how Files pushes a single
   // 'files-path' group (files/index.tsx) — never merged into one string, so
@@ -187,8 +208,10 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
           <WorkflowPanel workspaceRoot={workspaceRoot} />
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_20rem]">
-          <RequirementPanel workspaceRoot={workspaceRoot} />
+        <PaneShell className="min-h-0 flex-1">
+          <PaneMain>
+            <RequirementPanel workspaceRoot={workspaceRoot} />
+          </PaneMain>
           {/* Right rail: Plans linked to whichever requirement RequirementPanel
               has open (Slice C), stacked above ChangeSet review (Slice D,
               status-only — see changeset-panel.tsx), stacked above Design
@@ -200,23 +223,35 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
               Design settings uses a bounded/scrollable block rather than
               flex-1 like Plans/ChangeSets since it's a single form, not a
               list+detail split, so it doesn't need to compete for equal
-              vertical share. This still fits the existing two-column shell
-              without adding a new region or a tab. */}
-          <aside className="hidden min-h-0 flex-col gap-3 border-l border-(--ui-stroke-tertiary) p-3 sm:flex sm:overflow-y-auto">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <PlanPanel workspaceRoot={workspaceRoot} />
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-(--ui-stroke-tertiary) pt-3">
-              <ChangeSetPanel workspaceRoot={workspaceRoot} />
-            </div>
-            <div className="flex shrink-0 flex-col border-t border-(--ui-stroke-tertiary) pt-3">
-              <DesignSettingsPanel workspaceRoot={workspaceRoot} />
-            </div>
-            {/* Generate brief/prototype for the open requirement (Slice G) —
-                renders nothing when no requirement is open (fails closed). */}
-            <DesignGenerationPanel workspaceRoot={workspaceRoot} />
-          </aside>
-        </div>
+              vertical share. `forceCollapsed` (no `hoverReveal`) reproduces
+              the old "hidden below sm" behavior: below the collapse
+              breakpoint the rail simply isn't rendered, same as before. */}
+          <Pane
+            divider
+            forceCollapsed={narrowViewport}
+            id={WORKBENCH_RIGHT_RAIL_PANE_ID}
+            maxWidth={WORKBENCH_RIGHT_RAIL_MAX_WIDTH}
+            minWidth={WORKBENCH_RIGHT_RAIL_MIN_WIDTH}
+            resizable
+            side="right"
+            width={WORKBENCH_RIGHT_RAIL_DEFAULT_WIDTH}
+          >
+            <aside className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <PlanPanel workspaceRoot={workspaceRoot} />
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-(--ui-stroke-tertiary) pt-3">
+                <ChangeSetPanel workspaceRoot={workspaceRoot} />
+              </div>
+              <div className="flex shrink-0 flex-col border-t border-(--ui-stroke-tertiary) pt-3">
+                <DesignSettingsPanel workspaceRoot={workspaceRoot} />
+              </div>
+              {/* Generate brief/prototype for the open requirement (Slice G) —
+                  renders nothing when no requirement is open (fails closed). */}
+              <DesignGenerationPanel workspaceRoot={workspaceRoot} />
+            </aside>
+          </Pane>
+        </PaneShell>
       )}
     </section>
   )
