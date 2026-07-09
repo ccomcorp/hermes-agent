@@ -33,6 +33,24 @@ import type { WorkbenchDesignArtifact } from '@hermes/shared'
  * `WorkbenchDesignSettings.sandboxHtmlPreview` is `true`; otherwise the
  * Preview toggle is disabled with a hint pointing at Design settings — it
  * never silently renders. ***
+ *
+ * *** DESIGN-TO-CODE HANDOFF (Slice I, go-forward plan §5 Slice I — the final
+ * slice): the viewer dialog's "Send to code agent" action (brief AND
+ * prototype artifacts) hands the open artifact's content to the user's
+ * EXISTING chat/agent conversation, NOT a new code-generation pipeline. It
+ * builds a seed message (`./design-handoff.ts`, pure logic, unit tested) and
+ * calls the EXISTING `requestStartWorkSession()` seam (`@/store/projects`) —
+ * the same "open a fresh session anchored at a path, carrying a draft as its
+ * first turn" mechanism the composer's "branch off into a new worktree"
+ * action already uses (see `use-composer-branch.ts`'s `openInWorktree`). This
+ * creates/navigates to a new session scoped to `workspaceRoot` and PREFILLS
+ * its composer with the seed message via `requestComposerInsert` — it does
+ * NOT auto-submit; the user reviews and sends it themselves, exactly like
+ * Kun's "Implement in code" opening a fresh, reviewable thread rather than a
+ * silent direct-apply. No `requestOneShot()` call, no new IPC channel, no
+ * ChangeSet/diff/file-apply logic is added by this slice — any resulting file
+ * writes happen through the existing, separately-reviewed chat/agent tool-use
+ * path once the seeded turn runs.
  */
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useState } from 'react'
@@ -42,12 +60,14 @@ import { Codicon } from '@/components/ui/codicon'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { requestOneShot } from '@/lib/oneshot'
 import { notify, notifyError } from '@/store/notifications'
+import { requestStartWorkSession } from '@/store/projects'
 
 import { PanelEmpty } from '../overlays/panel'
 
 import { createDesignArtifact, listDesignArtifacts, readDesignArtifact, readRequirement } from './api'
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
+import { buildDesignHandoffMessage } from './design-handoff'
 import { DesignPrototypePreview } from './design-prototype-preview'
 import { $workbenchActiveRequirementId, $workbenchDesignSettings } from './store'
 import { workbenchStrings as s } from './strings'
@@ -80,6 +100,12 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
   // WorkbenchDesignSettings.sandboxHtmlPreview. A missing settings document
   // (null — not yet saved for this workspace) is treated the same as "off".
   const previewAllowed = viewing?.kind === 'prototype' && settings?.sandboxHtmlPreview === true
+
+  // "Send to code agent" (Slice I) only makes sense for the two generation
+  // kinds this slice actually ships UI for — 'design_system'/'quality_report'
+  // have no generation entry point yet, so fail closed on those rather than
+  // guessing what a handoff for them should contain.
+  const handoffAllowed = viewing?.kind === 'brief' || viewing?.kind === 'prototype'
 
   const loadArtifacts = useCallback(
     async (reqId: string) => {
@@ -176,6 +202,22 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
     },
     [workspaceRoot]
   )
+
+  // Hands the open artifact to the user's existing chat/agent conversation —
+  // see the module header and design-handoff.ts for why this is the entire
+  // mechanism (no model call, no ChangeSet, no new session-creation code: it
+  // reuses requestStartWorkSession(), the composer's existing "open a fresh
+  // session anchored at a path, carrying a draft" hand-off). Fails closed via
+  // `handoffAllowed`/`viewing` — with nothing open, or an artifact kind this
+  // slice doesn't support, this is a no-op.
+  const handleSendToCodeAgent = useCallback(() => {
+    if (!viewing || (viewing.kind !== 'brief' && viewing.kind !== 'prototype')) {
+      return
+    }
+
+    requestStartWorkSession(workspaceRoot, buildDesignHandoffMessage(viewing.kind, viewing.content))
+    setViewing(null)
+  }, [viewing, workspaceRoot])
 
   if (!requirementId) {
     return null
@@ -287,6 +329,12 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
           )}
 
           <DialogFooter>
+            {handoffAllowed && (
+              <Button onClick={handleSendToCodeAgent} variant="default">
+                <Codicon name="arrow-right" size="0.8125rem" />
+                {s.designGeneration.sendToCodeAgent}
+              </Button>
+            )}
             <Button onClick={() => setViewing(null)} variant="outline">
               {s.designGeneration.sourceDialogClose}
             </Button>

@@ -274,6 +274,12 @@ export const workbenchStrings = {
     sourceDialogClose: 'Close',
     prototypeSourceHint: 'Raw HTML source — shown as read-only text, never rendered.',
 
+    // Design-to-code handoff (Slice I — go-forward plan §5 Slice I, the final
+    // slice). Opens a fresh chat session seeded with this artifact's content
+    // so the user's existing agent implements it — see design-handoff.ts and
+    // design-generation-panel.tsx's handleSendToCodeAgent.
+    sendToCodeAgent: 'Send to code agent',
+
     // Sandboxed live preview (Slice H — go-forward plan §5 Slice H). A
     // SEPARATE, additional view alongside the read-only source text above,
     // never a replacement for it. Gated on WorkbenchDesignSettings.
