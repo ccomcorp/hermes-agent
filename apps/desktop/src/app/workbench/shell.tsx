@@ -54,13 +54,14 @@ type WorkbenchArea = 'requirements' | 'workflow' | 'write'
 // handler — own pane id so its width persists independently of the chat's
 // panes (see store/panes.ts, keyed by id). Min matches the old fixed 20rem —
 // that width was reported as already-cramped, so resizing should never go
-// narrower than the previous default. Max is a generous fixed cap rather
-// than a vw-relative one like the preview rail's 50vw: this rail stacks a
-// settings form plus two list+detail panels, not a document/browser preview
-// that benefits from claiming half the window.
+// narrower than the previous default. Max is viewport-relative (50vw, the
+// same cap the chat preview rail uses) rather than a fixed rem: the Design
+// Studio form + Plans/ChangeSets benefit from real width on wide monitors,
+// and the user asked to be able to drag the rail out to roughly the center
+// pane's width.
 const WORKBENCH_RIGHT_RAIL_PANE_ID = 'workbench-right-rail'
 const WORKBENCH_RIGHT_RAIL_MIN_WIDTH = '20rem'
-const WORKBENCH_RIGHT_RAIL_MAX_WIDTH = '40rem'
+const WORKBENCH_RIGHT_RAIL_MAX_WIDTH = '50vw'
 const WORKBENCH_RIGHT_RAIL_DEFAULT_WIDTH = '20rem'
 
 interface WorkbenchShellProps extends React.ComponentProps<'section'> {
