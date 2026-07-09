@@ -28,22 +28,26 @@ describe('buildDesignHandoffMessage', () => {
 })
 
 describe('buildDesignKanbanCard', () => {
-  it('titles a brief card from the requirement id and reuses the handoff message as the body', () => {
+  it('titles a brief card from the requirement id, prepends a human-readable origin breadcrumb, and keeps the handoff message', () => {
     const card = buildDesignKanbanCard('brief', 'req-123', '# Design brief\n\nTarget users: everyone.')
 
     expect(card.title).toBe('Implement design (brief): req-123')
-    // Body carries the same "Implement this design as real code…" instruction +
-    // brief prose the code-agent handoff sends.
-    expect(card.body).toBe(buildDesignHandoffMessage('brief', '# Design brief\n\nTarget users: everyone.'))
-    expect(card.body).toMatch(/^Implement the following design as real code in this project\./)
+    // A short, human-readable origin breadcrumb leads the body (NOT a
+    // machine-resolvable marker) — see design-handoff.ts.
+    expect(card.body).toMatch(/^Origin: Workbench requirement "req-123" \(req-123\)\n\n/)
+    // The design content the code-agent handoff sends is still inlined, just
+    // after the breadcrumb.
+    expect(card.body).toContain(buildDesignHandoffMessage('brief', '# Design brief\n\nTarget users: everyone.'))
+    expect(card.body).toContain('Implement the following design as real code in this project.')
     expect(card.body).toContain('# Design brief\n\nTarget users: everyone.')
   })
 
-  it('titles a prototype card and fences the html in the body', () => {
+  it('titles a prototype card, prepends the origin breadcrumb, and fences the html in the body', () => {
     const card = buildDesignKanbanCard('prototype', 'req-999', '<!doctype html><html><body>Hi</body></html>')
 
     expect(card.title).toBe('Implement design (prototype): req-999')
-    expect(card.body).toBe(buildDesignHandoffMessage('prototype', '<!doctype html><html><body>Hi</body></html>'))
+    expect(card.body).toMatch(/^Origin: Workbench requirement "req-999" \(req-999\)\n\n/)
+    expect(card.body).toContain(buildDesignHandoffMessage('prototype', '<!doctype html><html><body>Hi</body></html>'))
     expect(card.body).toContain('```html\n<!doctype html><html><body>Hi</body></html>\n```')
   })
 })

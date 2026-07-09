@@ -201,6 +201,28 @@ export function addLinkedPlanId(planId: string) {
   $workbenchActiveRequirementTrace.set({ ...trace, linkedPlanIds: [...trace.linkedPlanIds, planId] })
 }
 
+// Optimistically mirrors what `linkKanbanCardToRequirement` just recorded on
+// disk (the "Send to Kanban" backlink), so the design panel's linked-cards
+// list reflects the new card immediately without a requirement re-read. Guards
+// on the trace belonging to `requirementId` (the card's originating
+// requirement, which is the open one) and defends against an older trace that
+// predates `linkedKanbanCardIds` (`?? []`). No-op on a mismatch or duplicate.
+export function addLinkedKanbanCardId(requirementId: string, cardId: string) {
+  const trace = $workbenchActiveRequirementTrace.get()
+
+  if (!trace || trace.requirementId !== requirementId) {
+    return
+  }
+
+  const current = trace.linkedKanbanCardIds ?? []
+
+  if (current.includes(cardId)) {
+    return
+  }
+
+  $workbenchActiveRequirementTrace.set({ ...trace, linkedKanbanCardIds: [...current, cardId] })
+}
+
 // ---------------------------------------------------------------------------
 // ChangeSets (Slice D — review/status only)
 //

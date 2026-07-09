@@ -365,6 +365,34 @@ function registerWorkbenchIpc(options = {}) {
     }
   })
 
+  // Records a Kanban card id into the requirement trace's linkedKanbanCardIds
+  // (the "Send to Kanban" design handoff's Workbench → card backlink). Fail
+  // closed on the inputs like every other channel; the store fn itself returns
+  // a discriminated result (EMPTY_CARD_ID/TRACE_NOT_FOUND/IO_ERROR) that the
+  // renderer branches on for the card-created-but-link-failed soft warning.
+  ipcMain.handle('hermes:workbench:requirements:link-kanban-card', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.requirementId || typeof payload.requirementId !== 'string' || !payload.requirementId.trim()) {
+      return { ok: false, message: 'requirementId is required', code: 'MISSING_REQUIREMENT_ID' }
+    }
+
+    if (!payload.cardId || typeof payload.cardId !== 'string' || !payload.cardId.trim()) {
+      return { ok: false, message: 'cardId is required', code: 'EMPTY_CARD_ID' }
+    }
+
+    try {
+      return normalize(store.linkKanbanCardToRequirement(payload.workspaceRoot, payload.requirementId, payload.cardId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to link Kanban card: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
   // -- Plans -----------------------------------------------------------------
 
   ipcMain.handle('hermes:workbench:plans:list', (_event, payload) => {

@@ -77,8 +77,18 @@ export interface DesignKanbanCard {
  * or prototype HTML that the code-agent handoff does. The card's assignee and
  * workspace scoping are added by the POST layer (design-kanban.ts), not here.
  *
- * `requirementId` is used only to give the card a stable, identifiable title;
- * the artifact does not carry a human requirement title at this layer.
+ * `requirementId` is used only to give the card a stable, identifiable title
+ * and a short human-readable origin breadcrumb (below); the artifact does not
+ * carry a human requirement title at this layer.
+ *
+ * The body is prefixed with a SHORT, HUMAN-READABLE origin breadcrumb — a
+ * breadcrumb for a person reading the board, NOT a machine-resolvable marker.
+ * There is deliberately no structured/parseable origin block, no metadata
+ * round-trip, and nothing here that card execution depends on resolving: the
+ * real, working card→origin content is the design itself, inlined below the
+ * breadcrumb by `buildDesignHandoffMessage` exactly as before. Only the
+ * requirementId is available at this pure string-building layer (no title
+ * plumbing), so the breadcrumb uses the id for both slots.
  */
 export function buildDesignKanbanCard(
   kind: DesignGenerationKind,
@@ -86,9 +96,10 @@ export function buildDesignKanbanCard(
   content: string
 ): DesignKanbanCard {
   const noun = KANBAN_CARD_NOUN[kind] ?? 'design'
+  const origin = `Origin: Workbench requirement "${requirementId}" (${requirementId})`
 
   return {
     title: `Implement design (${noun}): ${requirementId}`,
-    body: buildDesignHandoffMessage(kind, content)
+    body: `${origin}\n\n${buildDesignHandoffMessage(kind, content)}`
   }
 }

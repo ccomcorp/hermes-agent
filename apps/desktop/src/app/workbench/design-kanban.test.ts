@@ -51,7 +51,10 @@ describe('sendDesignToKanban', () => {
 
     const payload = JSON.parse(init.body)
     expect(payload.title).toBe('Implement design (brief): req-42')
-    expect(payload.body).toMatch(/^Implement the following design as real code in this project\./)
+    // Body now leads with the human-readable origin breadcrumb, then the
+    // "Implement this design…" instruction + content.
+    expect(payload.body).toMatch(/^Origin: Workbench requirement "req-42" \(req-42\)/)
+    expect(payload.body).toContain('Implement the following design as real code in this project.')
     expect(payload.assignee).toBe(DESIGN_KANBAN_ASSIGNEE)
     expect(DESIGN_KANBAN_ASSIGNEE).toBe('fable-orchestrator')
     expect(payload.workspace_kind).toBe('dir')
@@ -102,5 +105,31 @@ describe('sendDesignToKanban', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(sendDesignToKanban({ ...baseArgs, kind: 'brief' })).rejects.toThrow(/Could not reach the Hermes gateway/)
+  })
+
+  it('throws (never returns an empty id) on a 2xx response with no task.id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ task: {} })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    // A 2xx-but-unparseable body must be treated as an error, not '' — a blank
+    // backlink and a false "success" are the bug being fixed here.
+    await expect(sendDesignToKanban({ ...baseArgs, kind: 'brief' })).rejects.toThrow(/no card id/i)
+  })
+
+  it('throws when the response body is entirely unparseable (null)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => {
+        throw new Error('not json')
+      }
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(sendDesignToKanban({ ...baseArgs, kind: 'brief' })).rejects.toThrow(/no card id/i)
   })
 })

@@ -250,6 +250,7 @@ function createRequirement(workspaceRoot, input) {
     linkedPrototypeIds: [],
     linkedDesignArtifactIds: [],
     linkedWriteArtifactIds: [],
+    linkedKanbanCardIds: [],
     history: [
       {
         id: generateId('trace'),
@@ -861,6 +862,60 @@ function linkDesignArtifactToRequirement(workspaceRoot, requirementId, artifactI
   }
 }
 
+// Records a Kanban card id into the requirement's trace.json
+// (`linkedKanbanCardIds` + a `kanban_linked` history entry). This MIRRORS the
+// append + `.includes` dedupe SHAPE of linkDesignArtifactToRequirement above,
+// but deliberately NOT its fail-silent, void-returning posture: the "Send to
+// Kanban" handoff runs this AFTER a real card already exists on the board, and
+// a card-created-but-not-linked state must be SURFACED to the user (a distinct
+// soft warning), never swallowed. So this returns a discriminated result the
+// renderer branches on:
+//   { ok: true,  value: <updated trace> }
+//   { ok: false, code: 'EMPTY_CARD_ID' | 'TRACE_NOT_FOUND' | 'IO_ERROR', message }
+// It also REJECTS an empty/missing/non-string cardId up front (never writes an
+// empty backlink) and guards `trace.history` is an array before pushing (the
+// original mirror throws here if history is absent). Re-linking the same card
+// is an idempotent no-op that still reports ok.
+function linkKanbanCardToRequirement(workspaceRoot, requirementId, cardId) {
+  if (typeof cardId !== 'string' || !cardId.trim()) {
+    return { ok: false, code: 'EMPTY_CARD_ID', message: 'cardId is required' }
+  }
+
+  const id = cardId.trim()
+  const tracePath = `${REQUIREMENTS_DIR}/${sanitizeId(requirementId)}/trace.json`
+  const fullPath = resolveWorkspacePath(workspaceRoot, tracePath)
+
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, code: 'TRACE_NOT_FOUND', message: `Requirement trace not found for ${requirementId}` }
+  }
+
+  try {
+    const trace = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+    const now = new Date().toISOString()
+
+    if (!Array.isArray(trace.linkedKanbanCardIds)) trace.linkedKanbanCardIds = []
+    if (!Array.isArray(trace.history)) trace.history = []
+
+    // Idempotent: re-linking an already-recorded card writes nothing.
+    if (!trace.linkedKanbanCardIds.includes(id)) {
+      trace.linkedKanbanCardIds.push(id)
+      trace.updatedAt = now
+      trace.history.push({
+        id: generateId('trace'),
+        at: now,
+        actor: 'user',
+        kind: 'kanban_linked',
+        summary: `Kanban card ${id} linked`
+      })
+      atomicWriteJSON(fullPath, trace)
+    }
+
+    return { ok: true, value: trace }
+  } catch (err) {
+    return { ok: false, code: 'IO_ERROR', message: `Failed to link Kanban card: ${err.message}` }
+  }
+}
+
 function createDesignArtifact(workspaceRoot, input) {
   const requirementId = sanitizeId(input && input.requirementId)
   if (!requirementId) {
@@ -1410,6 +1465,7 @@ module.exports = {
   readRequirement,
   updateRequirement,
   listRequirements,
+  linkKanbanCardToRequirement,
   createPlan,
   refinePlan,
   readPlan,

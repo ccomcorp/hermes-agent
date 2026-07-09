@@ -288,6 +288,19 @@ export const workbenchStrings = {
     sentToKanban: 'Sent to Kanban — card created for the dev team',
     sendToKanbanFailed: 'Failed to send to Kanban',
 
+    // Two-way traceability (Kanban traceability spec). Idempotency guard:
+    // re-sending a design whose requirement already has a linked card prompts
+    // first (a double-send spawns two orchestrator agents on the same dir).
+    kanbanResendConfirm: "This design's requirement already has a Kanban card. Send another?",
+    // Card-created-but-link-failed: a DISTINCT soft warning, never silent. The
+    // card is NOT lost and NOT re-sent (fail-open backlink).
+    sentToKanbanLinkFailed: 'Card created, but not linked back',
+    sentToKanbanLinkFailedDetail: (cardId: string, reason: string) =>
+      `Card ${cardId} was created on the board, but couldn't be linked back to the requirement — ${reason}`,
+    // The visible "linked cards" list in the requirement's design panel — the
+    // v1 consumer of the backlink (requirement → its cards).
+    linkedKanbanHeading: 'Kanban cards',
+
     // Sandboxed live preview (Slice H — go-forward plan §5 Slice H). A
     // SEPARATE, additional view alongside the read-only source text above,
     // never a replacement for it. Gated on WorkbenchDesignSettings.

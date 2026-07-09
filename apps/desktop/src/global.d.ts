@@ -255,6 +255,15 @@ declare global {
             contentHash: string
             updatedAt: string
           }>>
+          // Records a Kanban card id into the requirement trace's
+          // linkedKanbanCardIds (Workbench → card backlink). Resolves to the
+          // updated trace on success; a discriminated failure
+          // (EMPTY_CARD_ID/TRACE_NOT_FOUND/IO_ERROR) on link failure.
+          linkKanbanCard: (payload: {
+            workspaceRoot: string
+            requirementId: string
+            cardId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchRequirementTrace>>
         }
         plans: {
           list: (payload: { workspaceRoot: string; requirementId?: string }) => Promise<WorkbenchIpcResult<any[]>>

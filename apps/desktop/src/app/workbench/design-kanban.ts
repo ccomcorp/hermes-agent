@@ -101,5 +101,14 @@ export async function sendDesignToKanban(args: SendDesignToKanbanArgs): Promise<
 
   const data = (await res.json().catch(() => null)) as { task?: { id?: string } } | null
 
-  return data?.task?.id ?? ''
+  // A 2xx response with no usable card id is an ERROR, not an empty string —
+  // returning '' here would let the caller write an empty backlink and report
+  // false success. The card either has a real id or this throws; never ''.
+  const cardId = data?.task?.id
+
+  if (typeof cardId !== 'string' || !cardId.trim()) {
+    throw new Error('Kanban accepted the card but returned no card id — cannot link it back to the requirement.')
+  }
+
+  return cardId
 }

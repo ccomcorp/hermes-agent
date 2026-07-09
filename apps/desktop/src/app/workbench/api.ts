@@ -93,6 +93,21 @@ export function updateRequirement(
   return window.hermesDesktop.workbench.requirements.update(input)
 }
 
+// Records a Kanban card id into the requirement trace's linkedKanbanCardIds —
+// the Workbench → card backlink half of the "Send to Kanban" design handoff.
+// Called AFTER the card is confirmed created on the board, so it is best-effort
+// and fail-open: the caller branches on the returned result (a distinct soft
+// warning on `!ok`), never rolls back or re-creates the card. The backend
+// rejects an empty cardId (EMPTY_CARD_ID) and returns TRACE_NOT_FOUND/IO_ERROR
+// rather than throwing or silently swallowing.
+export function linkKanbanCardToRequirement(
+  workspaceRoot: string,
+  requirementId: string,
+  cardId: string
+): Promise<WorkbenchIpcResult<WorkbenchRequirementTrace>> {
+  return window.hermesDesktop.workbench.requirements.linkKanbanCard({ workspaceRoot, requirementId, cardId })
+}
+
 // ---------------------------------------------------------------------------
 // Plans (Slice C)
 //

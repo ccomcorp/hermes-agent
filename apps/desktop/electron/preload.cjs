@@ -232,7 +232,10 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       list: payload => ipcRenderer.invoke('hermes:workbench:requirements:list', payload),
       create: payload => ipcRenderer.invoke('hermes:workbench:requirements:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:requirements:read', payload),
-      update: payload => ipcRenderer.invoke('hermes:workbench:requirements:update', payload)
+      update: payload => ipcRenderer.invoke('hermes:workbench:requirements:update', payload),
+      // Records a Kanban card id into the requirement trace (Workbench → card
+      // backlink for the "Send to Kanban" design handoff).
+      linkKanbanCard: payload => ipcRenderer.invoke('hermes:workbench:requirements:link-kanban-card', payload)
     },
     plans: {
       list: payload => ipcRenderer.invoke('hermes:workbench:plans:list', payload),

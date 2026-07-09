@@ -845,3 +845,110 @@ test('listWorkflows returns manifest rows', () => {
     cleanup(ws)
   }
 })
+
+// ---------------------------------------------------------------------------
+// linkKanbanCardToRequirement (Workbench <-> Kanban two-way traceability)
+//
+// Unlike linkDesignArtifactToRequirement (fail-silent, void), this returns a
+// discriminated result the renderer branches on, rejects an empty card id,
+// and guards a missing history array. Idempotent re-link is a no-op.
+// ---------------------------------------------------------------------------
+
+test('linkKanbanCardToRequirement (happy path) appends the card id, dedupes, and reports ok', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Kanban Link Req' })
+
+    const first = store.linkKanbanCardToRequirement(ws, requirement.id, 'card-1')
+    assert.strictEqual(first.ok, true)
+    assert.deepStrictEqual(first.value.linkedKanbanCardIds, ['card-1'])
+
+    // A second distinct card appends.
+    const second = store.linkKanbanCardToRequirement(ws, requirement.id, 'card-2')
+    assert.strictEqual(second.ok, true)
+    assert.deepStrictEqual(second.value.linkedKanbanCardIds, ['card-1', 'card-2'])
+
+    // Re-linking an existing card is an idempotent no-op (no duplicate, one
+    // kanban_linked history entry per unique card).
+    const dupe = store.linkKanbanCardToRequirement(ws, requirement.id, 'card-1')
+    assert.strictEqual(dupe.ok, true)
+    assert.deepStrictEqual(dupe.value.linkedKanbanCardIds, ['card-1', 'card-2'])
+
+    // Verify on disk + history entries.
+    const tracePath = path.join(ws, requirement.traceRelativePath)
+    const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'))
+    assert.deepStrictEqual(trace.linkedKanbanCardIds, ['card-1', 'card-2'])
+    const kanbanEntries = trace.history.filter((h) => h.kind === 'kanban_linked')
+    assert.strictEqual(kanbanEntries.length, 2)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('linkKanbanCardToRequirement returns TRACE_NOT_FOUND when the trace is missing (not a throw, not silent)', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.linkKanbanCardToRequirement(ws, 'no-such-requirement', 'card-9')
+    assert.strictEqual(result.ok, false)
+    assert.strictEqual(result.code, 'TRACE_NOT_FOUND')
+    assert.ok(result.message)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('linkKanbanCardToRequirement rejects an empty/missing card id and writes nothing', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Empty Card Req' })
+
+    for (const bad of ['', '   ', null, undefined, 123]) {
+      const result = store.linkKanbanCardToRequirement(ws, requirement.id, bad)
+      assert.strictEqual(result.ok, false)
+      assert.strictEqual(result.code, 'EMPTY_CARD_ID')
+    }
+
+    // Nothing was written to the backlink.
+    const tracePath = path.join(ws, requirement.traceRelativePath)
+    const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'))
+    assert.deepStrictEqual(trace.linkedKanbanCardIds, [])
+    assert.strictEqual(trace.history.filter((h) => h.kind === 'kanban_linked').length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('linkKanbanCardToRequirement does not throw when the trace has no history array (links successfully)', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'No History Req' })
+
+    // Corrupt the trace to remove the history array entirely (older/hand-edited
+    // traces). The original mirror would throw on trace.history.push here.
+    const tracePath = path.join(ws, requirement.traceRelativePath)
+    const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'))
+    delete trace.history
+    delete trace.linkedKanbanCardIds
+    fs.writeFileSync(tracePath, JSON.stringify(trace), 'utf8')
+
+    const result = store.linkKanbanCardToRequirement(ws, requirement.id, 'card-77')
+    assert.strictEqual(result.ok, true)
+    assert.deepStrictEqual(result.value.linkedKanbanCardIds, ['card-77'])
+
+    const after = JSON.parse(fs.readFileSync(tracePath, 'utf8'))
+    assert.deepStrictEqual(after.linkedKanbanCardIds, ['card-77'])
+    assert.strictEqual(after.history.filter((h) => h.kind === 'kanban_linked').length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createRequirement initializes linkedKanbanCardIds as an empty array', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { trace } = store.createRequirement(ws, { title: 'Init Field Req' })
+    assert.deepStrictEqual(trace.linkedKanbanCardIds, [])
+  } finally {
+    cleanup(ws)
+  }
+})

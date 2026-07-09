@@ -53,7 +53,7 @@ import type { WorkbenchDesignArtifact } from '@hermes/shared'
  * path once the seeded turn runs.
  */
 import { useStore } from '@nanostores/react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
@@ -64,13 +64,24 @@ import { requestStartWorkSession } from '@/store/projects'
 
 import { PanelEmpty } from '../overlays/panel'
 
-import { createDesignArtifact, listDesignArtifacts, readDesignArtifact, readRequirement } from './api'
+import {
+  createDesignArtifact,
+  linkKanbanCardToRequirement,
+  listDesignArtifacts,
+  readDesignArtifact,
+  readRequirement
+} from './api'
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
 import { buildDesignHandoffMessage } from './design-handoff'
 import { sendDesignToKanban } from './design-kanban'
 import { DesignPrototypePreview } from './design-prototype-preview'
-import { $workbenchActiveRequirementId, $workbenchDesignSettings } from './store'
+import {
+  $workbenchActiveRequirementId,
+  $workbenchActiveRequirementTrace,
+  $workbenchDesignSettings,
+  addLinkedKanbanCardId
+} from './store'
 import { workbenchStrings as s } from './strings'
 
 type DesignArtifactDetail = WorkbenchDesignArtifact & { content: string }
@@ -89,6 +100,18 @@ interface DesignGenerationPanelProps {
 export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelProps) {
   const requirementId = useStore($workbenchActiveRequirementId)
   const settings = useStore($workbenchDesignSettings)
+  // The open requirement's trace, mirrored into the store by requirement-panel.tsx
+  // (a sibling — see store.ts). This panel reads its `linkedKanbanCardIds` for
+  // both the pre-send idempotency guard and the visible linked-cards list. Only
+  // trusted when it belongs to the open requirement (guarded below); older
+  // traces may predate the field, so it's always read as `?? []`.
+  const activeTrace = useStore($workbenchActiveRequirementTrace)
+
+  const linkedKanbanCardIds = useMemo(
+    () =>
+      activeTrace && activeTrace.requirementId === requirementId ? (activeTrace.linkedKanbanCardIds ?? []) : [],
+    [activeTrace, requirementId]
+  )
 
   const [artifacts, setArtifacts] = useState<WorkbenchDesignArtifact[]>([])
   const [listLoading, setListLoading] = useState(false)
@@ -223,32 +246,64 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
 
   // "Send to Kanban" (additive sibling of "Send to code agent") — creates a
   // card on the multi-agent board assigned to the dev orchestrator via the
-  // existing kanban plugin endpoint (see design-kanban.ts). Same brief/
-  // prototype gating; a null gateway connection fails closed inside
-  // sendDesignToKanban with a clear error (no card). On success we notify and
-  // close the dialog, mirroring the code-agent handoff.
+  // existing kanban plugin endpoint (see design-kanban.ts), then records that
+  // card id back into the requirement's trace (the two-way traceability
+  // backlink). Same brief/prototype gating; a null gateway connection fails
+  // closed inside sendDesignToKanban with a clear error (no card).
+  //
+  // Three distinct outcomes, never conflated:
+  //   • card created + link ok  → success notify, refresh the linked-cards list
+  //   • card created + link FAILED → a DISTINCT soft warning (the card is NOT
+  //     lost, NOT re-sent — the backlink is best-effort, fail-open)
+  //   • no card (empty id / throw) → sendDesignToKanban throws, error notify
+  //
+  // Idempotency guard: if this design's requirement already has ≥1 linked card,
+  // confirm before sending again — a double-send spawns two orchestrator agents
+  // editing the same real project dir. Declining creates no card.
   const handleSendToKanban = useCallback(async () => {
     if (!viewing || (viewing.kind !== 'brief' && viewing.kind !== 'prototype') || kanbanBusy) {
+      return
+    }
+
+    const targetRequirementId = viewing.requirementId
+
+    if (linkedKanbanCardIds.length > 0 && !window.confirm(s.designGeneration.kanbanResendConfirm)) {
       return
     }
 
     setKanbanBusy(true)
 
     try {
-      await sendDesignToKanban({
+      // Guaranteed non-empty (sendDesignToKanban throws on a missing card id).
+      const cardId = await sendDesignToKanban({
         workspaceRoot,
-        requirementId: viewing.requirementId,
+        requirementId: targetRequirementId,
         kind: viewing.kind,
         content: viewing.content
       })
-      notify({ kind: 'success', title: s.designGeneration.sentToKanban, message: '' })
+
+      const linkRes = await linkKanbanCardToRequirement(workspaceRoot, targetRequirementId, cardId)
+
+      if (linkRes.ok) {
+        addLinkedKanbanCardId(targetRequirementId, cardId)
+        notify({ kind: 'success', title: s.designGeneration.sentToKanban, message: '' })
+      } else {
+        // Card exists on the board; only the backlink failed. Surface it as a
+        // distinct soft warning — never silent, never a re-POST.
+        notify({
+          kind: 'warning',
+          title: s.designGeneration.sentToKanbanLinkFailed,
+          message: s.designGeneration.sentToKanbanLinkFailedDetail(cardId, linkRes.message)
+        })
+      }
+
       setViewing(null)
     } catch (err) {
       notifyError(err, s.designGeneration.sendToKanbanFailed)
     } finally {
       setKanbanBusy(false)
     }
-  }, [kanbanBusy, viewing, workspaceRoot])
+  }, [kanbanBusy, linkedKanbanCardIds, viewing, workspaceRoot])
 
   if (!requirementId) {
     return null
@@ -299,6 +354,32 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
           </ul>
         )}
       </div>
+
+      {/* Linked Kanban cards (Kanban traceability v1 consumer) — the visible
+          "requirement → its cards" list. Reads the open requirement's
+          trace.linkedKanbanCardIds (mirrored into the store by
+          requirement-panel.tsx); refreshed optimistically after a successful
+          send via addLinkedKanbanCardId. Shows the linked card ids only — v1
+          does not fetch live board status. Hidden when there are none. */}
+      {linkedKanbanCardIds.length > 0 && (
+        <div className="flex flex-col gap-1 border-t border-(--ui-stroke-tertiary) pt-2">
+          <h3 className="text-[0.7rem] font-semibold text-muted-foreground/80">
+            {s.designGeneration.linkedKanbanHeading} ({linkedKanbanCardIds.length})
+          </h3>
+          <ul className="flex flex-col gap-0.5">
+            {linkedKanbanCardIds.map(cardId => (
+              <li
+                className="flex items-center gap-1.5 truncate text-[0.65rem] text-muted-foreground/70"
+                key={cardId}
+                title={cardId}
+              >
+                <Codicon name="project" size="0.7rem" />
+                <span className="truncate">{cardId}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Viewer dialog: read-only SOURCE TEXT (a <pre> block, unchanged from
           Slice G) is always available and is the default tab. For

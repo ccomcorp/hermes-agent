@@ -64,6 +64,12 @@ export interface WorkbenchRequirementTrace {
   linkedPrototypeIds: string[]
   linkedDesignArtifactIds: string[]
   linkedWriteArtifactIds: string[]
+  // Kanban cards created from this requirement's designs via "Send to Kanban"
+  // (Workbench → card backlink). Recorded best-effort AFTER the card is
+  // confirmed created on the board; a card is never lost if this link fails.
+  // Older traces written before this field existed may omit it on disk — read
+  // defensively (`?? []`) and the backend link fn guards for a missing array.
+  linkedKanbanCardIds: string[]
   history: WorkbenchTraceEntry[]
 }
 
@@ -81,6 +87,7 @@ export interface WorkbenchTraceEntry {
     | 'prototype_linked'
     | 'design_linked'
     | 'write_linked'
+    | 'kanban_linked'
     | 'verified'
   summary: string
   metadata?: Record<string, unknown>
@@ -619,6 +626,9 @@ export const WORKBENCH_IPC_CHANNELS = {
   requirementsCreate: 'hermes:workbench:requirements:create',
   requirementsRead: 'hermes:workbench:requirements:read',
   requirementsUpdate: 'hermes:workbench:requirements:update',
+  // Records a Kanban card id into the requirement trace's linkedKanbanCardIds
+  // (Workbench → card backlink for the "Send to Kanban" design handoff).
+  requirementsLinkKanbanCard: 'hermes:workbench:requirements:link-kanban-card',
   plansList: 'hermes:workbench:plans:list',
   plansCreate: 'hermes:workbench:plans:create',
   plansRead: 'hermes:workbench:plans:read',
