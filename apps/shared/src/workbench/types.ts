@@ -312,6 +312,37 @@ export interface WriteWorkbenchDesignSettingsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Design Studio — artifact generation (Slice G, go-forward plan §5 Slice G)
+//
+// Unlike settings above (a singleton), a WorkbenchDesignArtifact is a list —
+// every generation call creates a BRAND-NEW artifact under
+// `.hermes/workbench/designs/<requirementId>/`; it never overwrites a prior
+// one (same non-destructive principle as Plan refine, simpler here: no
+// supersedes-chain, just an ever-growing list per requirement). Structurally
+// permissive of all four declared `kind`s (matching WorkbenchDesignArtifact
+// above), though this slice only ships generation UI for 'brief'/'prototype'.
+// ---------------------------------------------------------------------------
+
+export interface CreateWorkbenchDesignArtifactRequest {
+  workspaceRoot: string
+  requirementId: string
+  kind: WorkbenchDesignArtifact['kind']
+  content: string
+}
+
+export interface CreateWorkbenchDesignArtifactResponse {
+  artifact: WorkbenchDesignArtifact
+}
+
+// The read/detail shape: the full WorkbenchDesignArtifact record plus its
+// persisted text content (Markdown for 'brief'/'design_system'/
+// 'quality_report', an HTML document STRING for 'prototype' — never parsed or
+// rendered as a live document by anything that consumes this type).
+export interface WorkbenchDesignArtifactDetail extends WorkbenchDesignArtifact {
+  content: string
+}
+
+// ---------------------------------------------------------------------------
 // Write Workspace
 // ---------------------------------------------------------------------------
 
@@ -602,6 +633,14 @@ export const WORKBENCH_IPC_CHANNELS = {
   changesetsCommit: 'hermes:workbench:changesets:commit',
   designSettingsRead: 'hermes:workbench:design:settings:read',
   designSettingsWrite: 'hermes:workbench:design:settings:write',
+  // Design artifact generation (Slice G) — creates a brand-new
+  // WorkbenchDesignArtifact (brief/prototype in this slice) per call; never
+  // overwrites a prior one. No generation/model-invocation logic lives on the
+  // IPC/main-process side — these three channels are pure artifact-store CRUD,
+  // the same shape as requirements/plans/etc above.
+  designArtifactsCreate: 'hermes:workbench:design:artifacts:create',
+  designArtifactsList: 'hermes:workbench:design:artifacts:list',
+  designArtifactsRead: 'hermes:workbench:design:artifacts:read',
   writeProjectsList: 'hermes:workbench:write:list',
   writeProjectsCreate: 'hermes:workbench:write:create',
   writeProjectsRead: 'hermes:workbench:write:read',

@@ -11,10 +11,11 @@ import type { WorkbenchDesignSettings } from '@hermes/shared'
  * see workbench-artifacts.cjs `readDesignSettings`), so there is no separate
  * "create" step, just load + edit + save.
  *
- * Hard scope boundary: this file must never call a design-brief/HTML-
- * prototype generation API (Slice G), never render any prototype preview or
- * iframe/webview (Slice H), and never create or apply a ChangeSet (Slice I).
- * It only ever calls `readDesignSettings`/`writeDesignSettings`.
+ * Hard scope boundary: this file only ever calls `readDesignSettings`/
+ * `writeDesignSettings`. Brief/HTML-prototype generation (Slice G) lives in
+ * the sibling `design-generation-panel.tsx`; sandboxed prototype preview
+ * (Slice H) and design-to-code ChangeSet application (Slice I) remain
+ * out of scope everywhere in Design Studio — neither exists yet.
  */
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useState } from 'react'

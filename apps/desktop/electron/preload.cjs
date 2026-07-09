@@ -258,6 +258,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
         // a list. No generation/preview/changeset-apply channel exists here.
         read: payload => ipcRenderer.invoke('hermes:workbench:design:settings:read', payload),
         write: payload => ipcRenderer.invoke('hermes:workbench:design:settings:write', payload)
+      },
+      artifacts: {
+        // Design artifact generation storage (Slice G) — pure CRUD; no
+        // generation/model call happens in the main process. Every create is
+        // a brand-new artifact; there is no update channel.
+        create: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:create', payload),
+        list: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:list', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:read', payload)
       }
     },
     write: {

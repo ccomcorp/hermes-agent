@@ -134,6 +134,19 @@ function validateDesignSettings(settings) {
 }
 
 // ---------------------------------------------------------------------------
+// Design artifact generation validators (Slice G). These channels are pure
+// artifact-store CRUD — no model/generation call happens on the main-process
+// side (that lives in the renderer's `requestOneShot()` call, same seam as
+// Slice K's write quick actions). Structurally permissive of all four
+// declared kinds, matching WorkbenchDesignArtifact — only 'brief'/'prototype'
+// have a generation UI in this slice, but the store/IPC do not special-case
+// that restriction.
+// ---------------------------------------------------------------------------
+
+const VALID_DESIGN_ARTIFACT_KINDS = ['brief', 'design_system', 'prototype', 'quality_report']
+const MAX_DESIGN_ARTIFACT_CONTENT_LENGTH = 2_000_000
+
+// ---------------------------------------------------------------------------
 // Write Workspace export validators (mirror of validateExportWriteProjectRequest
 // in apps/shared/src/workbench/validators.ts). Slice L. The export target path
 // always comes from the OS save dialog inside workbench-write-export.cjs —
@@ -619,6 +632,80 @@ function registerWorkbenchIpc(options = {}) {
       return normalize(store.writeDesignSettings(payload.workspaceRoot, payload.settings))
     } catch (err) {
       return { ok: false, message: 'Failed to write design settings: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // -- Design artifacts — generation storage (Slice G) -----------------------
+  //
+  // Pure artifact-store CRUD, mirroring Requirements' create/list/read shape
+  // exactly. No model/generation call happens here — the renderer builds the
+  // prompt and calls `requestOneShot()` itself (see design-generation.ts /
+  // design-generation-panel.tsx), then hands the resulting text to
+  // `create` below. Each call creates a brand-new artifact; there is no
+  // update/overwrite channel.
+
+  ipcMain.handle('hermes:workbench:design:artifacts:create', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.requirementId || typeof payload.requirementId !== 'string' || !payload.requirementId.trim()) {
+      return { ok: false, message: 'requirementId is required', code: 'MISSING_REQUIREMENT_ID' }
+    }
+
+    if (!payload.kind || !VALID_DESIGN_ARTIFACT_KINDS.includes(payload.kind)) {
+      return { ok: false, message: 'invalid design artifact kind', code: 'INVALID_KIND' }
+    }
+
+    if (!payload.content || typeof payload.content !== 'string' || !payload.content.trim()) {
+      return { ok: false, message: 'content is required', code: 'MISSING_CONTENT' }
+    }
+
+    if (payload.content.length > MAX_DESIGN_ARTIFACT_CONTENT_LENGTH) {
+      return { ok: false, message: 'content exceeds size limit', code: 'CONTENT_TOO_LARGE' }
+    }
+
+    try {
+      return normalize(store.createDesignArtifact(payload.workspaceRoot, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to create design artifact: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:design:artifacts:list', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.requirementId || typeof payload.requirementId !== 'string' || !payload.requirementId.trim()) {
+      return { ok: false, message: 'requirementId is required', code: 'MISSING_REQUIREMENT_ID' }
+    }
+
+    try {
+      return normalize(store.listDesignArtifacts(payload.workspaceRoot, payload.requirementId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to list design artifacts: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:design:artifacts:read', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.artifactId || typeof payload.artifactId !== 'string' || !payload.artifactId.trim()) {
+      return { ok: false, message: 'artifactId is required', code: 'MISSING_ARTIFACT_ID' }
+    }
+
+    try {
+      return normalize(store.readDesignArtifact(payload.workspaceRoot, payload.artifactId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read design artifact: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
 

@@ -16,6 +16,7 @@ import type {
   WorkbenchChangeSet,
   WorkbenchChangeSetStatus,
   WorkbenchChangeSource,
+  WorkbenchDesignArtifact,
   WorkbenchDesignSettings,
   WorkbenchManifestEntry,
   WorkbenchPlan,
@@ -320,6 +321,43 @@ export function writeDesignSettings(
   settings: WorkbenchDesignSettings
 ): Promise<WorkbenchIpcResult<WorkbenchDesignSettings>> {
   return window.hermesDesktop.workbench.design.settings.write({ workspaceRoot, settings })
+}
+
+// ---------------------------------------------------------------------------
+// Design Studio — artifact generation (Slice G, go-forward plan §5 Slice G).
+//
+// Each artifact is a brand-new file under `.hermes/workbench/designs/` — this
+// slice never overwrites a prior one, so there is a create/list/read set but
+// no update. No function here calls a model — the caller (design-generation-
+// panel.tsx) builds the prompt and calls `requestOneShot()` itself (see
+// design-generation.ts), then hands the resulting text to `createDesignArtifact`.
+// ---------------------------------------------------------------------------
+
+export interface CreateWorkbenchDesignArtifactInput {
+  workspaceRoot: string
+  requirementId: string
+  kind: WorkbenchDesignArtifact['kind']
+  content: string
+}
+
+export function createDesignArtifact(
+  input: CreateWorkbenchDesignArtifactInput
+): Promise<WorkbenchIpcResult<WorkbenchDesignArtifact>> {
+  return window.hermesDesktop.workbench.design.artifacts.create(input)
+}
+
+export function listDesignArtifacts(
+  workspaceRoot: string,
+  requirementId: string
+): Promise<WorkbenchIpcResult<WorkbenchDesignArtifact[]>> {
+  return window.hermesDesktop.workbench.design.artifacts.list({ workspaceRoot, requirementId })
+}
+
+export function readDesignArtifact(
+  workspaceRoot: string,
+  artifactId: string
+): Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>> {
+  return window.hermesDesktop.workbench.design.artifacts.read({ workspaceRoot, artifactId })
 }
 
 // ---------------------------------------------------------------------------

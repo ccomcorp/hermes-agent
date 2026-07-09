@@ -246,6 +246,35 @@ export const workbenchStrings = {
     } as Record<string, string>
   },
 
+  // Design Studio generation (Slice G — brief/prototype generation, tied to
+  // the currently-open requirement). Generated HTML prototypes are shown as
+  // read-only SOURCE TEXT only — see design-generation-panel.tsx; there is no
+  // "preview"/"render" string here on purpose, that is Slice H.
+  designGeneration: {
+    heading: 'Generate',
+    generateBrief: 'Generate brief',
+    generatePrototype: 'Generate prototype',
+    loading: 'Loading generated artifacts',
+    listFailed: 'Failed to load generated artifacts',
+    readFailed: 'Failed to open artifact',
+    emptyTitle: 'Nothing generated yet',
+    emptyDesc: 'Generate a design brief or an HTML prototype for the open requirement.',
+    noRequirementDesc: 'Open a requirement to generate a design brief or prototype for it.',
+    emptyModelResponse: 'The model returned an empty response.',
+    failed: (kind: string) => `Failed to generate ${kind === 'brief' ? 'brief' : 'prototype'}`,
+    generatedTitle: (kind: string) => (kind === 'brief' ? 'Design brief generated' : 'Prototype generated'),
+
+    kindLabels: {
+      brief: 'Brief',
+      design_system: 'Design system',
+      prototype: 'Prototype',
+      quality_report: 'Quality report'
+    } as Record<string, string>,
+
+    sourceDialogClose: 'Close',
+    prototypeSourceHint: 'Raw HTML source — shown as read-only text, never rendered.'
+  },
+
   // Write Workspace (Slice J — backend CRUD + editor; Slice K adds quick
   // actions + selection-aware inline edit below. Retrieval from workspace
   // sources is still deferred — a distinct, later slice.)

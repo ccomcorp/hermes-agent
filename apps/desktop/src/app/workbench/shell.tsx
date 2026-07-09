@@ -23,6 +23,7 @@ import { PAGE_INSET_X } from '../layout-constants'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { ChangeSetPanel } from './changeset-panel'
+import { DesignGenerationPanel } from './design-generation-panel'
 import { DesignSettingsPanel } from './design-settings-panel'
 import { PlanPanel } from './plan-panel'
 import { RequirementPanel } from './requirement-panel'
@@ -211,6 +212,9 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
             <div className="flex shrink-0 flex-col border-t border-(--ui-stroke-tertiary) pt-3">
               <DesignSettingsPanel workspaceRoot={workspaceRoot} />
             </div>
+            {/* Generate brief/prototype for the open requirement (Slice G) —
+                renders nothing when no requirement is open (fails closed). */}
+            <DesignGenerationPanel workspaceRoot={workspaceRoot} />
           </aside>
         </div>
       )}

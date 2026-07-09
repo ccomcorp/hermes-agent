@@ -345,6 +345,183 @@ test('writeDesignSettings never writes outside .hermes/workbench/designs', () =>
   }
 })
 
+// ---------------------------------------------------------------------------
+// Design artifact generation storage (Slice G)
+// ---------------------------------------------------------------------------
+
+test('createDesignArtifact writes a brief as markdown and links the requirement trace', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Onboarding flow' })
+
+    const result = store.createDesignArtifact(ws, {
+      requirementId: requirement.id,
+      kind: 'brief',
+      content: '# Design brief\n\nTarget users: new signups.'
+    })
+
+    assert.strictEqual(result.ok, true)
+    assert.strictEqual(result.value.kind, 'brief')
+    assert.strictEqual(result.value.requirementId, requirement.id)
+    assert.ok(result.value.id)
+    assert.ok(result.value.contentHash)
+    assert.ok(result.value.relativePath.endsWith('.md'))
+
+    const fullPath = path.join(ws, result.value.relativePath)
+    assert.ok(fs.existsSync(fullPath))
+    assert.ok(fs.readFileSync(fullPath, 'utf8').includes('Design brief'))
+
+    // Sidecar carries the full record.
+    const metaPath = fullPath.replace(/\.md$/, '.meta.json')
+    assert.ok(fs.existsSync(metaPath))
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+    assert.strictEqual(meta.id, result.value.id)
+    assert.strictEqual(meta.kind, 'brief')
+
+    // Trace linkage.
+    const traceRes = store.readRequirement(ws, requirement.id)
+    assert.strictEqual(traceRes.ok, true)
+    assert.ok(traceRes.value.trace.linkedDesignArtifactIds.includes(result.value.id))
+    assert.ok(traceRes.value.trace.history.some((h) => h.kind === 'design_linked'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createDesignArtifact writes a prototype as .html', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Prototype target' })
+
+    const result = store.createDesignArtifact(ws, {
+      requirementId: requirement.id,
+      kind: 'prototype',
+      content: '<!doctype html><html><head></head><body>Hi</body></html>'
+    })
+
+    assert.strictEqual(result.ok, true)
+    assert.ok(result.value.relativePath.endsWith('.html'))
+    assert.ok(fs.existsSync(path.join(ws, result.value.relativePath)))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createDesignArtifact rejects an invalid kind and missing content', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Validation target' })
+
+    const badKind = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'bogus', content: 'x' })
+    assert.strictEqual(badKind.ok, false)
+    assert.strictEqual(badKind.code, 'INVALID_KIND')
+
+    const badContent = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'brief', content: '   ' })
+    assert.strictEqual(badContent.ok, false)
+    assert.strictEqual(badContent.code, 'MISSING_CONTENT')
+
+    const badReq = store.createDesignArtifact(ws, { requirementId: '', kind: 'brief', content: 'x' })
+    assert.strictEqual(badReq.ok, false)
+    assert.strictEqual(badReq.code, 'MISSING_REQUIREMENT_ID')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('createDesignArtifact never overwrites a prior artifact — each call creates a new one', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Ever-growing list' })
+
+    const first = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'brief', content: 'v1' })
+    const second = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'brief', content: 'v2' })
+
+    assert.notStrictEqual(first.value.id, second.value.id)
+    assert.ok(fs.existsSync(path.join(ws, first.value.relativePath)))
+    assert.ok(fs.existsSync(path.join(ws, second.value.relativePath)))
+    assert.strictEqual(fs.readFileSync(path.join(ws, first.value.relativePath), 'utf8'), 'v1')
+    assert.strictEqual(fs.readFileSync(path.join(ws, second.value.relativePath), 'utf8'), 'v2')
+
+    const listed = store.listDesignArtifacts(ws, requirement.id)
+    assert.strictEqual(listed.ok, true)
+    assert.strictEqual(listed.value.length, 2)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('listDesignArtifacts returns [] for a requirement with none yet, and requires a requirementId', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Empty list target' })
+
+    const empty = store.listDesignArtifacts(ws, requirement.id)
+    assert.strictEqual(empty.ok, true)
+    assert.deepStrictEqual(empty.value, [])
+
+    const missingReq = store.listDesignArtifacts(ws, '')
+    assert.strictEqual(missingReq.ok, false)
+    assert.strictEqual(missingReq.code, 'MISSING_REQUIREMENT_ID')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('listDesignArtifacts orders newest first', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Order target' })
+
+    const older = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'brief', content: 'older' })
+    // Force distinct createdAt ordering deterministically rather than relying on timing.
+    const metaPath = path.join(ws, older.value.relativePath.replace(/\.md$/, '.meta.json'))
+    const olderMeta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+    olderMeta.createdAt = '2020-01-01T00:00:00.000Z'
+    fs.writeFileSync(metaPath, JSON.stringify(olderMeta, null, 2))
+
+    const newer = store.createDesignArtifact(ws, { requirementId: requirement.id, kind: 'prototype', content: '<html></html>' })
+
+    const listed = store.listDesignArtifacts(ws, requirement.id)
+    assert.strictEqual(listed.ok, true)
+    assert.strictEqual(listed.value[0].id, newer.value.id)
+    assert.strictEqual(listed.value[1].id, older.value.id)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readDesignArtifact returns the artifact content by id alone (no requirementId needed)', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Read target' })
+    const created = store.createDesignArtifact(ws, {
+      requirementId: requirement.id,
+      kind: 'prototype',
+      content: '<!doctype html><html><body>Proto</body></html>'
+    })
+
+    const result = store.readDesignArtifact(ws, created.value.id)
+    assert.strictEqual(result.ok, true)
+    assert.strictEqual(result.value.id, created.value.id)
+    assert.strictEqual(result.value.kind, 'prototype')
+    assert.strictEqual(result.value.requirementId, requirement.id)
+    assert.ok(result.value.content.includes('Proto'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('readDesignArtifact returns NOT_FOUND for an unknown artifact id', () => {
+  const ws = createTempWorkspace()
+  try {
+    const result = store.readDesignArtifact(ws, 'design-does-not-exist')
+    assert.strictEqual(result.ok, false)
+    assert.strictEqual(result.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
 test('atomicWriteFile does not leave partial target on error', () => {
   const ws = createTempWorkspace()
   try {

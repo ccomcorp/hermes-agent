@@ -788,6 +788,215 @@ function writeDesignSettings(workspaceRoot, settings) {
 }
 
 // ---------------------------------------------------------------------------
+// Design Studio — artifact generation (Slice G, go-forward plan §5 Slice G).
+//
+// Unlike design SETTINGS above (one singleton document per workspace), a
+// WorkbenchDesignArtifact is a list, scoped to a requirement — every
+// generation call creates a BRAND-NEW artifact under
+// `.hermes/workbench/designs/<requirementId>/<artifactId>.<ext>`; it never
+// overwrites a prior one (same non-destructive principle as Plan refine,
+// simpler here: no supersedes-chain, just an ever-growing list per
+// requirement). Mirrors the Plan file+`.meta.json` sidecar pattern: the
+// content file holds the raw artifact text (Markdown for brief/design_system/
+// quality_report, an HTML document STRING for prototype — this module never
+// parses or executes that HTML, only reads/writes it as text), and the
+// sidecar holds the full WorkbenchDesignArtifact record so a later list/read
+// doesn't need to re-derive `kind`/`createdAt`/`contentHash` from the
+// filename. No generation/model-invocation logic lives here — this is pure
+// artifact-store CRUD, exactly like every other section in this file.
+// ---------------------------------------------------------------------------
+
+const DESIGN_ARTIFACT_EXTENSIONS = {
+  brief: 'md',
+  design_system: 'md',
+  prototype: 'html',
+  quality_report: 'md'
+}
+
+const VALID_DESIGN_ARTIFACT_KINDS = ['brief', 'design_system', 'prototype', 'quality_report']
+
+function designArtifactRelativeDir(requirementId) {
+  return `${DESIGNS_DIR}/${sanitizeId(requirementId)}`
+}
+
+function designArtifactContentRelativePath(requirementId, id, kind) {
+  const ext = DESIGN_ARTIFACT_EXTENSIONS[kind] || 'md'
+  return `${designArtifactRelativeDir(requirementId)}/${id}.${ext}`
+}
+
+function designArtifactMetaRelativePath(requirementId, id) {
+  return `${designArtifactRelativeDir(requirementId)}/${id}.meta.json`
+}
+
+// Records the new artifact in the source requirement's trace.json
+// (`linkedDesignArtifactIds` + a `design_linked` history entry), mirroring
+// `linkPlanToRequirement` below. Silently skips if the requirement/trace is
+// missing or corrupt — same fail-soft bookkeeping behavior as the plan link.
+function linkDesignArtifactToRequirement(workspaceRoot, requirementId, artifactId) {
+  const tracePath = `${REQUIREMENTS_DIR}/${sanitizeId(requirementId)}/trace.json`
+  const fullPath = resolveWorkspacePath(workspaceRoot, tracePath)
+
+  if (!fs.existsSync(fullPath)) return
+
+  try {
+    const trace = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+    const now = new Date().toISOString()
+
+    if (!trace.linkedDesignArtifactIds) trace.linkedDesignArtifactIds = []
+    if (!trace.linkedDesignArtifactIds.includes(artifactId)) {
+      trace.linkedDesignArtifactIds.push(artifactId)
+    }
+    trace.updatedAt = now
+    trace.history.push({
+      id: generateId('trace'),
+      at: now,
+      actor: 'agent',
+      kind: 'design_linked',
+      summary: `Design artifact ${artifactId} linked`
+    })
+
+    atomicWriteJSON(fullPath, trace)
+  } catch {
+    // Silently skip if trace is missing/corrupt
+  }
+}
+
+function createDesignArtifact(workspaceRoot, input) {
+  const requirementId = sanitizeId(input && input.requirementId)
+  if (!requirementId) {
+    return { ok: false, message: 'requirementId is required', code: 'MISSING_REQUIREMENT_ID' }
+  }
+
+  if (!input || !VALID_DESIGN_ARTIFACT_KINDS.includes(input.kind)) {
+    return { ok: false, message: 'invalid design artifact kind', code: 'INVALID_KIND' }
+  }
+
+  if (typeof input.content !== 'string' || !input.content.trim()) {
+    return { ok: false, message: 'content is required', code: 'MISSING_CONTENT' }
+  }
+
+  const now = new Date().toISOString()
+  const id = generateId('design')
+  const relativePath = designArtifactContentRelativePath(requirementId, id, input.kind)
+  const metaRelativePath = designArtifactMetaRelativePath(requirementId, id)
+  const hash = contentHash(input.content)
+
+  const artifact = {
+    id,
+    requirementId,
+    workspaceRoot,
+    kind: input.kind,
+    relativePath,
+    createdAt: now,
+    contentHash: hash
+  }
+
+  atomicWriteFile(resolveWorkspacePath(workspaceRoot, relativePath), input.content)
+  atomicWriteJSON(resolveWorkspacePath(workspaceRoot, metaRelativePath), artifact)
+
+  // Bookkeeping only — listDesignArtifacts()/readDesignArtifact() below read
+  // from the per-requirement directory / manifest entry respectively, not by
+  // re-deriving state from this push, but the manifest entry's relativePath
+  // is what readDesignArtifact() (which takes only an artifactId, no
+  // requirementId) uses to locate the file.
+  updateManifest(workspaceRoot, (m) => {
+    if (!Array.isArray(m.designs)) m.designs = []
+    m.designs.push({
+      id,
+      title: `${input.kind} — ${requirementId}`,
+      relativePath,
+      updatedAt: now,
+      requirementId,
+      kind: input.kind
+    })
+    return m
+  })
+
+  linkDesignArtifactToRequirement(workspaceRoot, requirementId, id)
+
+  return { ok: true, value: artifact }
+}
+
+function listDesignArtifacts(workspaceRoot, requirementId) {
+  const safeReqId = sanitizeId(requirementId)
+  if (!safeReqId) {
+    return { ok: false, message: 'requirementId is required', code: 'MISSING_REQUIREMENT_ID' }
+  }
+
+  const dirFullPath = resolveWorkspacePath(workspaceRoot, designArtifactRelativeDir(safeReqId))
+
+  if (!fs.existsSync(dirFullPath)) {
+    return { ok: true, value: [] }
+  }
+
+  const sidecarNames = fs.readdirSync(dirFullPath).filter((name) => name.endsWith('.meta.json'))
+  const artifacts = []
+
+  for (const name of sidecarNames) {
+    try {
+      artifacts.push(JSON.parse(fs.readFileSync(path.join(dirFullPath, name), 'utf8')))
+    } catch {
+      // Skip a corrupt sidecar rather than failing the whole list
+    }
+  }
+
+  // Newest first — matches how a per-requirement, ever-growing list is most
+  // useful to browse (most recent generation at the top).
+  artifacts.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+
+  return { ok: true, value: artifacts }
+}
+
+// Takes ONLY an artifactId (no requirementId) — the manifest is the id ->
+// relativePath lookup that makes this possible, since the artifact's real
+// location is nested under a requirement-scoped directory this function
+// doesn't otherwise know.
+function readDesignArtifact(workspaceRoot, artifactId) {
+  const safeId = sanitizeId(artifactId)
+  if (!safeId) {
+    return { ok: false, message: 'artifactId is required', code: 'MISSING_ARTIFACT_ID' }
+  }
+
+  const manifest = ensureManifest(workspaceRoot)
+  const entry = (manifest.designs || []).find((d) => d.id === safeId && d.relativePath)
+
+  if (!entry) {
+    return { ok: false, message: 'Design artifact not found', code: 'NOT_FOUND' }
+  }
+
+  const fullPath = resolveWorkspacePath(workspaceRoot, entry.relativePath)
+  if (!fs.existsSync(fullPath)) {
+    return { ok: false, message: 'Design artifact not found', code: 'NOT_FOUND' }
+  }
+
+  const content = fs.readFileSync(fullPath, 'utf8')
+
+  const metaRelativePath = `${path.posix.dirname(entry.relativePath)}/${safeId}.meta.json`
+  const metaFullPath = resolveWorkspacePath(workspaceRoot, metaRelativePath)
+
+  let meta = null
+  if (fs.existsSync(metaFullPath)) {
+    try {
+      meta = JSON.parse(fs.readFileSync(metaFullPath, 'utf8'))
+    } catch {
+      meta = null
+    }
+  }
+
+  const artifact = meta || {
+    id: safeId,
+    requirementId: entry.requirementId,
+    workspaceRoot,
+    kind: entry.kind,
+    relativePath: entry.relativePath,
+    createdAt: entry.updatedAt,
+    contentHash: contentHash(content)
+  }
+
+  return { ok: true, value: { ...artifact, content } }
+}
+
+// ---------------------------------------------------------------------------
 // Write Workspace — CRUD only (Slice J, go-forward plan §5).
 //
 // A WorkbenchWriteProject is a single markdown document + metadata, the same
@@ -1213,6 +1422,9 @@ module.exports = {
   writeChangeSet,
   readDesignSettings,
   writeDesignSettings,
+  createDesignArtifact,
+  listDesignArtifacts,
+  readDesignArtifact,
   createWriteProject,
   readWriteProject,
   updateWriteProject,

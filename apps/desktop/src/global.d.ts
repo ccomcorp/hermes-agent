@@ -1,5 +1,6 @@
 import type {
   WorkbenchChangeSet,
+  WorkbenchDesignArtifact,
   WorkbenchDesignSettings,
   WorkbenchPlan,
   WorkbenchRequirement,
@@ -341,6 +342,24 @@ declare global {
               workspaceRoot: string
               settings: WorkbenchDesignSettings
             }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
+          }
+          // Design artifact generation storage (Slice G) — pure CRUD; every
+          // create is a brand-new artifact, there is no update channel.
+          artifacts: {
+            create: (payload: {
+              workspaceRoot: string
+              requirementId: string
+              kind: WorkbenchDesignArtifact['kind']
+              content: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact>>
+            list: (payload: {
+              workspaceRoot: string
+              requirementId: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact[]>>
+            read: (payload: {
+              workspaceRoot: string
+              artifactId: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>>
           }
         }
         // Write Workspace — CRUD (Slice J) + export (Slice L). A write project

@@ -62,6 +62,9 @@ const CH = {
   csCommit: 'hermes:workbench:changesets:commit',
   designRead: 'hermes:workbench:design:settings:read',
   designWrite: 'hermes:workbench:design:settings:write',
+  designArtifactsCreate: 'hermes:workbench:design:artifacts:create',
+  designArtifactsList: 'hermes:workbench:design:artifacts:list',
+  designArtifactsRead: 'hermes:workbench:design:artifacts:read',
   writeList: 'hermes:workbench:write:list',
   writeCreate: 'hermes:workbench:write:create',
   writeRead: 'hermes:workbench:write:read',
@@ -261,6 +264,84 @@ test('design settings write is rejected with structured errors on invalid payloa
     // Nothing should have been written to disk by any of the rejected calls.
     const settingsPath = path.join(ws, '.hermes', 'workbench', 'designs', 'settings.json')
     assert.ok(!fs.existsSync(settingsPath))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design artifacts create/list/read return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const reqRes = invoke(CH.reqCreate, { workspaceRoot: ws, title: 'Design artifact target' })
+    const requirementId = reqRes.value.requirement.id
+
+    const created = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId,
+      kind: 'brief',
+      content: '# Brief\n\nSome content.'
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.strictEqual(created.value.kind, 'brief')
+    assert.strictEqual(created.value.requirementId, requirementId)
+
+    const listed = invoke(CH.designArtifactsList, { workspaceRoot: ws, requirementId })
+    assertNormalized(listed)
+    assert.strictEqual(listed.ok, true)
+    assert.strictEqual(listed.value.length, 1)
+    assert.strictEqual(listed.value[0].id, created.value.id)
+
+    const read = invoke(CH.designArtifactsRead, { workspaceRoot: ws, artifactId: created.value.id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.ok(read.value.content.includes('Some content'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design artifacts handlers are rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.designArtifactsCreate, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const missingReq = invoke(CH.designArtifactsCreate, { workspaceRoot: ws, kind: 'brief', content: 'x' })
+    assert.strictEqual(missingReq.ok, false)
+    assert.strictEqual(missingReq.code, 'MISSING_REQUIREMENT_ID')
+
+    const badKind = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId: 'req-x',
+      kind: 'bogus',
+      content: 'x'
+    })
+    assert.strictEqual(badKind.ok, false)
+    assert.strictEqual(badKind.code, 'INVALID_KIND')
+
+    const missingContent = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId: 'req-x',
+      kind: 'brief',
+      content: '   '
+    })
+    assert.strictEqual(missingContent.ok, false)
+    assert.strictEqual(missingContent.code, 'MISSING_CONTENT')
+
+    const listMissingReq = invoke(CH.designArtifactsList, { workspaceRoot: ws })
+    assert.strictEqual(listMissingReq.ok, false)
+    assert.strictEqual(listMissingReq.code, 'MISSING_REQUIREMENT_ID')
+
+    const readMissingId = invoke(CH.designArtifactsRead, { workspaceRoot: ws })
+    assert.strictEqual(readMissingId.ok, false)
+    assert.strictEqual(readMissingId.code, 'MISSING_ARTIFACT_ID')
+
+    const readUnknown = invoke(CH.designArtifactsRead, { workspaceRoot: ws, artifactId: 'design-nope' })
+    assert.strictEqual(readUnknown.ok, false)
+    assert.strictEqual(readUnknown.code, 'NOT_FOUND')
   } finally {
     cleanup(ws)
   }
