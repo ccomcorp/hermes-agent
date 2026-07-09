@@ -1,0 +1,39 @@
+# .github/workflows/desktop-tests.yml
+name: Desktop tests
+
+on:
+  workflow_call:
+
+jobs:
+  desktop-tests:
+    name: Run desktop unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      # Keep install scripts (full `npm ci`, like the desktop-build job): the
+      # jsdom vitest suites import renderer/electron-adjacent modules that can
+      # transitively load node-pty's native binary, which `--ignore-scripts`
+      # would skip building. retry handles the transient install-time fetch
+      # flakes.
+      - uses: ./.github/actions/retry
+        with:
+          command: npm ci
+      # (a) node:test `.cjs` suites — glob discovery so every new
+      # electron/*.test.cjs runs without a maintained file list.
+      - run: npm run --prefix apps/desktop test:desktop:platforms
+      # (b) Vitest jsdom UI suites under apps/desktop/src. NON-BLOCKING for now
+      # (continue-on-error): this suite has ~27 pre-existing failures unrelated
+      # to the workbench work that added this job (a module-resolution error,
+      # NOT assertion failures — same failures on a clean tree). Running it here
+      # surfaces those + prevents new src/** tests from silently rotting, but it
+      # must not gate PRs until the pre-existing failures are triaged. Flip
+      # continue-on-error off once this suite is green. (The workbench desktop
+      # vitest tests specifically pass — 49/49 via `vitest run src/app/workbench`.)
+      - run: npm run --prefix apps/desktop test:ui
+        continue-on-error: true
+      # (c) Vitest suites for the shared workbench package (apps/shared/src).
+      - run: npm run --prefix apps/shared test
