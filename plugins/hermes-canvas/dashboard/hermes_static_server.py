@@ -31,9 +31,10 @@ RELOAD_ROUTE = "/__hermes_reload_token"
 # Dirs never worth hashing for the reload token (churn/noise, not user content).
 _SKIP_DIRS = {".git", ".worktrees", "node_modules", "__pycache__", "dist", ".vite"}
 
-# Injected into every served HTML: the selection overlay + a 1s live-reload poller.
-# The poller reloads the page whenever the reload token (a hash of project file mtimes)
-# changes — i.e. right after the agent's worktree sync lands the edit in the project.
+# Injected into every served HTML: the selection overlay + a live-reload poller (polls
+# every 1s; the worktree SYNC that produces changes runs every 2s in plugin_api). This
+# poller owns MID-EDIT reloads. The dashboard owns the single final reload on done_ok and
+# debounces against this poller so an edit never triggers two reloads.
 INJECT_TAG = (
     f'<script src="{OVERLAY_ROUTE}"></script>'
     "<script>(function(){var last=null;function poll(){"
