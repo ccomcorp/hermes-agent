@@ -915,6 +915,13 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         except Exception:
             pass
         _state.update_agent(job_id, running=False, exit_code=exit_code, summary=summary)
+        # Let the live-sync thread finish its final worktree->project sync before we
+        # prune the worktree, otherwise a last-moment edit could be dropped (the final
+        # sync no-ops on a missing worktree).
+        try:
+            sync_thread.join(timeout=10)
+        except Exception:
+            pass
         wt = _worktree_paths.get(job_id)
         if wt is not None:
             _prune_worktree(wt)
