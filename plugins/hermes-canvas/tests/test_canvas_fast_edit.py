@@ -121,3 +121,23 @@ def test_prune_worktree_removes_dir(tmp_path):
     (wt / "f.txt").write_text("x", encoding="utf-8")
     mod._prune_worktree(wt)
     assert not wt.exists()
+
+def test_phase_running_editing():
+    mod = _load()
+    assert mod._compute_phase({"running": True, "applied": False}) == "editing"
+
+def test_phase_running_applied():
+    mod = _load()
+    assert mod._compute_phase({"running": True, "applied": True}) == "applied"
+
+def test_phase_done_ok():
+    mod = _load()
+    assert mod._compute_phase({"running": False, "applied": True, "exit_code": 0}) == "done_ok"
+
+def test_phase_done_failed_nonzero():
+    mod = _load()
+    assert mod._compute_phase({"running": False, "applied": True, "exit_code": 1}) == "done_failed"
+
+def test_phase_done_failed_when_never_applied():
+    mod = _load()
+    assert mod._compute_phase({"running": False, "applied": False, "exit_code": 0}) == "done_failed"

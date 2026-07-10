@@ -415,6 +415,20 @@ def _detect_auth_error(lines: list[str]) -> bool:
     return False
 
 
+def _compute_phase(job: dict) -> str:
+    running = job.get("running", False)
+    applied = job.get("applied", False)
+    exit_code = job.get("exit_code")
+    if job.get("needs_shell"):
+        return "needs_shell"
+    if running:
+        return "applied" if applied else "editing"
+    # finished: success requires a clean exit AND an applied edit
+    if applied and (exit_code == 0):
+        return "done_ok"
+    return "done_failed"
+
+
 def _copy_template(template_name: str, dest: Path) -> None:
     allowed_templates = {"vite-react"}
     if template_name not in allowed_templates:
@@ -859,6 +873,9 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         worktrees_dir = project_path / ".worktrees"
         current_worktree: Path | None = None
         sync_count = 0
+        target_rel = _state.agent_jobs.get(job_id, {}).get("target_file")
+        target_abs = (project_path / target_rel) if target_rel else None
+        target_seen_mtime = target_abs.stat().st_mtime if (target_abs and target_abs.exists()) else None
         while proc.poll() is None:
             time.sleep(2)
             # 401 early-abort: stop burning turns on a dead token.
@@ -884,6 +901,19 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
             if current_worktree:
                 _sync_worktree_changes(project_path, current_worktree)
                 sync_count += 1
+            if target_abs is not None and target_abs.exists():
+                m = target_abs.stat().st_mtime
+                if target_seen_mtime is None or m != target_seen_mtime:
+                    with _state.lock:
+                        if job_id in _state.agent_jobs:
+                            _state.agent_jobs[job_id]["applied"] = True
+                            _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
+            elif target_abs is None:
+                # no known target file: fall back to "any change" applied signal
+                with _state.lock:
+                    if job_id in _state.agent_jobs and not _state.agent_jobs[job_id].get("applied"):
+                        _state.agent_jobs[job_id]["applied"] = True
+                        _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
         # Final sync after process exits
         if current_worktree and current_worktree.exists():
             _sync_worktree_changes(project_path, current_worktree)
@@ -952,4 +982,9 @@ async def agent_status(job_id: str) -> dict[str, Any]:
         "finished_at": job.get("finished_at"),
         "logs": logs,
         "auth_error": job.get("auth_error", False),
+        "phase": _compute_phase(job),
+        "applied": job.get("applied", False),
+        "last_change_at": job.get("last_change_at"),
+        "target_file": job.get("target_file"),
+        "resolution_source": job.get("resolution_source", "none"),
     }
