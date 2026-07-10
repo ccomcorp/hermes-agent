@@ -346,6 +346,12 @@ body:has(.hc-root) .theme-default-filler {
   to { transform: rotate(360deg); }
 }
 
+/* Agent phase stepper (Task 7: canvas fast-edit v1). */
+.hermes-phase { display: flex; gap: 8px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.hermes-phase .step { opacity: .4; }
+.hermes-phase .step.active { opacity: 1; font-weight: 600; }
+.hermes-phase .step.failed { color: #c0392b; opacity: 1; }
+
 /* Responsive */
 @media (max-width: 900px) {
   .hc-root {
