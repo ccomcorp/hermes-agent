@@ -141,3 +141,22 @@ def test_phase_done_failed_nonzero():
 def test_phase_done_failed_when_never_applied():
     mod = _load()
     assert mod._compute_phase({"running": False, "applied": False, "exit_code": 0}) == "done_failed"
+
+def test_detect_auth_error_false_on_stackframe():
+    mod = _load()
+    assert mod._detect_auth_error(["    at webpack://app/bundle.js:401:15"]) is False
+    # existing positive still holds via "http 401" + credentials phrase
+    assert mod._detect_auth_error(["HTTP 401: No valid authentication credentials provided"]) is True
+
+def test_sync_returns_change_flag(tmp_path, monkeypatch):
+    mod = _load()
+    proj = tmp_path / "proj"
+    (proj / ".worktrees" / "w1" / "src").mkdir(parents=True)
+    (proj / "src").mkdir(parents=True)
+    (proj / ".worktrees" / "w1" / "src" / "App.jsx").write_text("EDITED", encoding="utf-8")
+    monkeypatch.setattr(mod, "_which", lambda c: "git")  # truthy so the commit path runs
+    monkeypatch.setattr(mod, "_commit_if_changed", lambda p: True)
+    assert mod._sync_worktree_changes(proj, proj / ".worktrees" / "w1") is True
+    monkeypatch.setattr(mod, "_commit_if_changed", lambda p: False)
+    assert mod._sync_worktree_changes(proj, proj / ".worktrees" / "w1") is False
+    assert mod._sync_worktree_changes(proj, None) is False

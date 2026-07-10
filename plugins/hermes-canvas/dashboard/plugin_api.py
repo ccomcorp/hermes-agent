@@ -403,14 +403,15 @@ def _read_log_tail(log_path: Path | None, max_lines: int = 200) -> list[str]:
 
 def _detect_auth_error(lines: list[str]) -> bool:
     """True only for a genuine auth failure. Requires an auth-signature phrase so
-    incidental substrings like '1401ms' or a filename 'error-401.tsx' never match."""
+    incidental substrings like '1401ms', a filename 'error-401.tsx', or a JS stack
+    frame like 'bundle.js:401:15' never match."""
     for ln in lines:
         low = ln.lower()
         if "authentication failed" in low:
             return True
         if "no valid authentication credentials" in low:
             return True
-        if "http 401" in low or "401:" in low:
+        if "http 401" in low or "401 unauthorized" in low:
             return True
     return False
 
@@ -519,22 +520,28 @@ def _prune_worktree(worktree_path: Path) -> None:
         pass
 
 
-def _commit_if_changed(project_path: Path) -> None:
+def _commit_if_changed(project_path: Path) -> bool:
+    """Stage and commit any pending changes. Returns True iff a commit was made
+    (i.e. a real staged diff was found), False otherwise (including no-git)."""
     git = _which("git")
     if not git:
-        return
+        return False
     subprocess.run([git, "add", "."], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     diff = subprocess.run([git, "diff", "--cached", "--quiet"], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if diff.returncode != 0:
         subprocess.run([git, "commit", "-m", "canvas update", "--no-gpg-sign"], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return True
+    return False
 
 
-def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None) -> None:
+def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None) -> bool:
     """Copy modified files from THIS job's git worktree back to the main project.
     worktree_path is REQUIRED; the old max(mtime) fallback is removed because it could
-    copy a stale/leftover worktree over a fresh edit and commit the regression."""
+    copy a stale/leftover worktree over a fresh edit and commit the regression.
+    Returns True iff a real change was committed during this sync, False on every
+    early-return/no-op path (missing worktree, no git, or an exception)."""
     if worktree_path is None or not worktree_path.exists():
-        return
+        return False
     try:
         for subdir in ["src", "public"]:
             src = worktree_path / subdir
@@ -555,9 +562,10 @@ def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None
         # Commit synced changes so next worktree starts from updated HEAD
         git = _which("git")
         if git:
-            _commit_if_changed(project_path)
+            return _commit_if_changed(project_path)
+        return False
     except Exception:
-        pass
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +886,7 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         target_seen_mtime = target_abs.stat().st_mtime if (target_abs and target_abs.exists()) else None
         while proc.poll() is None:
             time.sleep(2)
+            changed = False
             # 401 early-abort: stop burning turns on a dead token.
             try:
                 if _detect_auth_error(_read_log_tail(log_path, max_lines=40)):
@@ -899,7 +908,7 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
                 _worktree_paths[job_id] = latest
             # Sync every 2 seconds from the current worktree
             if current_worktree:
-                _sync_worktree_changes(project_path, current_worktree)
+                changed = _sync_worktree_changes(project_path, current_worktree)
                 sync_count += 1
             if target_abs is not None and target_abs.exists():
                 m = target_abs.stat().st_mtime
@@ -908,15 +917,19 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
                         if job_id in _state.agent_jobs:
                             _state.agent_jobs[job_id]["applied"] = True
                             _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
-            elif target_abs is None:
-                # no known target file: fall back to "any change" applied signal
+                    target_seen_mtime = m
+            elif changed:
+                # no known target file: gate the "any change" applied signal on a
+                # REAL commit landing, not merely on the .worktrees dir existing
+                # (hermes chat --worktree creates that dir at startup even for a
+                # no-op job, which must NOT flip applied=True).
                 with _state.lock:
                     if job_id in _state.agent_jobs and not _state.agent_jobs[job_id].get("applied"):
                         _state.agent_jobs[job_id]["applied"] = True
                         _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
         # Final sync after process exits
         if current_worktree and current_worktree.exists():
-            _sync_worktree_changes(project_path, current_worktree)
+            changed = _sync_worktree_changes(project_path, current_worktree)
 
     sync_thread = threading.Thread(target=_live_sync_reader, daemon=True)
     sync_thread.start()
