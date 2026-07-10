@@ -55,12 +55,14 @@ import type { WorkbenchDesignArtifact } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { requestOneShot } from '@/lib/oneshot'
 import { notify, notifyError } from '@/store/notifications'
 import { requestStartWorkSession } from '@/store/projects'
+import { $connection } from '@/store/session'
 
 import { PanelEmpty } from '../overlays/panel'
 
@@ -74,7 +76,13 @@ import {
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
 import { buildDesignHandoffMessage } from './design-handoff'
-import { sendDesignToKanban } from './design-kanban'
+import {
+  getKanbanCard,
+  isTerminalKanbanStatus,
+  type KanbanCardStatus,
+  kanbanStatusBadgeVariant,
+  sendDesignToKanban
+} from './design-kanban'
 import { DesignPrototypePreview } from './design-prototype-preview'
 import {
   $workbenchActiveRequirementId,
@@ -92,6 +100,12 @@ type DesignArtifactDetail = WorkbenchDesignArtifact & { content: string }
 // in the component). Every other combination falls back to 'source', which
 // is always available.
 type ArtifactViewTab = 'preview' | 'source'
+
+// Light auto-poll cadence for linked-card live status. 5s keeps the list
+// feeling live while the orchestrator builds without hammering the gateway
+// (one GET per linked card per tick). Polling stops entirely once every linked
+// card is terminal (done/archived) — see the poller effect below.
+const KANBAN_STATUS_POLL_MS = 5000
 
 interface DesignGenerationPanelProps {
   workspaceRoot: string
@@ -113,12 +127,78 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
     [activeTrace, requirementId]
   )
 
+  // Live gateway connection (baseUrl + token). Only read here to tell a single
+  // unreachable card ("status unavailable") apart from a wholly disconnected
+  // gateway ("gateway not connected") in the linked-cards note.
+  const connection = useStore($connection)
+
   const [artifacts, setArtifacts] = useState<WorkbenchDesignArtifact[]>([])
   const [listLoading, setListLoading] = useState(false)
   const [busyKind, setBusyKind] = useState<DesignGenerationKind | null>(null)
   const [viewing, setViewing] = useState<DesignArtifactDetail | null>(null)
   const [viewTab, setViewTab] = useState<ArtifactViewTab>('source')
   const [kanbanBusy, setKanbanBusy] = useState(false)
+  // Live status per linked card id. `null` = fetched but unavailable (a card
+  // still absent from the map has simply not been fetched yet). Never throws:
+  // getKanbanCard fully degrades to null, so this map never carries an error.
+  const [cardStatuses, setCardStatuses] = useState<Record<string, KanbanCardStatus | null>>({})
+
+  // Fetch every linked card's live status in parallel (one GET each) and
+  // replace the map. Identity changes only when the linked-id set changes, so
+  // it is a stable dep for the effects below.
+  const refreshCardStatuses = useCallback(async () => {
+    if (linkedKanbanCardIds.length === 0) {
+      return
+    }
+
+    const entries = await Promise.all(
+      linkedKanbanCardIds.map(async (id): Promise<[string, KanbanCardStatus | null]> => [id, await getKanbanCard(id)])
+    )
+
+    const next: Record<string, KanbanCardStatus | null> = {}
+
+    for (const [id, status] of entries) {
+      next[id] = status
+    }
+
+    setCardStatuses(next)
+  }, [linkedKanbanCardIds])
+
+  // Keep polling while ANY linked card is non-terminal OR not yet known /
+  // unreachable (a transient hiccup should recover). All terminal → stop.
+  const shouldPollCardStatuses = useMemo(
+    () =>
+      linkedKanbanCardIds.some(id => {
+        const st = cardStatuses[id]
+
+        return !st || !isTerminalKanbanStatus(st.status)
+      }),
+    [linkedKanbanCardIds, cardStatuses]
+  )
+
+  // Fetch once on mount and whenever the linked-id set changes. Clears the map
+  // when there are no linked cards so stale statuses never linger.
+  useEffect(() => {
+    if (linkedKanbanCardIds.length === 0) {
+      setCardStatuses({})
+
+      return
+    }
+
+    void refreshCardStatuses()
+  }, [linkedKanbanCardIds, refreshCardStatuses])
+
+  // Light auto-poll — only exists while polling is warranted, and is always
+  // cleared on unmount or when the last card goes terminal (no leaked timer).
+  useEffect(() => {
+    if (!shouldPollCardStatuses) {
+      return
+    }
+
+    const interval = setInterval(() => void refreshCardStatuses(), KANBAN_STATUS_POLL_MS)
+
+    return () => clearInterval(interval)
+  }, [shouldPollCardStatuses, refreshCardStatuses])
 
   // Fail closed: the Preview tab only ever exists for a 'prototype' artifact,
   // and only when the workspace has explicitly turned on
@@ -355,28 +435,61 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         )}
       </div>
 
-      {/* Linked Kanban cards (Kanban traceability v1 consumer) — the visible
+      {/* Linked Kanban cards (Kanban traceability — live status) — the visible
           "requirement → its cards" list. Reads the open requirement's
           trace.linkedKanbanCardIds (mirrored into the store by
           requirement-panel.tsx); refreshed optimistically after a successful
-          send via addLinkedKanbanCardId. Shows the linked card ids only — v1
-          does not fetch live board status. Hidden when there are none. */}
+          send via addLinkedKanbanCardId. Each card fetches its LIVE status from
+          the kanban plugin (cardStatuses, light-polled above) and renders a
+          status badge + title + assignee; a card whose status couldn't be read
+          degrades to a muted note and is NEVER hidden. Hidden only when there
+          are no linked cards at all. */}
       {linkedKanbanCardIds.length > 0 && (
         <div className="flex flex-col gap-1 border-t border-(--ui-stroke-tertiary) pt-2">
-          <h3 className="text-[0.7rem] font-semibold text-muted-foreground/80">
-            {s.designGeneration.linkedKanbanHeading} ({linkedKanbanCardIds.length})
-          </h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[0.7rem] font-semibold text-muted-foreground/80">
+              {s.designGeneration.linkedKanbanHeading} ({linkedKanbanCardIds.length})
+            </h3>
+            <button
+              className="flex items-center gap-1 rounded-[0.25rem] px-1.5 py-0.5 text-[0.65rem] font-medium text-muted-foreground/70 hover:text-foreground"
+              onClick={() => void refreshCardStatuses()}
+              title={s.designGeneration.kanbanRefresh}
+              type="button"
+            >
+              <Codicon name="refresh" size="0.7rem" />
+              {s.designGeneration.kanbanRefresh}
+            </button>
+          </div>
           <ul className="flex flex-col gap-0.5">
-            {linkedKanbanCardIds.map(cardId => (
-              <li
-                className="flex items-center gap-1.5 truncate text-[0.65rem] text-muted-foreground/70"
-                key={cardId}
-                title={cardId}
-              >
-                <Codicon name="project" size="0.7rem" />
-                <span className="truncate">{cardId}</span>
-              </li>
-            ))}
+            {linkedKanbanCardIds.map(cardId => {
+              // `undefined` = not fetched yet; `null` = fetched but unavailable.
+              const card = cardStatuses[cardId]
+              const known = card != null
+
+              return (
+                <li
+                  className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground/70"
+                  key={cardId}
+                  title={cardId}
+                >
+                  <Codicon name="project" size="0.7rem" />
+                  {known ? (
+                    <Badge variant={kanbanStatusBadgeVariant(card.status)}>
+                      {s.designGeneration.kanbanStatusLabels[card.status] ?? card.status}
+                    </Badge>
+                  ) : (
+                    <Badge variant="muted">
+                      {connection
+                        ? s.designGeneration.kanbanStatusUnavailable
+                        : s.designGeneration.kanbanStatusGatewayOffline}
+                    </Badge>
+                  )}
+                  {card?.title && <span className="truncate">{card.title}</span>}
+                  {card?.assignee && <span className="shrink-0 text-muted-foreground/50">{card.assignee}</span>}
+                  <span className="ml-auto shrink-0 truncate font-mono text-muted-foreground/50">{cardId}</span>
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}

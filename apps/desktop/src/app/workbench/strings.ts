@@ -301,6 +301,29 @@ export const workbenchStrings = {
     // v1 consumer of the backlink (requirement → its cards).
     linkedKanbanHeading: 'Kanban cards',
 
+    // Live linked-card status (Kanban traceability — live status). Each linked
+    // card fetches its LIVE status from the kanban plugin and shows a badge;
+    // the list light-polls while any card is non-terminal so it updates as the
+    // orchestrator builds. Human labels for each backend status + the two
+    // degrade-gracefully notes (card unreachable / gateway disconnected).
+    kanbanStatusLabels: {
+      triage: 'Triage',
+      todo: 'To do',
+      scheduled: 'Scheduled',
+      ready: 'Ready',
+      running: 'In progress',
+      blocked: 'Blocked',
+      review: 'In review',
+      done: 'Done',
+      archived: 'Archived'
+    } as Record<string, string>,
+    // A card whose status couldn't be read (transient gateway hiccup / odd
+    // card shape) — never hidden, never a crash, just an honest muted note.
+    kanbanStatusUnavailable: 'status unavailable',
+    // No gateway connection at all — distinct from a single unreachable card.
+    kanbanStatusGatewayOffline: 'gateway not connected',
+    kanbanRefresh: 'Refresh',
+
     // Sandboxed live preview (Slice H — go-forward plan §5 Slice H). A
     // SEPARATE, additional view alongside the read-only source text above,
     // never a replacement for it. Gated on WorkbenchDesignSettings.

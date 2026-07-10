@@ -11,7 +11,13 @@ vi.mock('@/store/session', () => ({
   }
 }))
 
-import { DESIGN_KANBAN_ASSIGNEE, sendDesignToKanban } from './design-kanban'
+import {
+  DESIGN_KANBAN_ASSIGNEE,
+  getKanbanCard,
+  isTerminalKanbanStatus,
+  kanbanStatusBadgeVariant,
+  sendDesignToKanban
+} from './design-kanban'
 
 describe('sendDesignToKanban', () => {
   const baseArgs = {
@@ -131,5 +137,149 @@ describe('sendDesignToKanban', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(sendDesignToKanban({ ...baseArgs, kind: 'brief' })).rejects.toThrow(/no card id/i)
+  })
+})
+
+describe('isTerminalKanbanStatus', () => {
+  it('treats only done + archived as terminal', () => {
+    expect(isTerminalKanbanStatus('done')).toBe(true)
+    expect(isTerminalKanbanStatus('archived')).toBe(true)
+  })
+
+  it('treats every in-flight status (incl. blocked + review) as non-terminal', () => {
+    for (const status of ['triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review']) {
+      expect(isTerminalKanbanStatus(status)).toBe(false)
+    }
+  })
+
+  it('treats an unknown/future status as non-terminal (keep watching)', () => {
+    expect(isTerminalKanbanStatus('some_new_state')).toBe(false)
+  })
+})
+
+describe('kanbanStatusBadgeVariant', () => {
+  it('maps each known status onto its badge variant', () => {
+    expect(kanbanStatusBadgeVariant('done')).toBe('default')
+    expect(kanbanStatusBadgeVariant('blocked')).toBe('destructive')
+    expect(kanbanStatusBadgeVariant('running')).toBe('warn')
+    expect(kanbanStatusBadgeVariant('review')).toBe('warn')
+    expect(kanbanStatusBadgeVariant('archived')).toBe('muted')
+    expect(kanbanStatusBadgeVariant('todo')).toBe('outline')
+    expect(kanbanStatusBadgeVariant('triage')).toBe('outline')
+    expect(kanbanStatusBadgeVariant('scheduled')).toBe('outline')
+    expect(kanbanStatusBadgeVariant('ready')).toBe('outline')
+  })
+
+  it('degrades an unknown status to a neutral outline (never throws)', () => {
+    expect(kanbanStatusBadgeVariant('wat')).toBe('outline')
+  })
+})
+
+describe('getKanbanCard', () => {
+  beforeEach(() => {
+    connectionRef.current = { baseUrl: 'http://127.0.0.1:9120', token: 'tok-abc' }
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    connectionRef.current = null
+  })
+
+  it('reads status/title/assignee from the { task } envelope and issues a bearer GET', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        task: { id: 'card-7', status: 'running', title: 'Implement design (brief): req-42', assignee: 'fable-orchestrator' },
+        comments: [],
+        events: []
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    const card = await getKanbanCard('card-7')
+
+    expect(card).toEqual({
+      id: 'card-7',
+      status: 'running',
+      title: 'Implement design (brief): req-42',
+      assignee: 'fable-orchestrator'
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://127.0.0.1:9120/api/plugins/kanban/tasks/card-7')
+    expect(init.method).toBe('GET')
+    expect(init.headers.Authorization).toBe('Bearer tok-abc')
+  })
+
+  it('url-encodes the card id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ task: { id: 'a/b c', status: 'todo' } })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getKanbanCard('a/b c')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:9120/api/plugins/kanban/tasks/a%2Fb%20c')
+  })
+
+  it('returns null (no throw) when the gateway is not connected', async () => {
+    connectionRef.current = null
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getKanbanCard('card-7')).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('returns null (no throw) on a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
+
+    await expect(getKanbanCard('card-7')).resolves.toBeNull()
+  })
+
+  it('returns null (no throw) on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+
+    await expect(getKanbanCard('card-7')).resolves.toBeNull()
+  })
+
+  it('returns null when the body is unparseable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => {
+          throw new Error('not json')
+        }
+      })
+    )
+
+    await expect(getKanbanCard('card-7')).resolves.toBeNull()
+  })
+
+  it('returns null when the envelope has no task or no usable status', async () => {
+    const bodies = [{}, { task: null }, { task: {} }, { task: { id: 'card-7' } }, { task: { status: 42 } }]
+
+    for (const body of bodies) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => body }))
+       
+      await expect(getKanbanCard('card-7')).resolves.toBeNull()
+    }
+  })
+
+  it('falls back to the requested id and omits blank optional fields', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ task: { status: 'ready', title: '   ', assignee: '' } })
+      })
+    )
+
+    await expect(getKanbanCard('card-9')).resolves.toEqual({ id: 'card-9', status: 'ready' })
   })
 })

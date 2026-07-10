@@ -112,3 +112,141 @@ export async function sendDesignToKanban(args: SendDesignToKanbanArgs): Promise<
 
   return cardId
 }
+
+// ---------------------------------------------------------------------------
+// Live linked-card status (Kanban traceability — live status). The READ side
+// of the handoff: after a "Send to Kanban" the requirement's linked-cards list
+// shows each card's LIVE status so the user can watch the orchestrator build
+// from inside the Workbench. Same transport as the POST above — a plain
+// renderer→gateway GET reusing `$connection` (baseUrl + token) + Bearer header.
+// No new IPC channel, no backend change: `GET /api/plugins/kanban/tasks/:id`
+// already exists (plugins/kanban/dashboard/plugin_api.py::get_task).
+// ---------------------------------------------------------------------------
+
+/**
+ * A live linked Kanban card's status, trimmed to the fields the Workbench
+ * actually renders. Shape mirrors the REAL `_task_dict` (asdict(Task)) top-
+ * level fields — `id`, `status` (one of triage/todo/scheduled/ready/running/
+ * blocked/review/done/archived), and the optional `title`/`assignee`.
+ */
+export interface KanbanCardStatus {
+  id: string
+  status: string
+  title?: string
+  assignee?: string
+}
+
+/** Badge variants this module maps statuses onto (subset of the Badge component's). */
+export type KanbanStatusBadgeVariant = 'default' | 'muted' | 'warn' | 'destructive' | 'outline'
+
+// Terminal = the card will not change again on its own, so polling can stop.
+// Deliberately ONLY done + archived. `blocked` and `review` are NOT terminal:
+// a blocked card can be auto-unblocked (the kanban cron flips blocked→ready)
+// and a review card can advance to done, so we keep polling to catch that.
+const KANBAN_TERMINAL_STATUSES = new Set(['done', 'archived'])
+
+/** True when a card's status is final and no further polling is warranted. */
+export function isTerminalKanbanStatus(status: string): boolean {
+  return KANBAN_TERMINAL_STATUSES.has(status)
+}
+
+/**
+ * Maps a backend status to a Badge variant. Pure + total: any unknown/future
+ * status degrades to a neutral `outline` rather than throwing.
+ */
+export function kanbanStatusBadgeVariant(status: string): KanbanStatusBadgeVariant {
+  switch (status) {
+    case 'done':
+      return 'default'
+
+    case 'blocked':
+      return 'destructive'
+
+    case 'running':
+
+    case 'review':
+      return 'warn'
+
+    case 'archived':
+      return 'muted'
+
+    case 'triage':
+
+    case 'todo':
+
+    case 'scheduled':
+
+    case 'ready':
+      return 'outline'
+
+    default:
+      return 'outline'
+  }
+}
+
+/**
+ * Reads ONE linked Kanban card's live status from the gateway.
+ *
+ * Fail-closed / never-throws: returns `null` on every failure path (no
+ * `$connection`, network error, non-2xx, unparseable body, or a response whose
+ * shape doesn't carry a usable `task.status`). The caller renders the card id
+ * with an "unavailable" note in that case — a gateway hiccup or an odd card
+ * shape must never crash the panel.
+ *
+ * The response is the `GET /tasks/:id` ENVELOPE — `{ task: {...}, comments,
+ * events, ... }` — so the status lives under `data.task`, not at the top level.
+ * We read only the fields we render and validate each is a string before use;
+ * we never `.map()` over anything here.
+ */
+export async function getKanbanCard(cardId: string): Promise<KanbanCardStatus | null> {
+  const connection = $connection.get()
+
+  // Gateway not connected → no status (caller shows "gateway not connected").
+  if (!connection) {
+    return null
+  }
+
+  const base = connection.baseUrl || DEFAULT_GATEWAY_BASE
+  const url = `${base}/api/plugins/kanban/tasks/${encodeURIComponent(cardId)}`
+
+  const headers: Record<string, string> = {}
+
+  if (connection.token) {
+    headers.Authorization = `Bearer ${connection.token}`
+  }
+
+  let res: Response
+
+  try {
+    res = await fetch(url, { method: 'GET', headers })
+  } catch {
+    // Network failure (gateway down, DNS, etc.) — degrade, don't throw.
+    return null
+  }
+
+  if (!res.ok) {
+    return null
+  }
+
+  const data = (await res.json().catch(() => null)) as { task?: Record<string, unknown> } | null
+  const task = data?.task
+
+  // Defensive: the body must be the expected envelope with an object `task`.
+  if (!task || typeof task !== 'object') {
+    return null
+  }
+
+  // `status` is the only load-bearing field — without it there is nothing to
+  // show, so treat a missing/non-string status as "unavailable".
+  const status = typeof task.status === 'string' && task.status.trim() ? task.status : null
+
+  if (!status) {
+    return null
+  }
+
+  const id = typeof task.id === 'string' && task.id.trim() ? task.id : cardId
+  const title = typeof task.title === 'string' && task.title.trim() ? task.title : undefined
+  const assignee = typeof task.assignee === 'string' && task.assignee.trim() ? task.assignee : undefined
+
+  return { id, status, title, assignee }
+}
