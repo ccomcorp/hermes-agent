@@ -285,6 +285,61 @@ def _resolve_hermes_bin() -> str | None:
     return _which("hermes")
 
 
+_SOURCE_EXTS = {".html", ".htm", ".js", ".jsx", ".ts", ".tsx", ".css", ".vue", ".svelte"}
+_RESOLVE_SKIP_DIRS = {".git", ".worktrees", "node_modules", "__pycache__", "dist", ".vite"}
+
+
+def _list_source_files(project_path: Path) -> list[Path]:
+    """Fresh re-scan (not a cached re-stat) so agent-created files are always visible."""
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(project_path):
+        dirnames[:] = [d for d in dirnames if d not in _RESOLVE_SKIP_DIRS]
+        for fn in filenames:
+            if Path(fn).suffix.lower() in _SOURCE_EXTS:
+                out.append(Path(dirpath) / fn)
+    return out
+
+
+def _resolve_target_file(project_path: Path, selected_element: dict | None) -> dict | None:
+    """Resolve the file to edit. Returns {rel_path, abs_path, source} or None.
+    Wrong-file guarded: the resolved file must actually contain the element text."""
+    if not selected_element:
+        return None
+    text = (selected_element.get("text") or "").strip()
+    root = project_path.resolve()
+
+    def _contains(abs_path: Path) -> bool:
+        if not text:
+            return True  # no text to verify against; attr is the only signal
+        try:
+            return text in abs_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return False
+
+    # 1) hermesAttributes.file (containment + wrong-file guard)
+    attr = (selected_element.get("hermesAttributes") or {}).get("file")
+    if attr:
+        cand = (root / attr).resolve()
+        if (cand == root or cand.is_relative_to(root)) and cand.is_file() and _contains(cand):
+            return {"rel_path": str(cand.relative_to(root)), "abs_path": str(cand), "source": "hermes_file"}
+
+    # 2) unique text match across source files
+    if text:
+        hits = [p for p in _list_source_files(root)
+                if _safe_read_contains(p, text)]
+        if len(hits) == 1:
+            cand = hits[0].resolve()
+            return {"rel_path": str(cand.relative_to(root)), "abs_path": str(cand), "source": "unique_text"}
+    return None
+
+
+def _safe_read_contains(path: Path, needle: str) -> bool:
+    try:
+        return needle in path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+
+
 def _has_npm() -> bool:
     return _which("npm") is not None
 
