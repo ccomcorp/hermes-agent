@@ -150,7 +150,7 @@
     if (now - _lastReloadAt < 1500) return;
     _lastReloadAt = now;
     var f = document.querySelector('.hc-preview-frame');
-    if (f && f.contentWindow) f.contentWindow.location.reload();
+    if (f) f.src = f.src;
   }
 
   function installCanvasThemeReset() {
