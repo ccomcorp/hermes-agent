@@ -523,6 +523,103 @@ export const workbenchStrings = {
     } as Record<string, string>
   },
 
+  // Plugin Tester (Slice N — HTTP request executor + persistence).
+  // A Postman-style HTTP tester that sends real requests through the
+  // Electron main process and persists collections, history, and
+  // environments under .hermes/workbench/plugin-tester/.
+  pluginTester: {
+    navLabel: 'Plugin Tester',
+
+    // Request composer.
+    methodLabel: 'Method',
+    urlLabel: 'URL',
+    urlPlaceholder: 'https://api.example.com/endpoint',
+    sendButton: 'Send',
+    sendingButton: 'Sending',
+
+    headersHeading: 'Headers',
+    headerKeyPlaceholder: 'Key',
+    headerValuePlaceholder: 'Value',
+    addHeader: 'Add header',
+    paramsHeading: 'Params',
+    paramKeyPlaceholder: 'Key',
+    paramValuePlaceholder: 'Value',
+    addParam: 'Add param',
+    bodyHeading: 'Body',
+    bodyPlaceholder: '{}',
+    authHeading: 'Auth',
+    authTypeNone: 'None',
+    authTypeBearer: 'Bearer',
+    authTypeBasic: 'Basic',
+    authTypeApiKey: 'API Key',
+    authTokenLabel: 'Token',
+    authTokenPlaceholder: 'Bearer eyJ…',
+    authUsernameLabel: 'Username',
+    authPasswordLabel: 'Password',
+    authKeyLabel: 'Key',
+    authValueLabel: 'Value',
+    authAddToHeader: 'Header',
+    authAddToQuery: 'Query',
+    timeoutLabel: 'Timeout (ms)',
+    contentTypeLabel: 'Content-Type',
+
+    // Response.
+    responseHeading: 'Response',
+    responseStatus: 'Status',
+    responseHeaders: 'Headers',
+    responseBody: 'Body',
+    responseCookies: 'Cookies',
+    responseTiming: 'Timing',
+    responseSize: 'Size',
+    noResponse: 'Send a request to see the response.',
+    requestFailed: 'Request failed',
+
+    // Timing.
+    timingDns: 'DNS',
+    timingConnect: 'Connect',
+    timingTtfb: 'TTFB',
+    timingDownload: 'Download',
+    timingTotal: 'Total',
+
+    // Collections.
+    collectionsHeading: 'Collections',
+    createCollection: 'New collection',
+    collectionNameLabel: 'Name',
+    collectionNamePlaceholder: 'Collection name',
+    collectionDescriptionLabel: 'Description',
+    collectionDescriptionPlaceholder: 'API for…',
+    renameCollection: 'Rename',
+    deleteCollection: 'Delete',
+    collectionsEmpty: 'No collections yet.',
+    collectionsLoading: 'Loading collections',
+    collectionsFailed: 'Failed to load collections',
+
+    // Environments.
+    environmentsHeading: 'Environments',
+    createEnvironment: 'New environment',
+    environmentNameLabel: 'Name',
+    environmentNamePlaceholder: 'Environment name',
+    renameEnvironment: 'Rename',
+    deleteEnvironment: 'Delete',
+    variableKeyPlaceholder: 'Key',
+    variableValuePlaceholder: 'Value',
+    addVariable: 'Add variable',
+    environmentsEmpty: 'No environments yet.',
+    environmentsLoading: 'Loading environments',
+    environmentsFailed: 'Failed to load environments',
+
+    // History.
+    historyHeading: 'History',
+    clearHistory: 'Clear history',
+    clearHistoryConfirm: 'Clear all history entries?',
+    historyEmpty: 'No history yet.',
+    historyLoading: 'Loading history',
+    historyFailed: 'Failed to load history',
+    historyEntryMethod: (method: string) => method,
+    historyEntryStatus: (status: number) => `${status}`,
+    historyEntryDuration: (ms: number) => `${ms}ms`,
+  },
+
   // Status bar (each item labeled and shown separately — profiles are not a
   // filesystem sandbox, so this never conflates profile with workspace root).
   statusBar: {

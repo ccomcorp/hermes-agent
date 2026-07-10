@@ -12,6 +12,8 @@ const { ipcMain, BrowserWindow } = require('electron')
 const store = require('./workbench-artifacts.cjs')
 const { exportWriteDocument } = require('./workbench-write-export.cjs')
 const { applyChangeSet, commitChangeSet } = require('./workbench-changeset-apply.cjs')
+const testerStore = require('./workbench-plugin-tester-store.cjs')
+const testerExec = require('./workbench-plugin-tester-exec.cjs')
 
 // Shared validators — imported from the compiled shared package.
 // In the Electron main process (.cjs context) we can't import .ts directly,
@@ -971,6 +973,420 @@ function registerWorkbenchIpc(options = {}) {
       return normalize(store.updateWorkflow(payload.workspaceRoot, payload.workflowId, payload))
     } catch (err) {
       return { ok: false, message: 'Failed to update workflow: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // =========================================================================
+  // Plugin Tester — HTTP request executor + persistence (Slice N)
+  // =========================================================================
+  //
+  // Executes real HTTP requests via Node.js fetch (NEVER from the renderer),
+  // and persists request collections, execution history, and environment
+  // variable sets under .hermes/workbench/plugin-tester/.
+  //
+  // All handlers follow the same fail-closed validation pattern as every other
+  // domain handler in this file.
+
+  // -- Plugin Tester: Execute request ----------------------------------------
+
+  ipcMain.handle('hermes:workbench:plugin-tester:execute', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    // Validate the request structure
+    const requestCheck = testerExec.validateRequest(payload.request)
+    if (!isOk(requestCheck)) return fail(requestCheck)
+
+    // Async execution path — only the success path returns a Promise,
+    // matching the changesets:apply pattern.
+    return (async () => {
+      const validatedRequest = requestCheck.value
+
+      // Resolve environment variables if an environment id is provided
+      let resolvedRequest = { ...validatedRequest }
+
+      if (payload.environmentId) {
+        const envResult = testerStore.readEnvironment(payload.workspaceRoot, payload.environmentId)
+        if (!isOk(envResult)) return fail(envResult)
+
+        const variables = envResult.value.variables || {}
+
+        // Resolve URL
+        const { resolved: resolvedUrl, unresolvedTokens: urlTokens } = testerExec.resolveVariables(
+          validatedRequest.url, variables
+        )
+        resolvedRequest.url = resolvedUrl
+
+        // Resolve headers
+        const { headers: resolvedHeaders, unresolvedTokens: headerTokens } = testerExec.resolveHeaderVariables(
+          validatedRequest.headers || {}, variables
+        )
+        resolvedRequest.headers = resolvedHeaders
+
+        // Resolve body
+        if (typeof validatedRequest.body === 'string') {
+          const { resolved: resolvedBody } = testerExec.resolveVariables(
+            validatedRequest.body, variables
+          )
+          resolvedRequest.body = resolvedBody
+        }
+
+        // Resolve auth values
+        if (validatedRequest.auth) {
+          const resolvedAuth = { ...validatedRequest.auth }
+          if (typeof resolvedAuth.token === 'string') {
+            resolvedAuth.token = testerExec.resolveVariables(resolvedAuth.token, variables).resolved
+          }
+          if (typeof resolvedAuth.username === 'string') {
+            resolvedAuth.username = testerExec.resolveVariables(resolvedAuth.username, variables).resolved
+          }
+          if (typeof resolvedAuth.password === 'string') {
+            resolvedAuth.password = testerExec.resolveVariables(resolvedAuth.password, variables).resolved
+          }
+          if (typeof resolvedAuth.value === 'string') {
+            resolvedAuth.value = testerExec.resolveVariables(resolvedAuth.value, variables).resolved
+          }
+          resolvedRequest.auth = resolvedAuth
+
+          if (urlTokens.length > 0 || headerTokens.length > 0) {
+            resolvedRequest._unresolvedTokens = [...urlTokens, ...headerTokens]
+          }
+        }
+      }
+
+      // Execute the request
+      const result = await testerExec.executeRequest(resolvedRequest)
+
+      // If successful, record in history
+      if (result.ok && result.value) {
+        try {
+          testerStore.recordHistory(payload.workspaceRoot, {
+            request: resolvedRequest,
+            response: result.value.response,
+            trace: result.value.trace,
+            collectionId: payload.collectionId || undefined
+          })
+        } catch { /* history recording is best-effort; never fail the response */ }
+      }
+
+      return result
+    })().catch(err => ({ ok: false, message: 'Failed to execute request: ' + err.message, code: 'INTERNAL_ERROR' }))
+  })
+
+  // -- Plugin Tester: Collections CRUD ---------------------------------------
+
+  ipcMain.handle('hermes:workbench:plugin-tester:collections:list', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(testerStore.listCollections(payload.workspaceRoot))
+    } catch (err) {
+      return { ok: false, message: 'Failed to list collections: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:collections:create', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.name || typeof payload.name !== 'string' || !payload.name.trim()) {
+      return { ok: false, message: 'name is required', code: 'MISSING_NAME' }
+    }
+
+    if (payload.name.length > 200) {
+      return { ok: false, message: 'name is too long', code: 'NAME_TOO_LONG' }
+    }
+
+    if (payload.description && typeof payload.description !== 'string') {
+      return { ok: false, message: 'description must be a string', code: 'INVALID_DESCRIPTION' }
+    }
+
+    if (payload.description && payload.description.length > 2000) {
+      return { ok: false, message: 'description is too long', code: 'DESCRIPTION_TOO_LONG' }
+    }
+
+    if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
+      return { ok: false, message: 'requests must be an array', code: 'INVALID_REQUESTS' }
+    }
+
+    try {
+      return normalize(testerStore.createCollection(payload.workspaceRoot, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to create collection: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:collections:read', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.collectionId || !payload.collectionId.trim()) {
+      return { ok: false, message: 'collectionId is required', code: 'MISSING_COLLECTION_ID' }
+    }
+
+    try {
+      return normalize(testerStore.readCollection(payload.workspaceRoot, payload.collectionId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read collection: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:collections:update', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.collectionId || !payload.collectionId.trim()) {
+      return { ok: false, message: 'collectionId is required', code: 'MISSING_COLLECTION_ID' }
+    }
+
+    if (payload.name !== undefined && (typeof payload.name !== 'string' || !payload.name.trim())) {
+      return { ok: false, message: 'name must be a non-empty string', code: 'INVALID_NAME' }
+    }
+
+    if (payload.name && payload.name.length > 200) {
+      return { ok: false, message: 'name is too long', code: 'NAME_TOO_LONG' }
+    }
+
+    try {
+      return normalize(testerStore.updateCollection(payload.workspaceRoot, payload.collectionId, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to update collection: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:collections:delete', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.collectionId || !payload.collectionId.trim()) {
+      return { ok: false, message: 'collectionId is required', code: 'MISSING_COLLECTION_ID' }
+    }
+
+    try {
+      return normalize(testerStore.deleteCollection(payload.workspaceRoot, payload.collectionId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to delete collection: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // -- Plugin Tester: History ------------------------------------------------
+
+  ipcMain.handle('hermes:workbench:plugin-tester:history:list', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(testerStore.listHistory(payload.workspaceRoot, {
+        collectionId: payload?.collectionId,
+        limit: payload?.limit,
+        offset: payload?.offset
+      }))
+    } catch (err) {
+      return { ok: false, message: 'Failed to list history: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:history:create', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.request || typeof payload.request !== 'object') {
+      return { ok: false, message: 'request is required', code: 'MISSING_REQUEST' }
+    }
+
+    try {
+      return normalize(testerStore.recordHistory(payload.workspaceRoot, {
+        request: payload.request,
+        response: payload.response || null,
+        trace: payload.trace || [],
+        collectionId: payload.collectionId || undefined
+      }))
+    } catch (err) {
+      return { ok: false, message: 'Failed to record history: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:history:read', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.historyId || !payload.historyId.trim()) {
+      return { ok: false, message: 'historyId is required', code: 'MISSING_HISTORY_ID' }
+    }
+
+    try {
+      return normalize(testerStore.readHistoryEntry(payload.workspaceRoot, payload.historyId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read history entry: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:history:delete', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.historyId || !payload.historyId.trim()) {
+      return { ok: false, message: 'historyId is required', code: 'MISSING_HISTORY_ID' }
+    }
+
+    try {
+      return normalize(testerStore.deleteHistoryEntry(payload.workspaceRoot, payload.historyId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to delete history entry: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:history:clear', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(testerStore.clearHistory(payload.workspaceRoot))
+    } catch (err) {
+      return { ok: false, message: 'Failed to clear history: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  // -- Plugin Tester: Environments CRUD --------------------------------------
+
+  ipcMain.handle('hermes:workbench:plugin-tester:environments:list', (_event, payload) => {
+    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    try {
+      return normalize(testerStore.listEnvironments(payload.workspaceRoot))
+    } catch (err) {
+      return { ok: false, message: 'Failed to list environments: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:environments:create', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.name || typeof payload.name !== 'string' || !payload.name.trim()) {
+      return { ok: false, message: 'name is required', code: 'MISSING_NAME' }
+    }
+
+    if (payload.name.length > 200) {
+      return { ok: false, message: 'name is too long', code: 'NAME_TOO_LONG' }
+    }
+
+    if (payload.variables !== undefined && typeof payload.variables !== 'object') {
+      return { ok: false, message: 'variables must be an object', code: 'INVALID_VARIABLES' }
+    }
+
+    // Validate variable count
+    if (payload.variables && Object.keys(payload.variables).length > 500) {
+      return { ok: false, message: 'too many variables (max 500)', code: 'VARIABLES_TOO_MANY' }
+    }
+
+    try {
+      return normalize(testerStore.createEnvironment(payload.workspaceRoot, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to create environment: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:environments:read', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.environmentId || !payload.environmentId.trim()) {
+      return { ok: false, message: 'environmentId is required', code: 'MISSING_ENVIRONMENT_ID' }
+    }
+
+    try {
+      return normalize(testerStore.readEnvironment(payload.workspaceRoot, payload.environmentId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to read environment: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:environments:update', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.environmentId || !payload.environmentId.trim()) {
+      return { ok: false, message: 'environmentId is required', code: 'MISSING_ENVIRONMENT_ID' }
+    }
+
+    if (payload.name !== undefined && (typeof payload.name !== 'string' || !payload.name.trim())) {
+      return { ok: false, message: 'name must be a non-empty string', code: 'INVALID_NAME' }
+    }
+
+    if (payload.variables !== undefined && typeof payload.variables !== 'object') {
+      return { ok: false, message: 'variables must be an object', code: 'INVALID_VARIABLES' }
+    }
+
+    try {
+      return normalize(testerStore.updateEnvironment(payload.workspaceRoot, payload.environmentId, payload))
+    } catch (err) {
+      return { ok: false, message: 'Failed to update environment: ' + err.message, code: 'INTERNAL_ERROR' }
+    }
+  })
+
+  ipcMain.handle('hermes:workbench:plugin-tester:environments:delete', (_event, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
+    }
+
+    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
+    if (!isOk(rootCheck)) return fail(rootCheck)
+
+    if (!payload.environmentId || !payload.environmentId.trim()) {
+      return { ok: false, message: 'environmentId is required', code: 'MISSING_ENVIRONMENT_ID' }
+    }
+
+    try {
+      return normalize(testerStore.deleteEnvironment(payload.workspaceRoot, payload.environmentId))
+    } catch (err) {
+      return { ok: false, message: 'Failed to delete environment: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
 }

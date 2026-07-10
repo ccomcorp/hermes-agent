@@ -73,7 +73,24 @@ const CH = {
   wfList: 'hermes:workbench:workflows:list',
   wfCreate: 'hermes:workbench:workflows:create',
   wfRead: 'hermes:workbench:workflows:read',
-  wfUpdate: 'hermes:workbench:workflows:update'
+  wfUpdate: 'hermes:workbench:workflows:update',
+  // Plugin Tester
+  ptExecute: 'hermes:workbench:plugin-tester:execute',
+  ptColList: 'hermes:workbench:plugin-tester:collections:list',
+  ptColCreate: 'hermes:workbench:plugin-tester:collections:create',
+  ptColRead: 'hermes:workbench:plugin-tester:collections:read',
+  ptColUpdate: 'hermes:workbench:plugin-tester:collections:update',
+  ptColDelete: 'hermes:workbench:plugin-tester:collections:delete',
+  ptHistList: 'hermes:workbench:plugin-tester:history:list',
+  ptHistCreate: 'hermes:workbench:plugin-tester:history:create',
+  ptHistRead: 'hermes:workbench:plugin-tester:history:read',
+  ptHistDelete: 'hermes:workbench:plugin-tester:history:delete',
+  ptHistClear: 'hermes:workbench:plugin-tester:history:clear',
+  ptEnvList: 'hermes:workbench:plugin-tester:environments:list',
+  ptEnvCreate: 'hermes:workbench:plugin-tester:environments:create',
+  ptEnvRead: 'hermes:workbench:plugin-tester:environments:read',
+  ptEnvUpdate: 'hermes:workbench:plugin-tester:environments:update',
+  ptEnvDelete: 'hermes:workbench:plugin-tester:environments:delete'
 }
 
 function invoke(channel, payload) {
@@ -923,6 +940,199 @@ test('reading a traversal requirement id fails closed (NOT_FOUND, no escape)', (
     assertNormalized(res)
     assert.strictEqual(res.ok, false)
     assert.strictEqual(res.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Plugin Tester integration tests
+// ---------------------------------------------------------------------------
+
+test('plugin-tester collections CRUD round-trip', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptColCreate, { workspaceRoot: ws, name: 'My API Tests', description: 'Test suite' })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const cid = created.value.id
+
+    const read = invoke(CH.ptColRead, { workspaceRoot: ws, collectionId: cid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.name, 'My API Tests')
+
+    const updated = invoke(CH.ptColUpdate, { workspaceRoot: ws, collectionId: cid, name: 'Renamed' })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.name, 'Renamed')
+
+    const list = invoke(CH.ptColList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const del = invoke(CH.ptColDelete, { workspaceRoot: ws, collectionId: cid })
+    assertNormalized(del)
+    assert.strictEqual(del.ok, true)
+
+    const afterList = invoke(CH.ptColList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester environments CRUD round-trip', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptEnvCreate, { workspaceRoot: ws, name: 'Staging', variables: { BASE_URL: 'https://staging.example.com' } })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const eid = created.value.id
+
+    const read = invoke(CH.ptEnvRead, { workspaceRoot: ws, environmentId: eid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.name, 'Staging')
+    assert.strictEqual(read.value.variables.BASE_URL, 'https://staging.example.com')
+
+    const updated = invoke(CH.ptEnvUpdate, { workspaceRoot: ws, environmentId: eid, name: 'Production', variables: { BASE_URL: 'https://api.example.com' } })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.name, 'Production')
+
+    const list = invoke(CH.ptEnvList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const del = invoke(CH.ptEnvDelete, { workspaceRoot: ws, environmentId: eid })
+    assertNormalized(del)
+    assert.strictEqual(del.ok, true)
+
+    const afterList = invoke(CH.ptEnvList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester history CRUD and clear', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptHistCreate, { workspaceRoot: ws, request: { method: 'GET', url: 'https://httpbin.org/get' }, response: { status: 200 } })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const hid = created.value.id
+
+    const read = invoke(CH.ptHistRead, { workspaceRoot: ws, historyId: hid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.request.method, 'GET')
+
+    const list = invoke(CH.ptHistList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.entries.length, 1)
+
+    // Clear
+    const cleared = invoke(CH.ptHistClear, { workspaceRoot: ws })
+    assertNormalized(cleared)
+    assert.strictEqual(cleared.ok, true)
+
+    const afterList = invoke(CH.ptHistList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.entries.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester execute requires method and url', () => {
+  const ws = createTempWorkspace()
+  try {
+    // Method defaults to GET — validateRequest only rejects unsupported methods.
+    // Test missing request and missing URL in the synchronous validation path.
+    const noRequest = invoke(CH.ptExecute, { workspaceRoot: ws })
+    assertNormalized(noRequest)
+    assert.strictEqual(noRequest.ok, false)
+    assert.strictEqual(noRequest.code, 'MISSING_REQUEST')
+
+    const noUrl = invoke(CH.ptExecute, { workspaceRoot: ws, request: { method: 'GET' } })
+    assertNormalized(noUrl)
+    assert.strictEqual(noUrl.ok, false)
+    assert.strictEqual(noUrl.code, 'MISSING_URL')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester execute rejects unknown HTTP methods', () => {
+  const ws = createTempWorkspace()
+  try {
+    const res = invoke(CH.ptExecute, { workspaceRoot: ws, request: { method: 'BOGUS', url: 'https://example.com' } })
+    assertNormalized(res)
+    assert.strictEqual(res.ok, false)
+    assert.strictEqual(res.code, 'INVALID_METHOD')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester persisted history redacts auth credentials', () => {
+  const ws = createTempWorkspace()
+  try {
+    // Record a history entry with auth credentials via the IPC handler
+    const entry = invoke(CH.ptHistCreate, {
+      workspaceRoot: ws,
+      request: {
+        method: 'GET',
+        url: 'https://httpbin.org/get',
+        auth: {
+          type: 'bearer',
+          token: 'secret-bearer-token-abc123',
+          username: 'admin',
+          password: 'super-secret-password',
+          key: 'X-API-Key',
+          value: 'sk-live-key-12345'
+        }
+      },
+      response: { status: 200, body: '{}' }
+    })
+    assertNormalized(entry)
+    assert.strictEqual(entry.ok, true)
+    assert.ok(entry.value.id)
+
+    // Read the persisted JSON file from disk
+    const storeModule = require('./workbench-plugin-tester-store.cjs')
+    const manifest = storeModule._internal.ensureManifest(ws)
+    const histEntry = manifest.history.find(h => h.id === entry.value.id)
+    assert.ok(histEntry, 'history entry must appear in manifest')
+    assert.ok(histEntry.relativePath, 'manifest entry must carry relativePath')
+
+    const fullPath = path.join(ws, histEntry.relativePath)
+    assert.ok(fs.existsSync(fullPath), 'history file must exist on disk')
+    const onDisk = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+
+    // Verify auth values are redacted in the persisted file
+    assert.ok(onDisk.request, 'persisted entry must have request')
+    assert.ok(onDisk.request.auth, 'persisted request must have auth')
+    assert.strictEqual(onDisk.request.auth.token, '[REDACTED]')
+    assert.strictEqual(onDisk.request.auth.password, '[REDACTED]')
+    assert.strictEqual(onDisk.request.auth.value, '[REDACTED]')
+    // Non-secret auth fields are preserved
+    assert.strictEqual(onDisk.request.auth.type, 'bearer')
+    assert.strictEqual(onDisk.request.auth.username, 'admin')
+    assert.strictEqual(onDisk.request.auth.key, 'X-API-Key')
+
+    // No live credential values anywhere in the serialized JSON
+    const raw = JSON.stringify(onDisk)
+    assert.ok(!raw.includes('secret-bearer-token-abc123'), 'raw file must not contain bearer token')
+    assert.ok(!raw.includes('super-secret-password'), 'raw file must not contain password')
+    assert.ok(!raw.includes('sk-live-key-12345'), 'raw file must not contain API key value')
   } finally {
     cleanup(ws)
   }

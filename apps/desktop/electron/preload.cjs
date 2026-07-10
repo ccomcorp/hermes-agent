@@ -290,6 +290,33 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       create: payload => ipcRenderer.invoke('hermes:workbench:workflows:create', payload),
       read: payload => ipcRenderer.invoke('hermes:workbench:workflows:read', payload),
       update: payload => ipcRenderer.invoke('hermes:workbench:workflows:update', payload)
+    },
+    pluginTester: {
+      // Plugin Tester — HTTP request executor + persistence (Slice N).
+      // Executes real HTTP requests via the main process (renderer never speaks
+      // directly to the network) and persists collections, history, and
+      // environment variable sets under .hermes/workbench/plugin-tester/.
+      execute: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:execute', payload),
+      collections: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:list', payload),
+        create: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:create', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:read', payload),
+        update: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:update', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:delete', payload)
+      },
+      history: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:list', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:read', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:delete', payload),
+        clear: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:clear', payload)
+      },
+      environments: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:list', payload),
+        create: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:create', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:read', payload),
+        update: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:update', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:delete', payload)
+      }
     }
   }
 })

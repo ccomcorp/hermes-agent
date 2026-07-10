@@ -564,6 +564,115 @@ export interface UpdateWorkbenchWorkflowResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Plugin Tester
+// ---------------------------------------------------------------------------
+
+export interface PluginTesterAuth {
+  type: 'none' | 'bearer' | 'basic' | 'apikey'
+  token?: string
+  username?: string
+  password?: string
+  key?: string
+  value?: string
+  addTo?: 'header' | 'query'
+}
+
+export interface PluginTesterRequest {
+  method: string
+  url: string
+  headers?: Record<string, string>
+  params?: Record<string, string> | Array<{ key: string; value: string }>
+  body?: string
+  contentType?: string
+  auth?: PluginTesterAuth
+  timeout?: number
+}
+
+export interface PluginTesterResponse {
+  status: number
+  statusText: string
+  headers: Record<string, string>
+  body: string
+  cookies: Array<{
+    name: string
+    value: string
+    attributes: Record<string, string | true>
+  }>
+  size: number
+}
+
+export interface PluginTesterTimingTrace {
+  step: string
+  duration: number
+  timing?: {
+    dns: number
+    connect: number
+    ttfb: number
+    download: number
+    total: number
+  }
+}
+
+export interface PluginTesterExecuteResult {
+  response: PluginTesterResponse
+  trace: PluginTesterTimingTrace[]
+}
+
+export interface PluginTesterCollection {
+  id: string
+  name: string
+  description: string
+  requests: PluginTesterRequest[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PluginTesterCollectionManifestEntry {
+  id: string
+  name: string
+  description: string
+  requestCount: number
+  relativePath: string
+  updatedAt: string
+}
+
+export interface PluginTesterHistoryEntry {
+  id: string
+  request: PluginTesterRequest
+  response: PluginTesterResponse | null
+  trace: PluginTesterTimingTrace[]
+  collectionId?: string
+  createdAt: string
+}
+
+export interface PluginTesterHistoryManifestEntry {
+  id: string
+  url: string
+  method: string
+  status: number
+  duration: number
+  collectionId?: string
+  relativePath: string
+  createdAt: string
+}
+
+export interface PluginTesterEnvironment {
+  id: string
+  name: string
+  variables: Record<string, string>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PluginTesterEnvironmentManifestEntry {
+  id: string
+  name: string
+  variableCount: number
+  relativePath: string
+  updatedAt: string
+}
+
+// ---------------------------------------------------------------------------
 // Workbench events
 // ---------------------------------------------------------------------------
 
@@ -664,5 +773,24 @@ export const WORKBENCH_IPC_CHANNELS = {
   workflowsCreate: 'hermes:workbench:workflows:create',
   workflowsRead: 'hermes:workbench:workflows:read',
   workflowsUpdate: 'hermes:workbench:workflows:update',
+  // Plugin Tester — HTTP request executor + persistence (Slice N).
+  // Executes real HTTP requests via the main process and persists
+  // collections, history, and environments under .hermes/workbench/plugin-tester/.
+  pluginTesterExecute: 'hermes:workbench:plugin-tester:execute',
+  pluginTesterCollectionsList: 'hermes:workbench:plugin-tester:collections:list',
+  pluginTesterCollectionsCreate: 'hermes:workbench:plugin-tester:collections:create',
+  pluginTesterCollectionsRead: 'hermes:workbench:plugin-tester:collections:read',
+  pluginTesterCollectionsUpdate: 'hermes:workbench:plugin-tester:collections:update',
+  pluginTesterCollectionsDelete: 'hermes:workbench:plugin-tester:collections:delete',
+  pluginTesterHistoryList: 'hermes:workbench:plugin-tester:history:list',
+  pluginTesterHistoryRead: 'hermes:workbench:plugin-tester:history:read',
+  pluginTesterHistoryDelete: 'hermes:workbench:plugin-tester:history:delete',
+  pluginTesterHistoryClear: 'hermes:workbench:plugin-tester:history:clear',
+  pluginTesterHistoryCreate: 'hermes:workbench:plugin-tester:history:create',
+  pluginTesterEnvironmentsList: 'hermes:workbench:plugin-tester:environments:list',
+  pluginTesterEnvironmentsCreate: 'hermes:workbench:plugin-tester:environments:create',
+  pluginTesterEnvironmentsRead: 'hermes:workbench:plugin-tester:environments:read',
+  pluginTesterEnvironmentsUpdate: 'hermes:workbench:plugin-tester:environments:update',
+  pluginTesterEnvironmentsDelete: 'hermes:workbench:plugin-tester:environments:delete',
   event: 'hermes:workbench:event'
 } as const

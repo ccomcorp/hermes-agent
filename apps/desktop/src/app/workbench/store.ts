@@ -1,4 +1,7 @@
 import type {
+  PluginTesterCollectionManifestEntry,
+  PluginTesterEnvironmentManifestEntry,
+  PluginTesterHistoryManifestEntry,
   WorkbenchDesignSettings,
   WorkbenchManifestEntry,
   WorkbenchRequirementTrace
@@ -76,6 +79,15 @@ export function setWorkbenchWorkspaceRoot(root: null | string) {
   $workbenchWorkflows.set([])
   $workbenchActiveWorkflowId.set(null)
   $workbenchWorkflowsError.set(null)
+  $pluginTesterCollections.set([])
+  $pluginTesterActiveCollectionId.set(null)
+  $pluginTesterCollectionsError.set(null)
+  $pluginTesterHistory.set([])
+  $pluginTesterHistoryError.set(null)
+  $pluginTesterHistoryTotal.set(0)
+  $pluginTesterEnvironments.set([])
+  $pluginTesterActiveEnvironmentId.set(null)
+  $pluginTesterEnvironmentsError.set(null)
 }
 
 export function setWorkbenchRequirements(entries: WorkbenchManifestEntry[]) {
@@ -362,4 +374,76 @@ export function patchWorkbenchWorkflowManifestEntry(id: string, patch: Partial<W
   $workbenchWorkflows.set(
     $workbenchWorkflows.get().map(entry => (entry.id === id ? { ...entry, ...patch } : entry))
   )
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Tester (Slice N — HTTP request executor + persistence)
+//
+// Collections, history, and environments are all workspace-scoped lists, same
+// shape of reasoning as Requirements/Plans — not singletons like Design
+// Studio settings. There is no `pluginTester:create` channel here because
+// it is an internal-consumer channel (execute auto-records history server-side).
+// ---------------------------------------------------------------------------
+
+export const $pluginTesterCollections = atom<PluginTesterCollectionManifestEntry[]>([])
+export const $pluginTesterCollectionsLoading = atom(false)
+export const $pluginTesterCollectionsError = atom<null | string>(null)
+export const $pluginTesterActiveCollectionId = atom<null | string>(null)
+
+export const $pluginTesterHistory = atom<PluginTesterHistoryManifestEntry[]>([])
+export const $pluginTesterHistoryLoading = atom(false)
+export const $pluginTesterHistoryError = atom<null | string>(null)
+export const $pluginTesterHistoryTotal = atom(0)
+
+export const $pluginTesterEnvironments = atom<PluginTesterEnvironmentManifestEntry[]>([])
+export const $pluginTesterEnvironmentsLoading = atom(false)
+export const $pluginTesterEnvironmentsError = atom<null | string>(null)
+export const $pluginTesterActiveEnvironmentId = atom<null | string>(null)
+
+export function setPluginTesterCollections(entries: PluginTesterCollectionManifestEntry[]) {
+  $pluginTesterCollections.set(entries)
+}
+
+export function setPluginTesterCollectionsLoading(loading: boolean) {
+  $pluginTesterCollectionsLoading.set(loading)
+}
+
+export function setPluginTesterCollectionsError(message: null | string) {
+  $pluginTesterCollectionsError.set(message)
+}
+
+export function setPluginTesterActiveCollectionId(id: null | string) {
+  $pluginTesterActiveCollectionId.set(id)
+}
+
+export function setPluginTesterHistory(entries: PluginTesterHistoryManifestEntry[]) {
+  $pluginTesterHistory.set(entries)
+}
+
+export function setPluginTesterHistoryLoading(loading: boolean) {
+  $pluginTesterHistoryLoading.set(loading)
+}
+
+export function setPluginTesterHistoryError(message: null | string) {
+  $pluginTesterHistoryError.set(message)
+}
+
+export function setPluginTesterHistoryTotal(total: number) {
+  $pluginTesterHistoryTotal.set(total)
+}
+
+export function setPluginTesterEnvironments(entries: PluginTesterEnvironmentManifestEntry[]) {
+  $pluginTesterEnvironments.set(entries)
+}
+
+export function setPluginTesterEnvironmentsLoading(loading: boolean) {
+  $pluginTesterEnvironmentsLoading.set(loading)
+}
+
+export function setPluginTesterEnvironmentsError(message: null | string) {
+  $pluginTesterEnvironmentsError.set(message)
+}
+
+export function setPluginTesterActiveEnvironmentId(id: null | string) {
+  $pluginTesterActiveEnvironmentId.set(id)
 }

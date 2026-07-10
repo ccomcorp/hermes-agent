@@ -1,4 +1,9 @@
 import type {
+  PluginTesterCollection,
+  PluginTesterEnvironment,
+  PluginTesterExecuteResult,
+  PluginTesterHistoryEntry,
+  PluginTesterRequest,
   WorkbenchChangeSet,
   WorkbenchDesignArtifact,
   WorkbenchDesignSettings,
@@ -454,6 +459,76 @@ declare global {
             contentHash: string
             updatedAt: string
           }>>
+        }
+        // Plugin Tester — HTTP request executor + persistence (Slice N).
+        // Executes real HTTP requests via the main process and persists
+        // collections, history, and environments under
+        // .hermes/workbench/plugin-tester/.
+        pluginTester: {
+          execute: (payload: {
+            workspaceRoot: string
+            request: PluginTesterRequest
+            environmentId?: string
+            collectionId?: string
+          }) => Promise<WorkbenchIpcResult<PluginTesterExecuteResult>>
+          collections: {
+            list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+            create: (payload: {
+              workspaceRoot: string
+              name: string
+              description: string
+              requests: PluginTesterRequest[]
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            read: (payload: {
+              workspaceRoot: string
+              collectionId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            update: (payload: {
+              workspaceRoot: string
+              collectionId: string
+              name: string
+              description: string
+              requests: PluginTesterRequest[]
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            delete: (payload: {
+              workspaceRoot: string
+              collectionId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+          }
+          history: {
+            list: (payload: { workspaceRoot: string; collectionId?: string }) => Promise<WorkbenchIpcResult<any>>
+            read: (payload: {
+              workspaceRoot: string
+              historyId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterHistoryEntry>>
+            delete: (payload: {
+              workspaceRoot: string
+              historyId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+            clear: (payload: { workspaceRoot: string; collectionId?: string }) => Promise<WorkbenchIpcResult<void>>
+          }
+          environments: {
+            list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+            create: (payload: {
+              workspaceRoot: string
+              name: string
+              variables: Record<string, string>
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            read: (payload: {
+              workspaceRoot: string
+              environmentId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            update: (payload: {
+              workspaceRoot: string
+              environmentId: string
+              name: string
+              variables: Record<string, string>
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            delete: (payload: {
+              workspaceRoot: string
+              environmentId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+          }
         }
       }
     }
