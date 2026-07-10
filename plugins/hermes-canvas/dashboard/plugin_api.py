@@ -318,6 +318,20 @@ def _read_log_tail(log_path: Path | None, max_lines: int = 200) -> list[str]:
         return []
 
 
+def _detect_auth_error(lines: list[str]) -> bool:
+    """True only for a genuine auth failure. Requires an auth-signature phrase so
+    incidental substrings like '1401ms' or a filename 'error-401.tsx' never match."""
+    for ln in lines:
+        low = ln.lower()
+        if "authentication failed" in low:
+            return True
+        if "no valid authentication credentials" in low:
+            return True
+        if "http 401" in low or "401:" in low:
+            return True
+    return False
+
+
 def _copy_template(template_name: str, dest: Path) -> None:
     allowed_templates = {"vite-react"}
     if template_name not in allowed_templates:
@@ -768,6 +782,16 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         sync_count = 0
         while proc.poll() is None:
             time.sleep(2)
+            # 401 early-abort: stop burning turns on a dead token.
+            try:
+                if _detect_auth_error(_read_log_tail(log_path, max_lines=40)):
+                    with _state.lock:
+                        if job_id in _state.agent_jobs:
+                            _state.agent_jobs[job_id]["auth_error"] = True
+                    _terminate_proc(proc)
+                    break
+            except Exception:
+                pass
             if not worktrees_dir.exists():
                 continue
             worktrees = [d for d in worktrees_dir.iterdir() if d.is_dir()]
@@ -838,4 +862,5 @@ async def agent_status(job_id: str) -> dict[str, Any]:
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "logs": logs,
+        "auth_error": job.get("auth_error", False),
     }
