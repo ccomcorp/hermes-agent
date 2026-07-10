@@ -64,6 +64,114 @@ test('createRequirement creates files and manifest', () => {
   }
 })
 
+test('createRequirement id is idempotent under sanitizeId (trailing-hyphen truncation bug)', () => {
+  const ws = createTempWorkspace()
+  try {
+    // This title slugifies to "coming-soon-landing-page" (24 chars); the old
+    // code did sanitizeId(title).slice(0, 20), leaving the trailing hyphen
+    // "coming-soon-landing-". sanitizeId() strips that hyphen, so the id was
+    // NOT idempotent and design artifacts filed under the un-hyphenated id.
+    const { requirement } = store.createRequirement(ws, { title: 'Coming-soon landing page' })
+
+    // Invariant: re-sanitizing a requirement id must be a no-op.
+    assert.strictEqual(
+      store._internal.sanitizeId(requirement.id),
+      requirement.id,
+      `requirement id "${requirement.id}" must be idempotent under sanitizeId`
+    )
+    assert.ok(!requirement.id.endsWith('-'), 'requirement id must not end with a hyphen')
+
+    // End-to-end: a design artifact created against this id must round-trip to
+    // the SAME id and be findable by listDesignArtifacts (no split).
+    const created = store.createDesignArtifact(ws, {
+      workspaceRoot: ws,
+      requirementId: requirement.id,
+      kind: 'brief',
+      content: '# Brief\n\nbody'
+    })
+    assert.strictEqual(created.ok, true)
+    assert.strictEqual(created.value.requirementId, requirement.id)
+
+    const listed = store.listDesignArtifacts(ws, requirement.id)
+    assert.strictEqual(listed.ok, true)
+    assert.strictEqual(listed.value.length, 1)
+    assert.strictEqual(listed.value[0].requirementId, requirement.id)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Auto-advance requirement status (forward-only, Kanban-driven)
+// ---------------------------------------------------------------------------
+
+test('laterStatus advances forward and never moves backward', () => {
+  const { laterStatus } = store._internal
+  assert.strictEqual(laterStatus('draft', 'in_progress'), 'in_progress')
+  assert.strictEqual(laterStatus('in_progress', 'implemented'), 'implemented')
+  assert.strictEqual(laterStatus('reviewed', 'in_progress'), 'reviewed') // no downgrade
+  assert.strictEqual(laterStatus('implemented', 'implemented'), 'implemented')
+  assert.strictEqual(laterStatus(undefined, 'in_progress'), 'in_progress') // unknown ranks as draft
+})
+
+test('linkKanbanCardToRequirement auto-advances draft -> in_progress', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Auto Advance Send' })
+    const tracePath = path.join(ws, requirement.traceRelativePath)
+    assert.strictEqual(JSON.parse(fs.readFileSync(tracePath, 'utf8')).status, 'draft')
+
+    const res = store.linkKanbanCardToRequirement(ws, requirement.id, 't_abc123')
+    assert.strictEqual(res.ok, true)
+
+    const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'))
+    assert.strictEqual(trace.status, 'in_progress')
+    assert.ok(trace.linkedKanbanCardIds.includes('t_abc123'))
+    assert.ok(trace.history.some(h => h.kind === 'kanban_linked'))
+    assert.ok(trace.history.some(h => h.kind === 'status_changed' && h.actor === 'agent'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('linkKanbanCardToRequirement never moves a manually-advanced status backward', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'No Downgrade Send' })
+    store.updateRequirement(ws, requirement.id, { markdown: '# x', status: 'reviewed' })
+
+    const res = store.linkKanbanCardToRequirement(ws, requirement.id, 't_def456')
+    assert.strictEqual(res.ok, true)
+
+    const trace = JSON.parse(fs.readFileSync(path.join(ws, requirement.traceRelativePath), 'utf8'))
+    assert.strictEqual(trace.status, 'reviewed') // forward-only: unchanged
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('updateRequirement autoAdvance is forward-only; manual updates are verbatim (any direction)', () => {
+  const ws = createTempWorkspace()
+  try {
+    const { requirement } = store.createRequirement(ws, { title: 'Auto Advance Done' })
+    const tracePath = path.join(ws, requirement.traceRelativePath)
+
+    // autoAdvance draft -> implemented advances
+    store.updateRequirement(ws, requirement.id, { markdown: '# x', status: 'implemented', autoAdvance: true })
+    assert.strictEqual(JSON.parse(fs.readFileSync(tracePath, 'utf8')).status, 'implemented')
+
+    // autoAdvance implemented -> in_progress is a NO-OP (would move backward)
+    store.updateRequirement(ws, requirement.id, { markdown: '# x', status: 'in_progress', autoAdvance: true })
+    assert.strictEqual(JSON.parse(fs.readFileSync(tracePath, 'utf8')).status, 'implemented')
+
+    // manual update (no autoAdvance) CAN move backward, e.g. reopening a requirement
+    store.updateRequirement(ws, requirement.id, { markdown: '# x', status: 'draft' })
+    assert.strictEqual(JSON.parse(fs.readFileSync(tracePath, 'utf8')).status, 'draft')
+  } finally {
+    cleanup(ws)
+  }
+})
+
 test('createRequirement uses default markdown when none provided', () => {
   const ws = createTempWorkspace()
   try {

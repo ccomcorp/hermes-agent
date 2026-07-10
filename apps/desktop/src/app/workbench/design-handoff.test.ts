@@ -9,6 +9,7 @@ describe('buildDesignHandoffMessage', () => {
     expect(message).toMatch(/^Implement the following design as real code in this project\./)
     expect(message).toMatch(/visual\/behavioral reference/i)
     expect(message).toContain('```html\n<!doctype html><html><body>Hi</body></html>\n```')
+    expect(message).toMatch(/Vite \+ React \+ Tailwind/)
   })
 
   it('includes a brief artifact as plain prose with no code fence', () => {
@@ -17,6 +18,7 @@ describe('buildDesignHandoffMessage', () => {
     expect(message).toMatch(/^Implement the following design as real code in this project\./)
     expect(message).toMatch(/design brief describing target users/i)
     expect(message).toContain('# Design brief\n\nTarget users: everyone.')
+    expect(message).toMatch(/Vite \+ React \+ Tailwind/)
     expect(message).not.toContain('```')
   })
 

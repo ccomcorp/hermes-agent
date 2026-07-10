@@ -159,16 +159,19 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
     <div
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-(--ui-chat-surface-background) pt-(--titlebar-height)"
       style={{
-        '--color-border': '#D4C5B2',
-        '--color-card': '#EDE7DB',
-        '--color-card-subtle': '#E8E1D3',
-        '--color-foreground': '#2D2A26',
-        '--color-muted-foreground': '#6B6358',
-        '--color-primary': '#C78E3F',
-        '--color-destructive': '#C44E3D',
-        '--color-ring': '#C78E3F',
-        '--color-warning': '#C78E3F',
-        '--font-mono': 'var(--font-mono-ui, ui-monospace, monospace)',
+        // Palette tokens (card/border/foreground/primary/ring/destructive/
+        // muted-foreground) are intentionally NOT set here — the desktop's
+        // global `@theme inline` block maps `--color-*` → `--dt-*`, which
+        // `applyTheme()` drives per active skin. The kanban plugin bundle reads
+        // those same `--color-*` vars ("no hardcoded palette"), so leaving them
+        // unset lets the board reskin with Slate/Nous/Editorial/etc. instead of
+        // being frozen to the old Editorial cream. `--color-card-subtle` and
+        // `--color-warning` aren't in the global theme map: card-subtle is
+        // self-derived from the theme's own card/foreground so it stays a
+        // subtle step in both light and dark, and warning falls back to the
+        // plugin's theme-neutral amber.
+        '--color-card-subtle': 'color-mix(in srgb, var(--color-card) 92%, var(--color-foreground))',
+        '--font-mono': 'var(--dt-font-mono, var(--font-mono-ui, ui-monospace, monospace))',
         '--hermes-diag-critical': '#DC2626',
         '--hermes-diag-error': '#EF4444',
         '--hermes-diag-warning': '#F59E0B',

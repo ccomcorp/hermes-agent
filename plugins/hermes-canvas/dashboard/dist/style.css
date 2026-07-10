@@ -234,6 +234,30 @@ body:has(.hc-root) .theme-default-filler {
   color: var(--dt-foreground);
 }
 
+/* Current project path — deliberately NOT .hc-input styled so users don't try
+   to type into it. Open-existing lives in a real input further down. */
+.hc-current-path {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.375rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px dashed var(--dt-border);
+  background: transparent;
+  color: var(--dt-muted-foreground);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  user-select: text;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.hc-error {
+  margin: 0.25rem 0 0.5rem;
+  line-height: 1.35;
+}
+
 /* Status badges keep their semantic hue (green=ok, amber=stopped) but derive a
    subtle tint from it and blend the text toward the theme foreground so they
    stay legible on both light and dark themes. */

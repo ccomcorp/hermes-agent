@@ -14,5 +14,11 @@ export const configStrings = {
   subtitle: 'Agent configuration',
   // Section tab nav lives in this pane; the section bodies are rendered by the
   // existing settings ConfigSettings component (reused, not recreated).
-  sectionNavLabel: 'Configuration sections'
+  sectionNavLabel: 'Configuration sections',
+  // Absolute config.yaml path (from GET /api/config/raw) — web dashboard parity.
+  configFileLabel: 'config.yaml',
+  configFileLoading: 'Resolving config path…',
+  configFileUnavailable: 'Config path unavailable',
+  copyPath: 'Copy path',
+  pathCopied: 'Path copied'
 } as const

@@ -253,6 +253,7 @@ declare global {
             markdown: string
             title?: string
             status?: WorkbenchRequirementStatus
+            autoAdvance?: boolean
           }) => Promise<WorkbenchIpcResult<{
             id: string
             title?: string

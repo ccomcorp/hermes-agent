@@ -17,13 +17,20 @@
  *
  * Section selection is persisted in the URL via `useRouteEnumParam` (the chassis
  * convention used by Settings, so the active section survives a refresh).
+ *
+ * Config path: mirrors the web dashboard Config page header — profile-scoped
+ * absolute path from GET /api/config/raw (not a hard-coded ~/.hermes hint).
  */
 import type * as React from 'react'
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { getHermesConfigRaw } from '@/hermes'
+import { Copy } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-
+import { notify, notifyError } from '@/store/notifications'
+import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { PAGE_INSET_X } from '../layout-constants'
 import { AppearanceSettings } from '../settings/appearance-settings'
@@ -59,11 +66,57 @@ export function ConfigView({
   // import affordance, but the prop is required, so pass a real ref.
   const importInputRef = useRef<HTMLInputElement | null>(null)
 
+  const [configPath, setConfigPath] = useState<string | null>(null)
+  const [pathLoading, setPathLoading] = useState(true)
+
+  const loadConfigPath = useCallback(async () => {
+    setPathLoading(true)
+
+    try {
+      const raw = await getHermesConfigRaw()
+      setConfigPath(raw.path || null)
+    } catch {
+      setConfigPath(null)
+    } finally {
+      setPathLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    setStatusbarItemGroup?.('config', [])
+    void loadConfigPath()
+  }, [loadConfigPath])
+
+  // Profile switch changes HERMES_HOME → different config.yaml path.
+  useOnProfileSwitch(() => {
+    void loadConfigPath()
+  })
+
+  useEffect(() => {
+    setStatusbarItemGroup?.('config', [
+      {
+        id: 'config-yaml-path',
+        label: s.configFileLabel,
+        detail: pathLoading ? '…' : configPath || '—',
+        title: configPath || s.configFileUnavailable,
+        variant: 'text'
+      }
+    ])
 
     return () => setStatusbarItemGroup?.('config', [])
-  }, [setStatusbarItemGroup])
+  }, [configPath, pathLoading, setStatusbarItemGroup])
+
+  const copyPath = useCallback(async () => {
+    if (!configPath) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(configPath)
+      notify({ kind: 'success', title: s.pathCopied, message: configPath })
+    } catch (err) {
+      notifyError(err, s.copyPath)
+    }
+  }, [configPath])
 
   return (
     <section
@@ -78,13 +131,36 @@ export function ConfigView({
         )}
       >
         <div className="mx-auto w-full max-w-4xl">
-          <div className="flex items-center gap-2 pb-3">
+          <div className="flex items-center gap-2 pb-2">
             <Codicon className="text-muted-foreground" name="settings-gear" size="1rem" />
             <h1 className="text-[length:var(--conversation-text-font-size)] font-medium text-foreground">
               {s.title}
             </h1>
             <span className="text-xs text-muted-foreground">{s.subtitle}</span>
           </div>
+
+          {/* Absolute config.yaml path — web Config page header parity */}
+          <div className="mb-3 flex min-w-0 items-center gap-2 rounded-md border border-(--ui-stroke-tertiary) bg-(--ui-bg-tertiary)/40 px-2.5 py-1.5">
+            <Codicon className="shrink-0 text-muted-foreground" name="file" size="0.875rem" />
+            <code
+              className="min-w-0 flex-1 truncate font-mono text-[0.7rem] text-muted-foreground"
+              title={configPath || undefined}
+            >
+              {pathLoading ? s.configFileLoading : configPath || s.configFileUnavailable}
+            </code>
+            <Button
+              className="h-7 shrink-0 gap-1 px-2 text-[0.7rem]"
+              disabled={!configPath}
+              onClick={() => void copyPath()}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <Copy className="size-3.5" />
+              {s.copyPath}
+            </Button>
+          </div>
+
           <nav aria-label={s.sectionNavLabel} className="-mb-px flex flex-wrap gap-1 pb-1">
             {SECTIONS.map(section => {
               const Icon = section.icon

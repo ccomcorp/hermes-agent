@@ -34,6 +34,11 @@ DEFAULT_DEV_PORT = 5173
 MAX_PORT_ATTEMPTS = 32
 HTTP_SERVER_READY_RE = re.compile(r"Serving HTTP on\s+([\d.]+)\s+port\s+(\d+)")
 
+# Hard wall-clock cap for an agent edit job. Without it, a job that gets stuck (e.g. a
+# post-edit headless-browser validation) hangs forever on "running" and never flips to
+# done. The edit, if made, was already worktree-synced before the cap fires.
+AGENT_JOB_TIMEOUT_S = 300
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -55,7 +60,11 @@ def _jobs_dir() -> Path:
 
 
 def _templates_dir() -> Path:
-    return _plugin_dir() / "dashboard" / "templates"
+    # AIOS patch: templates ship WITH the plugin code (dashboard/templates), NOT in the
+    # runtime HERMES_HOME (which only holds canvas-state.json). Resolving relative to this
+    # file makes "Create new project" find the vite-react scaffold whether the plugin runs
+    # from the repo or an installed copy. (Upstream looked in _home()/plugins/... -> "Template not found".)
+    return Path(__file__).resolve().parent / "templates"
 
 
 def _projects_dir() -> Path:
@@ -77,6 +86,9 @@ class _State:
         self.dev_log_path: Path | None = None
         self.dev_stdout_thread: threading.Thread | None = None
         self.project_path: str | None = None
+        # Paths the user explicitly opened (project/open) that live OUTSIDE the canvas
+        # root; once opened they are allowlisted so their dev/agent ops pass validation.
+        self.opened_paths: set[str] = set()
         self.agent_jobs: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -87,6 +99,7 @@ class _State:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             self.project_path = data.get("project_path")
+            self.opened_paths = set(data.get("opened_paths", []))
             # Restore agent job metadata (not subprocess handles)
             for job_id, job in data.get("agent_jobs", {}).items():
                 if isinstance(job, dict):
@@ -106,6 +119,7 @@ class _State:
                 }
             payload = {
                 "project_path": self.project_path,
+                "opened_paths": sorted(self.opened_paths),
                 "agent_jobs": serializable_jobs,
             }
         tmp = path.with_suffix(".tmp")
@@ -115,6 +129,11 @@ class _State:
     def set_project(self, path: str) -> None:
         with self.lock:
             self.project_path = path
+        self._save()
+
+    def add_opened_path(self, path: str) -> None:
+        with self.lock:
+            self.opened_paths.add(path)
         self._save()
 
     def register_dev(self, proc: subprocess.Popen, port: int, preview_url: str, log_path: Path) -> None:
@@ -231,13 +250,17 @@ def _canvas_root() -> Path:
 
 
 def _validate_path(path: str) -> Path:
-    """Admit only paths under the AIOS canvas projects root."""
+    """Admit paths under the AIOS canvas projects root, OR any project the user has
+    explicitly opened via project/open (allowlisted in _state.opened_paths). Arbitrary
+    UNopened paths stay rejected for create/dev/agent operations."""
     root = _canvas_root()
     root.mkdir(parents=True, exist_ok=True)
     p = Path(path).expanduser().resolve()
-    if not (p == root or p.is_relative_to(root)):
-        raise HTTPException(status_code=400, detail="Path not allowed")
-    return p
+    if p == root or p.is_relative_to(root):
+        return p
+    if str(p) in _state.opened_paths:
+        return p
+    raise HTTPException(status_code=400, detail="Path not allowed (open it via 'Open existing project' first)")
 
 
 def _which(cmd: str) -> str | None:
@@ -530,12 +553,20 @@ async def project_create(req: CreateProjectRequest) -> dict[str, Any]:
 
 @router.post("/project/open")
 async def project_open(req: OpenProjectRequest) -> dict[str, Any]:
-    """Open an existing project."""
-    path = _validate_path(req.project_path)
+    """Open an existing project from ANY directory (not just under the canvas root)."""
+    # Relaxed resolution so "Open existing project" works for a project ANYWHERE. We
+    # resolve without the root restriction, verify it's a real project dir, then
+    # allowlist it (_state.opened_paths) so its later dev/start + agent ops pass
+    # _validate_path. (Upstream required the path be under the canvas root -> "Path not
+    # allowed" -> the Open button silently no-op'd for projects elsewhere.)
+    path = Path(req.project_path).expanduser().resolve()
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail="Project directory not found: " + str(path))
     package_json = path / "package.json"
     index_html = path / "index.html"
     if not package_json.exists() and not index_html.exists():
         raise HTTPException(status_code=400, detail="No package.json or index.html found in project path")
+    _state.add_opened_path(str(path))
     if not (path / ".git").exists():
         _git_init_and_commit(path)
     _state.set_project(str(path))
@@ -577,8 +608,12 @@ async def dev_start(req: StartDevRequest) -> dict[str, Any]:
         )
     elif index_html.exists():
         python = sys.executable
+        # AIOS: serve static projects through the overlay-injecting server so
+        # click-to-select works on plain static pages too (upstream `http.server`
+        # served files as-is -> no selection overlay -> "Select Element" did nothing).
+        static_server = str(Path(__file__).resolve().parent / "hermes_static_server.py")
         proc = subprocess.Popen(
-            [python, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+            [python, static_server, str(port)],
             cwd=project_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -666,17 +701,29 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     if not hermes_bin:
         raise HTTPException(status_code=500, detail="hermes CLI not found in PATH")
 
+    # Serialize edit jobs: terminate any still-running job before starting a new one.
+    # Two concurrent jobs each create their own .worktrees/* dir, and the live-sync
+    # picks the LATEST worktree by mtime — so a second prompt could race/overwrite the
+    # first and silently fail to land. One job at a time keeps the sync deterministic.
+    for _jid, _job in list(_state.agent_jobs.items()):
+        _p = _job.get("proc")
+        if _job.get("running") and _p is not None and _p.poll() is None:
+            _terminate_proc(_p)
+            _state.update_agent(_jid, running=False, exit_code=-1, summary="Superseded by a new prompt")
+
     job_id = f"agent-{_now_iso().replace(':', '-')}"
     log_path = _jobs_dir() / f"{job_id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     system_prompt = (
-        "You are editing a Vite React project. Work in the project directory. "
-        "Use file tools to read and write JSX/CSS files. "
-        "Keep components clean and cohesive. "
-        "When generating or modifying elements, add data-hermes-component, "
-        "data-hermes-file, and data-hermes-role attributes to major editable elements "
-        "for selection mode support."
+        "You are editing a web project in the current directory. It may be a static "
+        "HTML/CSS/JS site OR a Vite + React + Tailwind app — check the files first, do "
+        "not assume. Make the user's requested change DIRECTLY and CONCISELY in the "
+        "relevant file(s). When you add or modify a major element, add "
+        "data-hermes-component, data-hermes-file, and data-hermes-role attributes for "
+        "Canvas selection support. Do NOT run headless browsers, screenshot tools, or "
+        "lengthy verification scripts — apply the edit, do a quick read-back of the file "
+        "to confirm it, and finish promptly."
     )
 
     full_prompt = f"{system_prompt}\n\nUser request: {req.prompt}"
@@ -692,7 +739,10 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         "--source", "tool",
         "--yolo",
         "--ignore-rules",
-        "--ignore-user-config",
+        # AIOS: do NOT pass --ignore-user-config. It also strips the model/provider
+        # config from HERMES_HOME/config.yaml, so the agent runs with no LLM endpoint
+        # ("HTTP 404: No endpoints found for .") and every edit no-ops. --ignore-rules
+        # already skips rule/hook enforcement; the model config must be kept.
         "--worktree",
         "--max-turns", "20",
     ]
@@ -741,13 +791,19 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     # Monitor process completion
     def _monitor() -> None:
         try:
-            exit_code = proc.wait()
+            exit_code = proc.wait(timeout=AGENT_JOB_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _terminate_proc(proc)
+            try:
+                exit_code = proc.wait(timeout=10)
+            except Exception:
+                exit_code = -1
         finally:
             try:
                 log_file.close()
             except Exception:
                 pass
-        summary = "Agent finished"
+        summary = "Agent finished" if exit_code == 0 else f"Agent stopped (exit {exit_code})"
         try:
             log_text = log_path.read_text(encoding="utf-8", errors="replace")
             lines = [ln for ln in log_text.splitlines() if ln.strip()]

@@ -404,6 +404,14 @@ export function getHermesConfigSchema(): Promise<ConfigSchemaResponse> {
   })
 }
 
+/** Profile-scoped raw config.yaml text + absolute path (web Config page parity). */
+export function getHermesConfigRaw(): Promise<{ path: string; yaml: string }> {
+  return window.hermesDesktop.api<{ path: string; yaml: string }>({
+    ...profileScoped(),
+    path: '/api/config/raw'
+  })
+}
+
 export function saveHermesConfig(config: HermesConfigRecord): Promise<{ ok: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean }>({
     ...profileScoped(),

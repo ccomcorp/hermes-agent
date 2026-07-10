@@ -54,6 +54,7 @@ import type { WorkbenchDesignArtifact } from '@hermes/shared'
  */
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -65,13 +66,15 @@ import { requestStartWorkSession } from '@/store/projects'
 import { $connection } from '@/store/session'
 
 import { PanelEmpty } from '../overlays/panel'
+import { CANVAS_ROUTE } from '../routes'
 
 import {
   createDesignArtifact,
   linkKanbanCardToRequirement,
   listDesignArtifacts,
   readDesignArtifact,
-  readRequirement
+  readRequirement,
+  updateRequirement
 } from './api'
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
@@ -83,12 +86,15 @@ import {
   kanbanStatusBadgeVariant,
   sendDesignToKanban
 } from './design-kanban'
+import { builtEntryCandidates, extractDevPreviewUrl, toFileUrl } from './built-result'
+import { openInCanvas } from './open-in-canvas'
 import { DesignPrototypePreview } from './design-prototype-preview'
 import {
   $workbenchActiveRequirementId,
   $workbenchActiveRequirementTrace,
   $workbenchDesignSettings,
-  addLinkedKanbanCardId
+  addLinkedKanbanCardId,
+  setWorkbenchActiveRequirementTrace
 } from './store'
 import { workbenchStrings as s } from './strings'
 
@@ -106,6 +112,19 @@ type ArtifactViewTab = 'preview' | 'source'
 // (one GET per linked card per tick). Polling stops entirely once every linked
 // card is terminal (done/archived) — see the poller effect below.
 const KANBAN_STATUS_POLL_MS = 5000
+
+// Requirement status lifecycle order — mirrors REQUIREMENT_STATUS_ORDER in
+// workbench-artifacts.cjs and STATUS_OPTIONS in requirement-panel.tsx. Used
+// only for the client-side "already at/after this status?" guard so the
+// card-done auto-advance below never re-writes an already-advanced requirement.
+const REQUIREMENT_STATUS_ORDER = [
+  'draft', 'clarified', 'planned', 'in_progress',
+  'implemented', 'reviewed', 'verified', 'archived'
+]
+
+function statusAtOrAfter(current: string, target: string): boolean {
+  return REQUIREMENT_STATUS_ORDER.indexOf(current) >= REQUIREMENT_STATUS_ORDER.indexOf(target)
+}
 
 interface DesignGenerationPanelProps {
   workspaceRoot: string
@@ -142,6 +161,15 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
   // still absent from the map has simply not been fetched yet). Never throws:
   // getKanbanCard fully degrades to null, so this map never carries an error.
   const [cardStatuses, setCardStatuses] = useState<Record<string, KanbanCardStatus | null>>({})
+
+  // "Surface the built page" (Kun-informed): once a linked card reports done,
+  // the dev orchestrator has written the deliverable into the PROJECT dir.
+  // builtResult holds the located built HTML (path + content); builtOpen toggles
+  // its sandboxed preview dialog. Null until a built entry is found.
+  const [builtResult, setBuiltResult] = useState<{ path: string; html: string } | null>(null)
+  const [builtOpen, setBuiltOpen] = useState(false)
+  const [canvasBusy, setCanvasBusy] = useState(false)
+  const navigate = useNavigate()
 
   // Fetch every linked card's live status in parallel (one GET each) and
   // replace the map. Identity changes only when the linked-id set changes, so
@@ -240,6 +268,137 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
       setArtifacts([])
     }
   }, [loadArtifacts, requirementId])
+
+  // Auto-advance the requirement to `implemented` once a linked Kanban card
+  // reports done — the completion half of the status feedback loop (the send
+  // half advances to in_progress server-side in linkKanbanCardToRequirement).
+  // Forward-only and idempotent: no-ops when the requirement is already at/after
+  // implemented, so the 5s status poll above never triggers a redundant write.
+  useEffect(() => {
+    if (!requirementId) {
+      return
+    }
+
+    const anyDone = linkedKanbanCardIds.some(id => cardStatuses[id]?.status === 'done')
+    const current = activeTrace && activeTrace.requirementId === requirementId ? activeTrace.status : null
+
+    if (!anyDone || !current || statusAtOrAfter(current, 'implemented')) {
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      const reqRes = await readRequirement(workspaceRoot, requirementId)
+      if (cancelled || !reqRes.ok) {
+        return
+      }
+
+      const upd = await updateRequirement({
+        workspaceRoot,
+        requirementId,
+        markdown: reqRes.value.markdown,
+        status: 'implemented',
+        autoAdvance: true
+      })
+      if (cancelled || !upd.ok) {
+        return
+      }
+
+      // Mirror the advance so the requirement panel's Status reflects it live,
+      // guarded to the still-open requirement.
+      if (reqRes.value.trace && $workbenchActiveRequirementId.get() === requirementId) {
+        setWorkbenchActiveRequirementTrace({
+          ...reqRes.value.trace,
+          status: 'implemented',
+          updatedAt: upd.value.updatedAt
+        })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [cardStatuses, linkedKanbanCardIds, requirementId, activeTrace, workspaceRoot])
+
+  // Locate + load the built deliverable once a linked card reports done, so it
+  // can be surfaced (Kun Design-mode). Approach A: try the built-entry
+  // candidates with readFileText; take the first that reads as non-binary text.
+  useEffect(() => {
+    const anyDone = linkedKanbanCardIds.some(id => cardStatuses[id]?.status === 'done')
+
+    if (!anyDone || !workspaceRoot) {
+      setBuiltResult(null)
+
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      for (const candidate of builtEntryCandidates(workspaceRoot)) {
+        try {
+          const res = await window.hermesDesktop.readFileText(candidate)
+
+          if (cancelled) return
+
+          if (res && typeof res.text === 'string' && res.text.trim() && !res.binary) {
+            setBuiltResult({ path: res.path || candidate, html: res.text })
+
+            return
+          }
+        } catch {
+          // candidate missing/unreadable — try the next one
+        }
+      }
+
+      if (!cancelled) setBuiltResult(null)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [cardStatuses, linkedKanbanCardIds, workspaceRoot])
+
+  // Approach B (Kun Code-mode): if a done card's text carries a LOCAL dev-server
+  // URL, prefer offering a live preview. Static deliverables carry none → null,
+  // and the located file (Approach A) is previewed instead.
+  const devUrl = useMemo(() => {
+    for (const id of linkedKanbanCardIds) {
+      const c = cardStatuses[id]
+
+      if (c && c.status === 'done' && c.title) {
+        const u = extractDevPreviewUrl(c.title)
+
+        if (u) return u
+      }
+    }
+
+    return null
+  }, [cardStatuses, linkedKanbanCardIds])
+
+  // Hand the built project directory to the Canvas studio (Phase 0 of the
+  // Workbench->Canvas pipeline): open it there + start its dev server, then navigate
+  // to the Canvas tab so the user can select-to-edit the LIVE page. The launcher pins
+  // HERMES_CANVAS_PROJECTS_ROOT to the Workbench projects root so this path is accepted.
+  const handleOpenInCanvas = useCallback(async () => {
+    if (canvasBusy) {
+      return
+    }
+
+    setCanvasBusy(true)
+
+    try {
+      await openInCanvas(workspaceRoot)
+      setBuiltOpen(false)
+      notify({ kind: 'success', title: s.designGeneration.openedInCanvas, message: '' })
+      navigate(CANVAS_ROUTE)
+    } catch (err) {
+      notifyError(err, s.designGeneration.openInCanvasFailed)
+    } finally {
+      setCanvasBusy(false)
+    }
+  }, [canvasBusy, navigate, workspaceRoot])
 
   const handleGenerate = useCallback(
     async (kind: DesignGenerationKind) => {
@@ -365,7 +524,16 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
       const linkRes = await linkKanbanCardToRequirement(workspaceRoot, targetRequirementId, cardId)
 
       if (linkRes.ok) {
-        addLinkedKanbanCardId(targetRequirementId, cardId)
+        // linkRes.value is the authoritative updated trace: the card is linked
+        // AND the status has been auto-advanced to in_progress (forward-only,
+        // server-side in linkKanbanCardToRequirement). Mirror it so the
+        // requirement panel's Status + linked-cards list both reflect it live —
+        // guarded to the currently-open requirement.
+        if ($workbenchActiveRequirementId.get() === linkRes.value.requirementId) {
+          setWorkbenchActiveRequirementTrace(linkRes.value)
+        } else {
+          addLinkedKanbanCardId(targetRequirementId, cardId)
+        }
         notify({ kind: 'success', title: s.designGeneration.sentToKanban, message: '' })
       } else {
         // Card exists on the board; only the backlink failed. Surface it as a
@@ -493,6 +661,83 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
           </ul>
         </div>
       )}
+
+      {/* Built result (Kun-informed): once a linked card is done, surface what
+          the orchestrator wrote into the project dir — a live dev URL if one was
+          detected (Code-mode), else the built HTML file rendered in the SAME
+          sandboxed srcDoc preview used for prototypes (Design-mode). See
+          built-result.ts. */}
+      {(builtResult || devUrl) && (
+        <div className="flex flex-col gap-1 border-t border-(--ui-stroke-tertiary) pt-2">
+          <h3 className="text-[0.7rem] font-semibold text-muted-foreground/80">
+            {s.designGeneration.builtResultHeading}
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {devUrl && (
+              <Button onClick={() => void window.hermesDesktop.openExternal(devUrl)} size="sm" variant="outline">
+                <Codicon name="globe" size="0.8125rem" />
+                {s.designGeneration.builtLivePreview}
+              </Button>
+            )}
+            {builtResult && (
+              <Button onClick={() => setBuiltOpen(true)} size="sm" variant="outline">
+                <Codicon name="eye" size="0.8125rem" />
+                {s.designGeneration.builtView}
+              </Button>
+            )}
+            {builtResult && (
+              <Button
+                onClick={() => void window.hermesDesktop.openExternal(toFileUrl(builtResult.path))}
+                size="sm"
+                variant="outline"
+              >
+                <Codicon name="link-external" size="0.8125rem" />
+                {s.designGeneration.builtOpenExternal}
+              </Button>
+            )}
+            {builtResult && (
+              <Button disabled={canvasBusy} onClick={() => void handleOpenInCanvas()} size="sm" variant="default">
+                <Codicon name={canvasBusy ? 'loading' : 'sparkle'} size="0.8125rem" spinning={canvasBusy} />
+                {s.designGeneration.openInCanvas}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Built-page preview dialog: renders the located built HTML in the SAME
+          sandboxed srcDoc iframe used for prototypes (never a <webview>, never a
+          file:// src) — see design-prototype-preview.tsx. */}
+      <Dialog onOpenChange={setBuiltOpen} open={builtOpen}>
+        <DialogContent className="w-[88vw] max-w-[96vw]">
+          <DialogHeader>
+            <DialogTitle>{s.designGeneration.builtDialogTitle}</DialogTitle>
+          </DialogHeader>
+
+          {builtResult && (
+            <>
+              <p className="truncate font-mono text-[0.65rem] text-muted-foreground/60">{builtResult.path}</p>
+              {/* fill: big + manually resizable (drag the corner) so the built page is easy to appreciate */}
+              <DesignPrototypePreview fill html={builtResult.html} />
+            </>
+          )}
+
+          <DialogFooter>
+            {builtResult && (
+              <Button
+                onClick={() => void window.hermesDesktop.openExternal(toFileUrl(builtResult.path))}
+                variant="default"
+              >
+                <Codicon name="link-external" size="0.8125rem" />
+                {s.designGeneration.builtOpenExternal}
+              </Button>
+            )}
+            <Button onClick={() => setBuiltOpen(false)} variant="outline">
+              {s.designGeneration.sourceDialogClose}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Viewer dialog: read-only SOURCE TEXT (a <pre> block, unchanged from
           Slice G) is always available and is the default tab. For

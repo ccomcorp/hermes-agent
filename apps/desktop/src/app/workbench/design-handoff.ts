@@ -36,6 +36,20 @@ const PROTOTYPE_NOTE =
 
 const BRIEF_NOTE = 'It is a design brief describing target users, key screens/flows, and the intended style direction.'
 
+// Deliverable-format directive appended to every handoff so the orchestrator produces
+// a Canvas-native project (not a one-off static HTML file). Vite + React + Tailwind is
+// Canvas's native format: it enables click-to-select editing (via the overlay wired in
+// src/main.jsx) AND scales to complex pages. The design/brief describes INTENT, not the
+// stack — this overrides any "single HTML file" phrasing. No backticks (the brief handoff
+// asserts it contains no code fence).
+const CANVAS_PROJECT_NOTE =
+  ' Deliver this as a runnable Vite + React + Tailwind project (NOT a single static HTML file) so it can be ' +
+  'developed in the Canvas studio. Scaffold from the Canvas starter template in your Hermes home at ' +
+  'plugins/hermes-canvas/dashboard/templates/vite-react — it already imports src/hermes-canvas-overlay.js from ' +
+  'src/main.jsx to enable Canvas click-to-select — then run npm install and implement the design under src/ ' +
+  '(App.jsx and components). Add data-hermes-component, data-hermes-file, and data-hermes-role attributes to major ' +
+  'editable elements so Canvas selection maps a clicked element to the exact source file.'
+
 /**
  * Builds the seed message for a new chat session's first turn from a
  * generated design artifact's content — the ONLY thing this slice hands to
@@ -47,10 +61,10 @@ export function buildDesignHandoffMessage(kind: DesignGenerationKind, content: s
   const trimmed = content.trim()
 
   if (kind === 'prototype') {
-    return `${INSTRUCTION_PREFIX} ${PROTOTYPE_NOTE}\n\n\`\`\`html\n${trimmed}\n\`\`\``
+    return `${INSTRUCTION_PREFIX} ${PROTOTYPE_NOTE}${CANVAS_PROJECT_NOTE}\n\n\`\`\`html\n${trimmed}\n\`\`\``
   }
 
-  return `${INSTRUCTION_PREFIX} ${BRIEF_NOTE}\n\n${trimmed}`
+  return `${INSTRUCTION_PREFIX} ${BRIEF_NOTE}${CANVAS_PROJECT_NOTE}\n\n${trimmed}`
 }
 
 // Human-readable noun per generation kind, used only for the Kanban card

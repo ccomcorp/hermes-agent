@@ -47,6 +47,27 @@ function sanitizeId(id) {
     .replace(/^-+|-+$/g, '')
 }
 
+// Requirement status lifecycle, in order. Mirrors STATUS_OPTIONS in
+// requirement-panel.tsx and VALID_REQUIREMENT_STATUSES in shared/validators.ts.
+// Used ONLY for forward-only (monotonic) auto-advance driven by the Kanban
+// lifecycle — manual status edits are NEVER constrained by this order.
+const REQUIREMENT_STATUS_ORDER = [
+  'draft', 'clarified', 'planned', 'in_progress',
+  'implemented', 'reviewed', 'verified', 'archived'
+]
+
+function statusRank(status) {
+  const i = REQUIREMENT_STATUS_ORDER.indexOf(status)
+  return i === -1 ? 0 : i // unknown/undefined ranks as the earliest (draft)
+}
+
+// Forward-only: returns whichever of the two statuses is LATER in the
+// lifecycle. Guarantees an auto-advance can never move a requirement backward
+// (so a manually-set reviewed/verified/archived survives a later Kanban signal).
+function laterStatus(current, target) {
+  return statusRank(target) > statusRank(current) ? target : current
+}
+
 // ---------------------------------------------------------------------------
 // Content hashing
 // ---------------------------------------------------------------------------
@@ -215,7 +236,14 @@ function readManifest(workspaceRoot) {
 
 function createRequirement(workspaceRoot, input) {
   const now = new Date().toISOString()
-  const id = sanitizeId(input.title).slice(0, 20) || generateId('req')
+  // Re-sanitize AFTER truncating: slice(0, 20) can re-introduce a trailing
+  // hyphen that the first sanitizeId() already stripped (e.g. "coming-soon
+  // landing page" -> "coming-soon-landing-"), yielding an id that is NOT
+  // idempotent under sanitizeId. Every downstream lookup (design artifacts,
+  // kanban/plan backlinks, listDesignArtifacts) re-runs sanitizeId on this id,
+  // so a non-idempotent id silently splits a requirement from its artifacts.
+  // The invariant this restores: sanitizeId(id) === id for every requirement id.
+  const id = sanitizeId(sanitizeId(input.title).slice(0, 20)) || generateId('req')
   const uniqueId = ensureUniqueId(workspaceRoot, id, REQUIREMENTS_DIR)
 
   const relativeDir = `${REQUIREMENTS_DIR}/${uniqueId}`
@@ -341,14 +369,36 @@ function updateRequirement(workspaceRoot, requirementId, input) {
   if (trace) {
     trace.updatedAt = now
     if (input.title) trace.title = input.title
-    if (input.status) trace.status = input.status
-    trace.history.push({
-      id: generateId('trace'),
-      at: now,
-      actor: 'user',
-      kind: input.status ? 'status_changed' : 'updated',
-      summary: input.status ? `Status changed to ${input.status}` : 'Requirement updated'
-    })
+
+    if (input.autoAdvance && input.status) {
+      // Forward-only monotonic advance (Kanban-driven, e.g. a linked card
+      // reaching done -> implemented). A no-op if it would move backward, and
+      // records history ONLY when the status actually advances — so the
+      // renderer's 5s status poll can call this repeatedly without churn.
+      const advanced = laterStatus(trace.status, input.status)
+      if (advanced !== trace.status) {
+        trace.status = advanced
+        trace.history.push({
+          id: generateId('trace'),
+          at: now,
+          actor: 'agent',
+          kind: 'status_changed',
+          summary: `Status auto-advanced to ${advanced} (Kanban)`
+        })
+      }
+    } else {
+      // Manual update path — unchanged behavior (verbatim status set, any
+      // direction; the dropdown must be able to move a status backward too).
+      if (input.status) trace.status = input.status
+      trace.history.push({
+        id: generateId('trace'),
+        at: now,
+        actor: 'user',
+        kind: input.status ? 'status_changed' : 'updated',
+        summary: input.status ? `Status changed to ${input.status}` : 'Requirement updated'
+      })
+    }
+
     atomicWriteJSON(traceFullPath, trace)
   }
 
@@ -907,6 +957,22 @@ function linkKanbanCardToRequirement(workspaceRoot, requirementId, cardId) {
         kind: 'kanban_linked',
         summary: `Kanban card ${id} linked`
       })
+
+      // Auto-advance (forward-only): dispatching a design to Kanban means the
+      // requirement is now being implemented. laterStatus() guarantees this
+      // never moves a manually-advanced status backward.
+      const advanced = laterStatus(trace.status, 'in_progress')
+      if (advanced !== trace.status) {
+        trace.status = advanced
+        trace.history.push({
+          id: generateId('trace'),
+          at: now,
+          actor: 'agent',
+          kind: 'status_changed',
+          summary: `Status auto-advanced to ${advanced} (sent to Kanban)`
+        })
+      }
+
       atomicWriteJSON(fullPath, trace)
     }
 
@@ -1496,6 +1562,9 @@ module.exports = {
   _internal: {
     generateId,
     sanitizeId,
+    laterStatus,
+    statusRank,
+    REQUIREMENT_STATUS_ORDER,
     contentHash,
     atomicWriteFile,
     atomicWriteJSON,

@@ -356,7 +356,7 @@ export const en: Translations = {
       chat: 'Chat',
       appearance: 'Appearance',
       workspace: 'Workspace',
-      safety: 'Safety',
+      safety: 'Security',
       memory: 'Memory & Context',
       voice: 'Voice',
       advanced: 'Advanced'

@@ -62,6 +62,11 @@ export interface UpdateWorkbenchRequirementInput {
   markdown: string
   title?: string
   status?: WorkbenchRequirementStatus
+  // When true, `status` is applied FORWARD-ONLY (monotonic): the backend keeps
+  // whichever of current/target ranks later in the lifecycle, so a Kanban-driven
+  // auto-advance can never pull a manually-advanced status backward. Manual
+  // (dropdown) saves omit this and set the status verbatim, any direction.
+  autoAdvance?: boolean
 }
 
 // `requirements:list` returns the manifest rows (id/title/relativePath/

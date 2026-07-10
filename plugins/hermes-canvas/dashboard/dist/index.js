@@ -189,75 +189,97 @@
     }, [parentDir, projectName, props.onProjectChange]);
 
     const onOpen = useCallback(function () {
-      const path = (openPath || '').trim();
-      if (!path) { setError('Enter a project path'); return; }
-      setError('');
-      setOpening(true);
-      postJSON('/project/open', { projectPath: path })
-        .then(function (res) {
-          if (props.onProjectChange) props.onProjectChange(res.project_path);
-          setOpenPath('');
-        })
-        .catch(function (err) { setError(text(err.message, 'Open failed')); })
-        .finally(function () { setOpening(false); });
-    }, [openPath, props.onProjectChange]);
+          const path = (openPath || '').trim();
+          // AIOS UX: the top path is a READ-ONLY status chip (current project), NOT the
+          // open field. Empty openPath used to show a bare "Enter a project path" error
+          // that sat above the chip and looked like a label for a locked input.
+          if (!path) {
+            setError('Paste a folder path in the box under Open existing project, then click Open. Example: I:\\PROJECTS\\AIFIN\\frontend');
+            return;
+          }
+          setError('');
+          setOpening(true);
+          postJSON('/project/open', { projectPath: path })
+            .then(function (res) {
+              if (props.onProjectChange) props.onProjectChange(res.project_path);
+              setOpenPath('');
+            })
+            .catch(function (err) { setError(text(err.message, 'Open failed')); })
+            .finally(function () { setOpening(false); });
+        }, [openPath, props.onProjectChange]);
 
-    return h('div', { className: 'hc-panel' },
-      h('div', { className: 'hc-panel-title' }, 'Project'),
-      error ? h('p', { className: 'text-xs text-red-500' }, error) : null,
+        return h('div', { className: 'hc-panel' },
+          h('div', { className: 'hc-panel-title' }, 'Project'),
+          error ? h('p', { className: 'text-xs text-red-500 hc-error' }, error) : null,
 
-      props.projectPath
-        ? h('div', { className: 'hc-badge' }, trimText(props.projectPath, 50))
-        : h('p', { className: 'text-xs text-muted-foreground' }, 'No project selected'),
+          // AIOS: explicit "Current project" label + non-input styling so this is never
+          // mistaken for an editable path field (the real open box is further below).
+          h('label', { className: 'text-xs text-muted-foreground' }, 'Current project'),
+          props.projectPath
+            ? h('div', {
+                className: 'hc-current-path',
+                title: props.projectPath
+              }, props.projectPath)
+            : h('p', { className: 'text-xs text-muted-foreground' }, 'None selected yet'),
 
-      h(Separator, null),
+          h(Separator, null),
 
-      h('div', { className: 'flex flex-col gap-2' },
-        h('label', { className: 'text-xs text-muted-foreground' }, 'Create new project'),
-        h('div', { className: 'hc-form-row' },
-          h('input', {
-            className: 'hc-input',
-            placeholder: 'Project name',
-            value: projectName,
-            onChange: function (e) { setProjectName(e.target.value); }
-          }),
-          h(Button, {
-            className: 'hc-btn hc-btn-primary',
-            onClick: onCreate,
-            disabled: creating
-          }, creating ? 'Creating...' : 'Create')
-        ),
-        h('input', {
-          className: 'hc-input',
-          placeholder: props.defaultProjectParent ? 'Default: ' + props.defaultProjectParent : 'Default: ~/.hermes/canvas-projects',
-          value: parentDir,
-          onChange: function (e) { setParentDir(e.target.value); }
-        }),
-        h('p', { className: 'text-xs text-muted-foreground' },
-          'Leave blank to create under ',
-          h('code', null, props.defaultProjectParent || '~/.hermes/canvas-projects')
-        )
-      ),
+          // Open-existing first: primary path for real apps (AIFIN, etc.)
+          h('div', { className: 'flex flex-col gap-2' },
+            h('label', { className: 'text-xs text-muted-foreground' }, 'Open existing project'),
+            h('p', { className: 'text-xs text-muted-foreground' },
+              'Type or paste a full folder path that contains package.json or index.html, then click Open.'
+            ),
+            h('div', { className: 'hc-form-row' },
+              h('input', {
+                className: 'hc-input',
+                placeholder: 'I:\\PROJECTS\\AIFIN\\frontend',
+                value: openPath,
+                onChange: function (e) { setOpenPath(e.target.value); },
+                onKeyDown: function (e) {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    onOpen();
+                  }
+                }
+              }),
+              h(Button, {
+                className: 'hc-btn hc-btn-primary',
+                onClick: onOpen,
+                disabled: opening
+              }, opening ? 'Opening...' : 'Open')
+            )
+          ),
 
-      h(Separator, null),
+          h(Separator, null),
 
-      h('div', { className: 'flex flex-col gap-2' },
-        h('label', { className: 'text-xs text-muted-foreground' }, 'Open existing project'),
-        h('div', { className: 'hc-form-row' },
-          h('input', {
-            className: 'hc-input',
-            placeholder: '/path/to/project',
-            value: openPath,
-            onChange: function (e) { setOpenPath(e.target.value); }
-          }),
-          h(Button, {
-            className: 'hc-btn hc-btn-primary',
-            onClick: onOpen,
-            disabled: opening
-          }, opening ? 'Opening...' : 'Open')
-        )
-      )
-    );
+          h('div', { className: 'flex flex-col gap-2' },
+            h('label', { className: 'text-xs text-muted-foreground' }, 'Create new project'),
+            h('div', { className: 'hc-form-row' },
+              h('input', {
+                className: 'hc-input',
+                placeholder: 'Project name',
+                value: projectName,
+                onChange: function (e) { setProjectName(e.target.value); }
+              }),
+              h(Button, {
+                className: 'hc-btn hc-btn-primary',
+                onClick: onCreate,
+                disabled: creating
+              }, creating ? 'Creating...' : 'Create')
+            ),
+            h('input', {
+              className: 'hc-input',
+              placeholder: props.defaultProjectParent ? 'Default: ' + props.defaultProjectParent : 'Default: ~/.hermes/canvas-projects',
+              value: parentDir,
+              onChange: function (e) { setParentDir(e.target.value); }
+            }),
+            h('p', { className: 'text-xs text-muted-foreground' },
+              'Leave blank to create under ',
+              h('code', null, props.defaultProjectParent || '~/.hermes/canvas-projects')
+            )
+          )
+        );
   }
 
   // -------------------------------------------------------------------------

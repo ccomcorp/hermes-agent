@@ -70,6 +70,10 @@ export function RequirementPanel({ workspaceRoot }: RequirementPanelProps) {
   const activeId = useStore($workbenchActiveRequirementId)
   const listLoading = useStore($workbenchListLoading)
   const listError = useStore($workbenchListError)
+  // The shared trace mirror — the design panel advances `status` on it when a
+  // requirement is sent to Kanban / its linked card reports done. Subscribing
+  // here lets the Status dropdown reflect that live (see the sync effect below).
+  const activeTrace = useStore($workbenchActiveRequirementTrace)
 
   const [detail, setDetail] = useState<WorkbenchRequirementDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -110,6 +114,27 @@ export function RequirementPanel({ workspaceRoot }: RequirementPanelProps) {
     setDetail(null)
     void load()
   }, [load])
+
+  // Reflect an externally-driven status change (Kanban auto-advance, applied to
+  // the shared trace mirror by the design panel) in this panel's Status
+  // dropdown — but ONLY when the mirror belongs to the open requirement and the
+  // user has no unsaved status edit, so a manual in-progress change is never
+  // clobbered. Forward-only on the backend, so this only ever moves forward.
+  useEffect(() => {
+    if (!activeTrace || activeTrace.requirementId !== activeId || !detail) {
+      return
+    }
+
+    const mirrored = activeTrace.status ?? 'draft'
+    const baseline = detail.trace?.status ?? 'draft'
+
+    if (draftStatus === baseline && mirrored !== baseline) {
+      setDraftStatus(mirrored)
+      setDetail(current =>
+        current && current.trace ? { ...current, trace: { ...current.trace, status: mirrored } } : current
+      )
+    }
+  }, [activeTrace, activeId, detail, draftStatus])
 
   const openRequirement = useCallback(
     async (requirementId: string) => {

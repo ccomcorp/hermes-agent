@@ -274,6 +274,17 @@ export const workbenchStrings = {
     sourceDialogClose: 'Close',
     prototypeSourceHint: 'Raw HTML source — shown as read-only text, never rendered.',
 
+    // "Surface the built page" (Kun-informed) — shown once a linked Kanban card
+    // reports done and the orchestrator's deliverable is located in the project dir.
+    builtResultHeading: 'Built result',
+    builtView: 'View built page',
+    builtOpenExternal: 'Open in browser',
+    builtLivePreview: 'Open live preview',
+    builtDialogTitle: 'Built page',
+    openInCanvas: 'Open in Canvas',
+    openedInCanvas: 'Opened in Canvas — develop it there with select-to-edit',
+    openInCanvasFailed: 'Could not open in Canvas',
+
     // Design-to-code handoff (Slice I — go-forward plan §5 Slice I, the final
     // slice). Opens a fresh chat session seeded with this artifact's content
     // so the user's existing agent implements it — see design-handoff.ts and

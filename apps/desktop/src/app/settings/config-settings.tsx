@@ -333,7 +333,28 @@ export function ConfigSettings({
     }
 
     return new Map(
-      SECTIONS.map(s => [s.id, s.keys.flatMap(k => (schema[k] ? [[k, schema[k]] as [string, ConfigFieldSchema]] : []))])
+      SECTIONS.map(section => {
+        // Schema-category sections (web-dashboard parity): every field whose
+        // schema.category matches — new DEFAULT_CONFIG keys appear automatically.
+        if (section.schemaCategory) {
+          const fromCategory = Object.entries(schema).filter(
+            ([, field]) => (field.category ?? 'general') === section.schemaCategory
+          ) as [string, ConfigFieldSchema][]
+
+          const explicit = section.keys.flatMap(k =>
+            schema[k] ? [[k, schema[k]] as [string, ConfigFieldSchema]] : []
+          )
+          const explicitKeys = new Set(explicit.map(([k]) => k))
+          const rest = fromCategory.filter(([k]) => !explicitKeys.has(k))
+
+          return [section.id, [...explicit, ...rest]] as const
+        }
+
+        return [
+          section.id,
+          section.keys.flatMap(k => (schema[k] ? [[k, schema[k]] as [string, ConfigFieldSchema]] : []))
+        ] as const
+      })
     )
   }, [schema])
 
@@ -434,7 +455,10 @@ export function ConfigSettings({
     return <LoadingState label={c.loading} />
   }
 
-  const visibleFields = activeSectionId === 'voice' ? fields.filter(([key]) => voiceFieldVisible(key, config)) : fields
+  const visibleFields =
+    activeSectionId === 'voice' || activeSectionId === 'tts' || activeSectionId === 'stt'
+      ? fields.filter(([key]) => voiceFieldVisible(key, config))
+      : fields
 
   return (
     <SettingsContent>

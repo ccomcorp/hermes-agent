@@ -68,17 +68,62 @@
  * iframe — it is exactly as isolated as any ordinary sandboxed iframe in a
  * plain browser tab.
  */
+import { type PointerEvent as ReactPointerEvent, useRef } from 'react'
+
 import { Codicon } from '@/components/ui/codicon'
 
 import { workbenchStrings as s } from './strings'
 
 interface DesignPrototypePreviewProps {
   html: string
+  // `fill`: the larger "built page" dialog wants a big, MANUALLY RESIZABLE
+  // preview (drag the bottom-right corner to make it wider/taller) instead of
+  // the compact fixed-height box the prototype preview uses. Sizing ONLY — the
+  // sandbox attribute below is byte-for-byte identical in both modes.
+  fill?: boolean
 }
 
-export function DesignPrototypePreview({ html }: DesignPrototypePreviewProps) {
+export function DesignPrototypePreview({ html, fill = false }: DesignPrototypePreviewProps) {
+  const boxRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLIFrameElement>(null)
+
+  // Manual drag-to-resize for fill mode. A plain CSS `resize` handle does NOT work
+  // over an iframe — the cross-origin frame swallows the corner-grip pointer events —
+  // so we drive it ourselves: during a drag we set the box's inline width/height AND
+  // temporarily disable the iframe's pointer-events, so pointermove keeps reaching this
+  // window even while the cursor is over the preview.
+  const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const box = boxRef.current
+    if (!box) return
+
+    e.preventDefault()
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = box.offsetWidth
+    const startH = box.offsetHeight
+    const frame = frameRef.current
+    if (frame) frame.style.pointerEvents = 'none'
+
+    const onMove = (ev: PointerEvent) => {
+      box.style.width = `${Math.max(360, startW + (ev.clientX - startX))}px`
+      box.style.height = `${Math.max(240, startH + (ev.clientY - startY))}px`
+    }
+    const onUp = () => {
+      if (frame) frame.style.pointerEvents = ''
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const containerClass = fill
+    ? 'relative flex h-[64vh] min-h-64 w-full flex-col overflow-hidden rounded-md border border-(--ui-stroke-secondary)'
+    : 'flex max-h-96 min-h-64 flex-1 flex-col overflow-hidden rounded-md border border-(--ui-stroke-secondary)'
+
   return (
-    <div className="flex max-h-96 min-h-64 flex-1 flex-col overflow-hidden rounded-md border border-(--ui-stroke-secondary)">
+    <div className={containerClass} ref={boxRef}>
       <div className="flex shrink-0 items-center gap-1.5 border-b border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-2 py-1 text-[0.65rem] font-medium text-muted-foreground/70">
         <Codicon name="shield" size="0.75rem" />
         {s.designGeneration.previewSandboxBadge}
@@ -88,10 +133,23 @@ export function DesignPrototypePreview({ html }: DesignPrototypePreviewProps) {
           the sandbox attribute's exact value and reasoning. */}
       <iframe
         className="min-h-64 flex-1 border-0 bg-white"
+        ref={frameRef}
         sandbox="allow-scripts"
         srcDoc={html}
         title={s.designGeneration.previewIframeTitle}
       />
+      {fill && (
+        <div
+          aria-label="Drag to resize"
+          className="absolute bottom-0 right-0 z-20 h-5 w-5 cursor-nwse-resize"
+          onPointerDown={onResizeStart}
+          style={{
+            background:
+              'linear-gradient(135deg, transparent 0 58%, var(--ui-stroke-secondary) 58% 70%, transparent 70% 80%, var(--ui-stroke-secondary) 80% 92%, transparent 92%)'
+          }}
+          title="Drag to resize"
+        />
+      )}
     </div>
   )
 }
