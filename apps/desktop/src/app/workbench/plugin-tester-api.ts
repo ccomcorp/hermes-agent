@@ -105,7 +105,13 @@ export function deleteCollection(
 export function listHistory(
   workspaceRoot: string,
   collectionId?: string
-): Promise<WorkbenchIpcResult<PluginTesterHistoryManifestEntry[]>> {
+  // Paginated shape { entries, total } — matches the backend store.listHistory
+  // return (workbench-plugin-tester-store.cjs) and the IPC test's
+  // `.value.entries` assertion. This was previously mis-typed as a bare
+  // `PluginTesterHistoryManifestEntry[]`; the underlying `<any>` IPC result
+  // silently accepted the wrong annotation, so callers read res.value as an
+  // array and crashed at runtime ("s.map is not a function").
+): Promise<WorkbenchIpcResult<{ entries: PluginTesterHistoryManifestEntry[]; total: number }>> {
   return window.hermesDesktop.workbench.pluginTester.history.list({ workspaceRoot, collectionId })
 }
 

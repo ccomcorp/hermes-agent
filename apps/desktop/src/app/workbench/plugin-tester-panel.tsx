@@ -1,3 +1,11 @@
+import type {
+  PluginTesterAuth,
+  PluginTesterCollectionManifestEntry,
+  PluginTesterHistoryManifestEntry,
+  PluginTesterRequest,
+  PluginTesterResponse,
+  PluginTesterTimingTrace
+} from '@hermes/shared'
 /**
  * Plugin Tester panel — Postman-style HTTP request composer and response viewer.
  *
@@ -8,15 +16,6 @@
 import { useStore } from '@nanostores/react'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-
-import type {
-  PluginTesterAuth,
-  PluginTesterCollectionManifestEntry,
-  PluginTesterHistoryManifestEntry,
-  PluginTesterRequest,
-  PluginTesterResponse,
-  PluginTesterTimingTrace
-} from '@hermes/shared'
 
 import { PageLoader } from '@/components/page-loader'
 import { Badge } from '@/components/ui/badge'
@@ -82,8 +81,11 @@ const METHOD_COLORS: Record<string, string> = {
 
 function STATUS_COLOR(status: number): string {
   if (status < 200) { return 'bg-slate-500/15 text-slate-500' }
+
   if (status < 300) { return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' }
+
   if (status < 400) { return 'bg-blue-500/15 text-blue-600 dark:text-blue-400' }
+
   if (status < 500) { return 'bg-amber-500/15 text-amber-600 dark:text-amber-400' }
 
   return 'bg-red-500/15 text-red-600 dark:text-red-400'
@@ -315,7 +317,11 @@ export function PluginTesterPanel({ workspaceRoot }: PluginTesterPanelProps) {
       const res = await api.listHistory(workspaceRoot, activeCollectionId ?? undefined)
 
       if (res.ok) {
-        setPluginTesterHistory(res.value)
+        // listHistory returns a paginated shape { entries, total } (unlike
+        // collections/environments which return a bare array), so extract
+        // `.entries` — assigning res.value directly made the history atom a
+        // non-array and crashed the pane's `.map()` ("s.map is not a function").
+        setPluginTesterHistory(res.value.entries)
       } else {
         setPluginTesterHistoryError(res.message)
       }
@@ -343,9 +349,13 @@ export function PluginTesterPanel({ workspaceRoot }: PluginTesterPanelProps) {
     const prms = kvToRecord(params)
 
     if (Object.keys(prms).length > 0) { req.params = prms }
+
     if (body) { req.body = body }
+
     if (contentType) { req.contentType = contentType }
+
     if (auth.type !== 'none') { req.auth = { ...auth } }
+
     if (timeout) { req.timeout = timeout }
 
     return req
@@ -470,6 +480,7 @@ export function PluginTesterPanel({ workspaceRoot }: PluginTesterPanelProps) {
           setBody(req.body ?? '')
           setContentType(req.contentType ?? 'application/json')
           setAuth(req.auth ?? { type: 'none' })
+
           if (req.timeout) { setTimeout_(req.timeout) }
         }
       } catch (err) {
@@ -525,7 +536,9 @@ export function PluginTesterPanel({ workspaceRoot }: PluginTesterPanelProps) {
           setBody(res.value.request.body ?? '')
           setContentType(res.value.request.contentType ?? 'application/json')
           setAuth(res.value.request.auth ?? { type: 'none' })
+
           if (res.value.request.timeout) { setTimeout_(res.value.request.timeout) }
+
           if (res.value.response) {
             setResponse(res.value.response)
             setTrace(res.value.trace)
