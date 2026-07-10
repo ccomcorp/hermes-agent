@@ -83,3 +83,18 @@ def test_resolve_none_when_no_element(tmp_path):
     mod = _load()
     proj = _mkproject(tmp_path, SRC_EXTS_FIXTURE)
     assert mod._resolve_target_file(proj, None) is None
+
+def test_build_edit_prompt_direct_when_resolved(tmp_path):
+    mod = _load()
+    resolved = {"rel_path": "index.html", "abs_path": str(tmp_path / "index.html"), "source": "hermes_file"}
+    (tmp_path / "index.html").write_text("<h1>Hi</h1>", encoding="utf-8")
+    p = mod._build_edit_prompt("make it Hello", resolved, {"text": "Hi"}, [])
+    assert "index.html" in p and "Hi" not in p.split("Hello")[0] or "Edit THIS file" in p
+    assert "check the files first" not in p.lower()
+    assert "Edit THIS file" in p
+
+def test_build_edit_prompt_hint_when_unresolved():
+    mod = _load()
+    p = mod._build_edit_prompt("do X", None, None, ["a.jsx", "b.css"])
+    assert "a.jsx" in p and "b.css" in p
+    assert "Edit THIS file" not in p

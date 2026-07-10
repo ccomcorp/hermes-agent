@@ -340,6 +340,34 @@ def _safe_read_contains(path: Path, needle: str) -> bool:
         return False
 
 
+def _build_edit_prompt(user_prompt: str, resolved: dict | None,
+                       selected_element: dict | None, file_list: list[str]) -> str:
+    if resolved:
+        try:
+            contents = Path(resolved["abs_path"]).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            contents = ""
+        head = (
+            "You are editing a web project. Edit THIS file directly - do not search other files.\n"
+            f"PATH: {resolved['rel_path']}\n---\n{contents}\n---\n"
+            "Apply the change concisely. Preserve/add data-hermes-component, data-hermes-file, "
+            "and data-hermes-role attributes on major elements. Do a quick read-back, then finish."
+        )
+    else:
+        listing = "\n".join(file_list[:200])
+        head = (
+            "You are editing a web project in the current directory. It may be static HTML/CSS/JS "
+            "or a Vite + React + Tailwind app - check the files first. Make the change concisely in "
+            "the relevant file(s). Preserve/add data-hermes-* attributes on major elements. Do NOT "
+            "run headless browsers, screenshots, or verification scripts.\n"
+            f"Project files:\n{listing}"
+        )
+    prompt = f"{head}\n\nUser request: {user_prompt}"
+    if selected_element:
+        prompt += f"\n\nSelected element context: {json.dumps(selected_element)}"
+    return prompt
+
+
 def _has_npm() -> bool:
     return _which("npm") is not None
 
@@ -784,26 +812,16 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     log_path = _jobs_dir() / f"{job_id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    system_prompt = (
-        "You are editing a web project in the current directory. It may be a static "
-        "HTML/CSS/JS site OR a Vite + React + Tailwind app — check the files first, do "
-        "not assume. Make the user's requested change DIRECTLY and CONCISELY in the "
-        "relevant file(s). When you add or modify a major element, add "
-        "data-hermes-component, data-hermes-file, and data-hermes-role attributes for "
-        "Canvas selection support. Do NOT run headless browsers, screenshot tools, or "
-        "lengthy verification scripts — apply the edit, do a quick read-back of the file "
-        "to confirm it, and finish promptly."
-    )
-
-    full_prompt = f"{system_prompt}\n\nUser request: {req.prompt}"
-    if req.selected_element:
-        full_prompt += f"\n\nSelected element context: {json.dumps(req.selected_element)}"
+    # project_path is already validated above. Resolve the target file + build the prompt.
+    resolved = _resolve_target_file(project_path, req.selected_element)
+    file_list = [str(p.relative_to(project_path)) for p in _list_source_files(project_path)] if not resolved else []
+    full_prompt = _build_edit_prompt(req.prompt, resolved, req.selected_element, file_list)
 
     cmd = [
         hermes_bin,
         "chat",
         "-q", full_prompt,
-        "-t", "file,terminal",
+        "-t", "file",
         "--quiet",
         "--source", "tool",
         "--yolo",
@@ -813,7 +831,7 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         # ("HTTP 404: No endpoints found for .") and every edit no-ops. --ignore-rules
         # already skips rule/hook enforcement; the model config must be kept.
         "--worktree",
-        "--max-turns", "20",
+        "--max-turns", "3",
     ]
 
     log_file = open(log_path, "w", encoding="utf-8")
@@ -826,6 +844,11 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     )
 
     _state.register_agent(job_id, proc, log_path, req.prompt)
+
+    with _state.lock:
+        if job_id in _state.agent_jobs:
+            _state.agent_jobs[job_id]["resolution_source"] = resolved["source"] if resolved else "none"
+            _state.agent_jobs[job_id]["target_file"] = resolved["rel_path"] if resolved else None
 
     # Track worktree path for live syncing
     _worktree_paths: dict[str, Path] = {}
