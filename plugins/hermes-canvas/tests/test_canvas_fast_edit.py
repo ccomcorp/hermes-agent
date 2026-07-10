@@ -102,3 +102,22 @@ def test_build_edit_prompt_hint_when_unresolved():
     p = mod._build_edit_prompt("do X", None, None, ["a.jsx", "b.css"])
     assert "a.jsx" in p and "b.css" in p
     assert "Edit THIS file" not in p
+
+def test_sync_requires_explicit_worktree_no_mtime_fallback(tmp_path, monkeypatch):
+    mod = _load()
+    # a stale worktree exists; a direct project edit must NOT be reverted when we
+    # call sync with worktree_path=None (fallback must be a no-op now).
+    proj = tmp_path / "proj"; (proj / ".worktrees" / "old" / "src").mkdir(parents=True)
+    (proj / "src").mkdir(parents=True)
+    (proj / ".worktrees" / "old" / "src" / "App.jsx").write_text("STALE", encoding="utf-8")
+    (proj / "src" / "App.jsx").write_text("FRESH", encoding="utf-8")
+    monkeypatch.setattr(mod, "_which", lambda c: None)  # skip git commit path
+    mod._sync_worktree_changes(proj, None)  # None must be a no-op, not mtime-latest
+    assert (proj / "src" / "App.jsx").read_text(encoding="utf-8") == "FRESH"
+
+def test_prune_worktree_removes_dir(tmp_path):
+    mod = _load()
+    wt = tmp_path / ".worktrees" / "job1"; wt.mkdir(parents=True)
+    (wt / "f.txt").write_text("x", encoding="utf-8")
+    mod._prune_worktree(wt)
+    assert not wt.exists()

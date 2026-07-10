@@ -498,6 +498,13 @@ def _terminate_proc(proc: subprocess.Popen, timeout: int = 5) -> None:
         proc.wait()
 
 
+def _prune_worktree(worktree_path: Path) -> None:
+    try:
+        shutil.rmtree(worktree_path, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def _commit_if_changed(project_path: Path) -> None:
     git = _which("git")
     if not git:
@@ -509,17 +516,11 @@ def _commit_if_changed(project_path: Path) -> None:
 
 
 def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None) -> None:
-    """Copy modified files from git worktree back to main project for Vite HMR."""
-    if worktree_path is not None and not worktree_path.exists():
+    """Copy modified files from THIS job's git worktree back to the main project.
+    worktree_path is REQUIRED; the old max(mtime) fallback is removed because it could
+    copy a stale/leftover worktree over a fresh edit and commit the regression."""
+    if worktree_path is None or not worktree_path.exists():
         return
-    if worktree_path is None:
-        worktrees_dir = project_path / ".worktrees"
-        if not worktrees_dir.exists():
-            return
-        worktrees = [d for d in worktrees_dir.iterdir() if d.is_dir()]
-        if not worktrees:
-            return
-        worktree_path = max(worktrees, key=lambda p: p.stat().st_mtime)
     try:
         for subdir in ["src", "public"]:
             src = worktree_path / subdir
@@ -914,6 +915,9 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         except Exception:
             pass
         _state.update_agent(job_id, running=False, exit_code=exit_code, summary=summary)
+        wt = _worktree_paths.get(job_id)
+        if wt is not None:
+            _prune_worktree(wt)
 
     monitor_thread = threading.Thread(target=_monitor, daemon=True)
     monitor_thread.start()
