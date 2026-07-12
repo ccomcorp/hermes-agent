@@ -309,12 +309,9 @@ def _resolve_target_file(project_path: Path, selected_element: dict | None) -> d
     root = project_path.resolve()
 
     def _contains(abs_path: Path) -> bool:
-        if not text:
-            return True  # no text to verify against; attr is the only signal
-        try:
-            return text in abs_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            return False
+        # No text to verify against -> the attr is the only signal (trust it, no read).
+        # Otherwise delegate the read to the module-level helper (no duplicated try/except).
+        return True if not text else _safe_read_contains(abs_path, text)
 
     # 1) hermesAttributes.file (containment + wrong-file guard)
     attr = (selected_element.get("hermesAttributes") or {}).get("file")
@@ -346,7 +343,10 @@ def _build_edit_prompt(user_prompt: str, resolved: dict | None,
         try:
             contents = Path(resolved["abs_path"]).read_text(encoding="utf-8", errors="replace")
         except Exception:
-            contents = ""
+            # Resolver already proved this file exists, so a read failure here is rare.
+            # Surface it honestly instead of sending an empty body the agent would
+            # silently mis-edit against (it will open and inspect the file itself).
+            contents = "[file could not be read here - open and inspect it yourself before editing]"
         head = (
             "You are editing a web project. Edit THIS file directly - do not search other files.\n"
             f"PATH: {resolved['rel_path']}\n---\n{contents}\n---\n"
@@ -893,6 +893,9 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
                     with _state.lock:
                         if job_id in _state.agent_jobs:
                             _state.agent_jobs[job_id]["auth_error"] = True
+                    # Persist immediately (matches register_agent/update_agent), so the
+                    # flag survives a restart in the window before _monitor's update_agent.
+                    _state._save()
                     _terminate_proc(proc)
                     break
             except Exception:
