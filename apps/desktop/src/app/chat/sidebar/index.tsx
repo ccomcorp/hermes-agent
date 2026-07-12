@@ -111,7 +111,8 @@ import {
   PROFILES_ROUTE,
   SKILLS_ROUTE,
   SYSTEM_ROUTE,
-  WEBHOOKS_ROUTE
+  WEBHOOKS_ROUTE,
+  WORKBENCH_ROUTE
 } from '../../routes'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import type { SidebarNavItem } from '../../types'
@@ -170,6 +171,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   { id: 'webhooks', label: 'Webhooks', icon: props => <Codicon name="radio-tower" {...props} />, route: WEBHOOKS_ROUTE },
   { id: 'plugins', label: 'Plugins', icon: props => <Codicon name="extensions" {...props} />, route: PLUGINS_ROUTE },
   { id: 'files', label: 'Files', icon: props => <Codicon name="file-directory" {...props} />, route: FILES_ROUTE },
+  { id: 'workbench', label: 'Workbench', icon: props => <Codicon name="checklist" {...props} />, route: WORKBENCH_ROUTE }, // AIOS: hermes-workbench
   { id: 'system', label: 'System', icon: props => <Codicon name="pulse" {...props} />, route: SYSTEM_ROUTE },
   { id: 'config', label: 'Config', icon: props => <Codicon name="settings-gear" {...props} />, route: CONFIG_ROUTE },
   { id: 'logs', label: 'Logs', icon: props => <Codicon name="output" {...props} />, route: LOGS_ROUTE },

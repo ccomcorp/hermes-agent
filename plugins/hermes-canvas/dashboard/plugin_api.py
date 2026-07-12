@@ -34,6 +34,11 @@ DEFAULT_DEV_PORT = 5173
 MAX_PORT_ATTEMPTS = 32
 HTTP_SERVER_READY_RE = re.compile(r"Serving HTTP on\s+([\d.]+)\s+port\s+(\d+)")
 
+# Hard wall-clock cap for an agent edit job. Without it, a job that gets stuck (e.g. a
+# post-edit headless-browser validation) hangs forever on "running" and never flips to
+# done. The edit, if made, was already worktree-synced before the cap fires.
+AGENT_JOB_TIMEOUT_S = 300
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -55,7 +60,11 @@ def _jobs_dir() -> Path:
 
 
 def _templates_dir() -> Path:
-    return _plugin_dir() / "dashboard" / "templates"
+    # AIOS patch: templates ship WITH the plugin code (dashboard/templates), NOT in the
+    # runtime HERMES_HOME (which only holds canvas-state.json). Resolving relative to this
+    # file makes "Create new project" find the vite-react scaffold whether the plugin runs
+    # from the repo or an installed copy. (Upstream looked in _home()/plugins/... -> "Template not found".)
+    return Path(__file__).resolve().parent / "templates"
 
 
 def _projects_dir() -> Path:
@@ -77,6 +86,9 @@ class _State:
         self.dev_log_path: Path | None = None
         self.dev_stdout_thread: threading.Thread | None = None
         self.project_path: str | None = None
+        # Paths the user explicitly opened (project/open) that live OUTSIDE the canvas
+        # root; once opened they are allowlisted so their dev/agent ops pass validation.
+        self.opened_paths: set[str] = set()
         self.agent_jobs: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -87,6 +99,7 @@ class _State:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             self.project_path = data.get("project_path")
+            self.opened_paths = set(data.get("opened_paths", []))
             # Restore agent job metadata (not subprocess handles)
             for job_id, job in data.get("agent_jobs", {}).items():
                 if isinstance(job, dict):
@@ -106,6 +119,7 @@ class _State:
                 }
             payload = {
                 "project_path": self.project_path,
+                "opened_paths": sorted(self.opened_paths),
                 "agent_jobs": serializable_jobs,
             }
         tmp = path.with_suffix(".tmp")
@@ -115,6 +129,11 @@ class _State:
     def set_project(self, path: str) -> None:
         with self.lock:
             self.project_path = path
+        self._save()
+
+    def add_opened_path(self, path: str) -> None:
+        with self.lock:
+            self.opened_paths.add(path)
         self._save()
 
     def register_dev(self, proc: subprocess.Popen, port: int, preview_url: str, log_path: Path) -> None:
@@ -231,13 +250,17 @@ def _canvas_root() -> Path:
 
 
 def _validate_path(path: str) -> Path:
-    """Admit only paths under the AIOS canvas projects root."""
+    """Admit paths under the AIOS canvas projects root, OR any project the user has
+    explicitly opened via project/open (allowlisted in _state.opened_paths). Arbitrary
+    UNopened paths stay rejected for create/dev/agent operations."""
     root = _canvas_root()
     root.mkdir(parents=True, exist_ok=True)
     p = Path(path).expanduser().resolve()
-    if not (p == root or p.is_relative_to(root)):
-        raise HTTPException(status_code=400, detail="Path not allowed")
-    return p
+    if p == root or p.is_relative_to(root):
+        return p
+    if str(p) in _state.opened_paths:
+        return p
+    raise HTTPException(status_code=400, detail="Path not allowed (open it via 'Open existing project' first)")
 
 
 def _which(cmd: str) -> str | None:
@@ -260,6 +283,89 @@ def _resolve_hermes_bin() -> str | None:
         if cand.exists():
             return str(cand)
     return _which("hermes")
+
+
+_SOURCE_EXTS = {".html", ".htm", ".js", ".jsx", ".ts", ".tsx", ".css", ".vue", ".svelte"}
+_RESOLVE_SKIP_DIRS = {".git", ".worktrees", "node_modules", "__pycache__", "dist", ".vite"}
+
+
+def _list_source_files(project_path: Path) -> list[Path]:
+    """Fresh re-scan (not a cached re-stat) so agent-created files are always visible."""
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(project_path):
+        dirnames[:] = [d for d in dirnames if d not in _RESOLVE_SKIP_DIRS]
+        for fn in filenames:
+            if Path(fn).suffix.lower() in _SOURCE_EXTS:
+                out.append(Path(dirpath) / fn)
+    return out
+
+
+def _resolve_target_file(project_path: Path, selected_element: dict | None) -> dict | None:
+    """Resolve the file to edit. Returns {rel_path, abs_path, source} or None.
+    Wrong-file guarded: the resolved file must actually contain the element text."""
+    if not selected_element:
+        return None
+    text = (selected_element.get("text") or "").strip()
+    root = project_path.resolve()
+
+    def _contains(abs_path: Path) -> bool:
+        if not text:
+            return True  # no text to verify against; attr is the only signal
+        try:
+            return text in abs_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return False
+
+    # 1) hermesAttributes.file (containment + wrong-file guard)
+    attr = (selected_element.get("hermesAttributes") or {}).get("file")
+    if attr:
+        cand = (root / attr).resolve()
+        if (cand == root or cand.is_relative_to(root)) and cand.is_file() and _contains(cand):
+            return {"rel_path": str(cand.relative_to(root)), "abs_path": str(cand), "source": "hermes_file"}
+
+    # 2) unique text match across source files
+    if text:
+        hits = [p for p in _list_source_files(root)
+                if _safe_read_contains(p, text)]
+        if len(hits) == 1:
+            cand = hits[0].resolve()
+            return {"rel_path": str(cand.relative_to(root)), "abs_path": str(cand), "source": "unique_text"}
+    return None
+
+
+def _safe_read_contains(path: Path, needle: str) -> bool:
+    try:
+        return needle in path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+
+
+def _build_edit_prompt(user_prompt: str, resolved: dict | None,
+                       selected_element: dict | None, file_list: list[str]) -> str:
+    if resolved:
+        try:
+            contents = Path(resolved["abs_path"]).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            contents = ""
+        head = (
+            "You are editing a web project. Edit THIS file directly - do not search other files.\n"
+            f"PATH: {resolved['rel_path']}\n---\n{contents}\n---\n"
+            "Apply the change concisely. Preserve/add data-hermes-component, data-hermes-file, "
+            "and data-hermes-role attributes on major elements. Do a quick read-back, then finish."
+        )
+    else:
+        listing = "\n".join(file_list[:200])
+        head = (
+            "You are editing a web project in the current directory. It may be static HTML/CSS/JS "
+            "or a Vite + React + Tailwind app - check the files first. Make the change concisely in "
+            "the relevant file(s). Preserve/add data-hermes-* attributes on major elements. Do NOT "
+            "run headless browsers, screenshots, or verification scripts.\n"
+            f"Project files:\n{listing}"
+        )
+    prompt = f"{head}\n\nUser request: {user_prompt}"
+    if selected_element:
+        prompt += f"\n\nSelected element context: {json.dumps(selected_element)}"
+    return prompt
 
 
 def _has_npm() -> bool:
@@ -293,6 +399,35 @@ def _read_log_tail(log_path: Path | None, max_lines: int = 200) -> list[str]:
         return lines[-max_lines:] if len(lines) > max_lines else lines
     except Exception:
         return []
+
+
+def _detect_auth_error(lines: list[str]) -> bool:
+    """True only for a genuine auth failure. Requires an auth-signature phrase so
+    incidental substrings like '1401ms', a filename 'error-401.tsx', or a JS stack
+    frame like 'bundle.js:401:15' never match."""
+    for ln in lines:
+        low = ln.lower()
+        if "authentication failed" in low:
+            return True
+        if "no valid authentication credentials" in low:
+            return True
+        if "http 401" in low or "401 unauthorized" in low:
+            return True
+    return False
+
+
+def _compute_phase(job: dict) -> str:
+    running = job.get("running", False)
+    applied = job.get("applied", False)
+    exit_code = job.get("exit_code")
+    if job.get("needs_shell"):
+        return "needs_shell"
+    if running:
+        return "applied" if applied else "editing"
+    # finished: success requires a clean exit AND an applied edit
+    if applied and (exit_code == 0):
+        return "done_ok"
+    return "done_failed"
 
 
 def _copy_template(template_name: str, dest: Path) -> None:
@@ -378,28 +513,35 @@ def _terminate_proc(proc: subprocess.Popen, timeout: int = 5) -> None:
         proc.wait()
 
 
-def _commit_if_changed(project_path: Path) -> None:
+def _prune_worktree(worktree_path: Path) -> None:
+    try:
+        shutil.rmtree(worktree_path, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _commit_if_changed(project_path: Path) -> bool:
+    """Stage and commit any pending changes. Returns True iff a commit was made
+    (i.e. a real staged diff was found), False otherwise (including no-git)."""
     git = _which("git")
     if not git:
-        return
+        return False
     subprocess.run([git, "add", "."], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     diff = subprocess.run([git, "diff", "--cached", "--quiet"], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if diff.returncode != 0:
         subprocess.run([git, "commit", "-m", "canvas update", "--no-gpg-sign"], cwd=project_path, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return True
+    return False
 
 
-def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None) -> None:
-    """Copy modified files from git worktree back to main project for Vite HMR."""
-    if worktree_path is not None and not worktree_path.exists():
-        return
-    if worktree_path is None:
-        worktrees_dir = project_path / ".worktrees"
-        if not worktrees_dir.exists():
-            return
-        worktrees = [d for d in worktrees_dir.iterdir() if d.is_dir()]
-        if not worktrees:
-            return
-        worktree_path = max(worktrees, key=lambda p: p.stat().st_mtime)
+def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None) -> bool:
+    """Copy modified files from THIS job's git worktree back to the main project.
+    worktree_path is REQUIRED; the old max(mtime) fallback is removed because it could
+    copy a stale/leftover worktree over a fresh edit and commit the regression.
+    Returns True iff a real change was committed during this sync, False on every
+    early-return/no-op path (missing worktree, no git, or an exception)."""
+    if worktree_path is None or not worktree_path.exists():
+        return False
     try:
         for subdir in ["src", "public"]:
             src = worktree_path / subdir
@@ -420,9 +562,10 @@ def _sync_worktree_changes(project_path: Path, worktree_path: Path | None = None
         # Commit synced changes so next worktree starts from updated HEAD
         git = _which("git")
         if git:
-            _commit_if_changed(project_path)
+            return _commit_if_changed(project_path)
+        return False
     except Exception:
-        pass
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -530,12 +673,20 @@ async def project_create(req: CreateProjectRequest) -> dict[str, Any]:
 
 @router.post("/project/open")
 async def project_open(req: OpenProjectRequest) -> dict[str, Any]:
-    """Open an existing project."""
-    path = _validate_path(req.project_path)
+    """Open an existing project from ANY directory (not just under the canvas root)."""
+    # Relaxed resolution so "Open existing project" works for a project ANYWHERE. We
+    # resolve without the root restriction, verify it's a real project dir, then
+    # allowlist it (_state.opened_paths) so its later dev/start + agent ops pass
+    # _validate_path. (Upstream required the path be under the canvas root -> "Path not
+    # allowed" -> the Open button silently no-op'd for projects elsewhere.)
+    path = Path(req.project_path).expanduser().resolve()
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail="Project directory not found: " + str(path))
     package_json = path / "package.json"
     index_html = path / "index.html"
     if not package_json.exists() and not index_html.exists():
         raise HTTPException(status_code=400, detail="No package.json or index.html found in project path")
+    _state.add_opened_path(str(path))
     if not (path / ".git").exists():
         _git_init_and_commit(path)
     _state.set_project(str(path))
@@ -577,8 +728,12 @@ async def dev_start(req: StartDevRequest) -> dict[str, Any]:
         )
     elif index_html.exists():
         python = sys.executable
+        # AIOS: serve static projects through the overlay-injecting server so
+        # click-to-select works on plain static pages too (upstream `http.server`
+        # served files as-is -> no selection overlay -> "Select Element" did nothing).
+        static_server = str(Path(__file__).resolve().parent / "hermes_static_server.py")
         proc = subprocess.Popen(
-            [python, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+            [python, static_server, str(port)],
             cwd=project_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -666,35 +821,40 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     if not hermes_bin:
         raise HTTPException(status_code=500, detail="hermes CLI not found in PATH")
 
+    # Serialize edit jobs: terminate any still-running job before starting a new one.
+    # Two concurrent jobs each create their own .worktrees/* dir, and the live-sync
+    # picks the LATEST worktree by mtime — so a second prompt could race/overwrite the
+    # first and silently fail to land. One job at a time keeps the sync deterministic.
+    for _jid, _job in list(_state.agent_jobs.items()):
+        _p = _job.get("proc")
+        if _job.get("running") and _p is not None and _p.poll() is None:
+            _terminate_proc(_p)
+            _state.update_agent(_jid, running=False, exit_code=-1, summary="Superseded by a new prompt")
+
     job_id = f"agent-{_now_iso().replace(':', '-')}"
     log_path = _jobs_dir() / f"{job_id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    system_prompt = (
-        "You are editing a Vite React project. Work in the project directory. "
-        "Use file tools to read and write JSX/CSS files. "
-        "Keep components clean and cohesive. "
-        "When generating or modifying elements, add data-hermes-component, "
-        "data-hermes-file, and data-hermes-role attributes to major editable elements "
-        "for selection mode support."
-    )
-
-    full_prompt = f"{system_prompt}\n\nUser request: {req.prompt}"
-    if req.selected_element:
-        full_prompt += f"\n\nSelected element context: {json.dumps(req.selected_element)}"
+    # project_path is already validated above. Resolve the target file + build the prompt.
+    resolved = _resolve_target_file(project_path, req.selected_element)
+    file_list = [str(p.relative_to(project_path)) for p in _list_source_files(project_path)] if not resolved else []
+    full_prompt = _build_edit_prompt(req.prompt, resolved, req.selected_element, file_list)
 
     cmd = [
         hermes_bin,
         "chat",
         "-q", full_prompt,
-        "-t", "file,terminal",
+        "-t", "file",
         "--quiet",
         "--source", "tool",
         "--yolo",
         "--ignore-rules",
-        "--ignore-user-config",
+        # AIOS: do NOT pass --ignore-user-config. It also strips the model/provider
+        # config from HERMES_HOME/config.yaml, so the agent runs with no LLM endpoint
+        # ("HTTP 404: No endpoints found for .") and every edit no-ops. --ignore-rules
+        # already skips rule/hook enforcement; the model config must be kept.
         "--worktree",
-        "--max-turns", "20",
+        "--max-turns", "3",
     ]
 
     log_file = open(log_path, "w", encoding="utf-8")
@@ -708,6 +868,11 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
 
     _state.register_agent(job_id, proc, log_path, req.prompt)
 
+    with _state.lock:
+        if job_id in _state.agent_jobs:
+            _state.agent_jobs[job_id]["resolution_source"] = resolved["source"] if resolved else "none"
+            _state.agent_jobs[job_id]["target_file"] = resolved["rel_path"] if resolved else None
+
     # Track worktree path for live syncing
     _worktree_paths: dict[str, Path] = {}
 
@@ -716,8 +881,22 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         worktrees_dir = project_path / ".worktrees"
         current_worktree: Path | None = None
         sync_count = 0
+        target_rel = _state.agent_jobs.get(job_id, {}).get("target_file")
+        target_abs = (project_path / target_rel) if target_rel else None
+        target_seen_mtime = target_abs.stat().st_mtime if (target_abs and target_abs.exists()) else None
         while proc.poll() is None:
             time.sleep(2)
+            changed = False
+            # 401 early-abort: stop burning turns on a dead token.
+            try:
+                if _detect_auth_error(_read_log_tail(log_path, max_lines=40)):
+                    with _state.lock:
+                        if job_id in _state.agent_jobs:
+                            _state.agent_jobs[job_id]["auth_error"] = True
+                    _terminate_proc(proc)
+                    break
+            except Exception:
+                pass
             if not worktrees_dir.exists():
                 continue
             worktrees = [d for d in worktrees_dir.iterdir() if d.is_dir()]
@@ -729,11 +908,28 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
                 _worktree_paths[job_id] = latest
             # Sync every 2 seconds from the current worktree
             if current_worktree:
-                _sync_worktree_changes(project_path, current_worktree)
+                changed = _sync_worktree_changes(project_path, current_worktree)
                 sync_count += 1
+            if target_abs is not None and target_abs.exists():
+                m = target_abs.stat().st_mtime
+                if target_seen_mtime is None or m != target_seen_mtime:
+                    with _state.lock:
+                        if job_id in _state.agent_jobs:
+                            _state.agent_jobs[job_id]["applied"] = True
+                            _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
+                    target_seen_mtime = m
+            elif changed:
+                # no known target file: gate the "any change" applied signal on a
+                # REAL commit landing, not merely on the .worktrees dir existing
+                # (hermes chat --worktree creates that dir at startup even for a
+                # no-op job, which must NOT flip applied=True).
+                with _state.lock:
+                    if job_id in _state.agent_jobs and not _state.agent_jobs[job_id].get("applied"):
+                        _state.agent_jobs[job_id]["applied"] = True
+                        _state.agent_jobs[job_id]["last_change_at"] = _now_iso()
         # Final sync after process exits
         if current_worktree and current_worktree.exists():
-            _sync_worktree_changes(project_path, current_worktree)
+            changed = _sync_worktree_changes(project_path, current_worktree)
 
     sync_thread = threading.Thread(target=_live_sync_reader, daemon=True)
     sync_thread.start()
@@ -741,13 +937,19 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
     # Monitor process completion
     def _monitor() -> None:
         try:
-            exit_code = proc.wait()
+            exit_code = proc.wait(timeout=AGENT_JOB_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _terminate_proc(proc)
+            try:
+                exit_code = proc.wait(timeout=10)
+            except Exception:
+                exit_code = -1
         finally:
             try:
                 log_file.close()
             except Exception:
                 pass
-        summary = "Agent finished"
+        summary = "Agent finished" if exit_code == 0 else f"Agent stopped (exit {exit_code})"
         try:
             log_text = log_path.read_text(encoding="utf-8", errors="replace")
             lines = [ln for ln in log_text.splitlines() if ln.strip()]
@@ -756,6 +958,16 @@ async def agent_prompt(req: AgentPromptRequest) -> dict[str, Any]:
         except Exception:
             pass
         _state.update_agent(job_id, running=False, exit_code=exit_code, summary=summary)
+        # Let the live-sync thread finish its final worktree->project sync before we
+        # prune the worktree, otherwise a last-moment edit could be dropped (the final
+        # sync no-ops on a missing worktree).
+        try:
+            sync_thread.join(timeout=10)
+        except Exception:
+            pass
+        wt = _worktree_paths.get(job_id)
+        if wt is not None:
+            _prune_worktree(wt)
 
     monitor_thread = threading.Thread(target=_monitor, daemon=True)
     monitor_thread.start()
@@ -782,4 +994,10 @@ async def agent_status(job_id: str) -> dict[str, Any]:
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "logs": logs,
+        "auth_error": job.get("auth_error", False),
+        "phase": _compute_phase(job),
+        "applied": job.get("applied", False),
+        "last_change_at": job.get("last_change_at"),
+        "target_file": job.get("target_file"),
+        "resolution_source": job.get("resolution_source", "none"),
     }

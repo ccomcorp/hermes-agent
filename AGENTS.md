@@ -26,6 +26,18 @@ reviewing any change:
   high. Most new capability should arrive as a CLI command + skill, a
   service-gated tool, or a plugin — not as core surface.
 
+## Learning Law
+
+After every non-trivial solved problem in this codebase (a bug that took more
+than one hypothesis, a misdiagnosed root cause, a non-obvious tool/API/config
+quirk, a user correction to your approach), run the `extract-approach` skill
+before moving on. A solution without its learnings note is unfinished work —
+record the reasoning (what was tried and failed, the signal that actually
+cracked it, the one-line rule for next time), not just the fix. This applies
+to work on hermes-agent itself exactly as it does to AIOS — the rule is
+agent-wide, not project-scoped. Wired as mandatory Phase 5.5 (VERIFY → EXTRACT
+→ COMMIT) in the `orchestrating-engineering-work` skill.
+
 ## Contribution Rubric — What We Want / What We Don't
 
 This is the project's intent layer. Use it two ways:

@@ -687,6 +687,10 @@ async function repoStatus(repoPath, gitBin) {
 module.exports = {
   branchBase,
   fileDiffVsHead,
+  // Exported for reuse by workbench-changeset-apply.cjs (Slice E) — same
+  // simple-git instance (incl. the packaged-build vendored-fallback
+  // require() above) every git-backed IPC handler in this file uses.
+  gitFor,
   repoStatus,
   resolveRenamePath,
   reviewCommit,

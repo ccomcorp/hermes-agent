@@ -15,6 +15,7 @@ export const WEBHOOKS_ROUTE = '/webhooks'
 export const PLUGINS_ROUTE = '/plugins'
 export const FILES_ROUTE = '/files'
 export const CHANNELS_ROUTE = '/channels'
+export const WORKBENCH_ROUTE = '/workbench'
 export const SYSTEM_ROUTE = '/system'
 // AIOS Track-B panels (Wave 2b)
 export const CONFIG_ROUTE = '/config'
@@ -44,6 +45,7 @@ export type AppView =
   | 'system'
   | 'webhooks'
   | 'starmap'
+  | 'workbench'
 
 export type AppRouteId =
   | 'agents'
@@ -67,6 +69,7 @@ export type AppRouteId =
   | 'system'
   | 'webhooks'
   | 'starmap'
+  | 'workbench'
 
 export interface AppRoute {
   id: AppRouteId
@@ -91,6 +94,7 @@ export const APP_ROUTES = [
   { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
   { id: 'files', path: FILES_ROUTE, view: 'files' },
   { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
+  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
   { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
   { id: 'config', path: CONFIG_ROUTE, view: 'config' },
   { id: 'logs', path: LOGS_ROUTE, view: 'logs' },

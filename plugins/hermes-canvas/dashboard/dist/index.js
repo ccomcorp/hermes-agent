@@ -1,3 +1,8 @@
+/* /agent/status/{job_id} contract (Python plugin_api.py, agent_status()): { ok, job_id,
+   running, exit_code, summary, started_at, finished_at, logs, auth_error, phase,
+   applied, last_change_at, target_file, resolution_source }.
+   A renamed field here is a silent undefined -- keep in sync with plugin_api.py. */
+
 /* AIOS auth shim (F1): canvas uses raw fetch and omits the session token the
    fork gates /api/plugins/* on in loopback mode -> 401. Wrap window.fetch to
    inject X-Hermes-Session-Token for canvas's own API base only. */
@@ -114,6 +119,40 @@
     try { return new URL(url).origin; } catch (err) { return '*'; }
   }
 
+  // Phase labels for the agent-status stepper (mirrors _compute_phase in plugin_api.py).
+  var PHASE_LABEL = {
+    queued: 'Queued',
+    editing: 'Editing',
+    applied: 'Edit applied',
+    done_ok: 'Done',
+    done_failed: 'Failed',
+    needs_shell: 'Needs shell (not run)'
+  };
+  var PHASE_STEP_ORDER = ['queued', 'editing', 'applied', 'done_ok'];
+
+  // Warn once (not per-poll) if the /agent/status/{job_id} payload drops a field
+  // this UI depends on -- catches a silent rename in plugin_api.py.
+  var _warnedMissingStatusFields = false;
+  function checkStatusFieldContract(data) {
+    if (_warnedMissingStatusFields || !data) return;
+    var missing = ['phase', 'applied', 'auth_error'].filter(function (k) { return !(k in data); });
+    if (missing.length) {
+      missing.forEach(function (k) { console.warn('[canvas] status missing field:', k); });
+      _warnedMissingStatusFields = true;
+    }
+  }
+
+  // Reload the preview iframe exactly once per completed edit, debounced against
+  // the static-server's own 1s reload poller (see hermes_static_server.py).
+  var _lastReloadAt = 0;
+  function reloadPreviewOnce() {
+    var now = Date.now();
+    if (now - _lastReloadAt < 1500) return;
+    _lastReloadAt = now;
+    var f = document.querySelector('.hc-preview-frame');
+    if (f) f.src = f.src;
+  }
+
   function installCanvasThemeReset() {
     const id = 'hermes-canvas-theme-reset';
     let style = document.getElementById(id);
@@ -189,75 +228,97 @@
     }, [parentDir, projectName, props.onProjectChange]);
 
     const onOpen = useCallback(function () {
-      const path = (openPath || '').trim();
-      if (!path) { setError('Enter a project path'); return; }
-      setError('');
-      setOpening(true);
-      postJSON('/project/open', { projectPath: path })
-        .then(function (res) {
-          if (props.onProjectChange) props.onProjectChange(res.project_path);
-          setOpenPath('');
-        })
-        .catch(function (err) { setError(text(err.message, 'Open failed')); })
-        .finally(function () { setOpening(false); });
-    }, [openPath, props.onProjectChange]);
+          const path = (openPath || '').trim();
+          // AIOS UX: the top path is a READ-ONLY status chip (current project), NOT the
+          // open field. Empty openPath used to show a bare "Enter a project path" error
+          // that sat above the chip and looked like a label for a locked input.
+          if (!path) {
+            setError('Paste a folder path in the box under Open existing project, then click Open. Example: I:\\PROJECTS\\AIFIN\\frontend');
+            return;
+          }
+          setError('');
+          setOpening(true);
+          postJSON('/project/open', { projectPath: path })
+            .then(function (res) {
+              if (props.onProjectChange) props.onProjectChange(res.project_path);
+              setOpenPath('');
+            })
+            .catch(function (err) { setError(text(err.message, 'Open failed')); })
+            .finally(function () { setOpening(false); });
+        }, [openPath, props.onProjectChange]);
 
-    return h('div', { className: 'hc-panel' },
-      h('div', { className: 'hc-panel-title' }, 'Project'),
-      error ? h('p', { className: 'text-xs text-red-500' }, error) : null,
+        return h('div', { className: 'hc-panel' },
+          h('div', { className: 'hc-panel-title' }, 'Project'),
+          error ? h('p', { className: 'text-xs text-red-500 hc-error' }, error) : null,
 
-      props.projectPath
-        ? h('div', { className: 'hc-badge' }, trimText(props.projectPath, 50))
-        : h('p', { className: 'text-xs text-muted-foreground' }, 'No project selected'),
+          // AIOS: explicit "Current project" label + non-input styling so this is never
+          // mistaken for an editable path field (the real open box is further below).
+          h('label', { className: 'text-xs text-muted-foreground' }, 'Current project'),
+          props.projectPath
+            ? h('div', {
+                className: 'hc-current-path',
+                title: props.projectPath
+              }, props.projectPath)
+            : h('p', { className: 'text-xs text-muted-foreground' }, 'None selected yet'),
 
-      h(Separator, null),
+          h(Separator, null),
 
-      h('div', { className: 'flex flex-col gap-2' },
-        h('label', { className: 'text-xs text-muted-foreground' }, 'Create new project'),
-        h('div', { className: 'hc-form-row' },
-          h('input', {
-            className: 'hc-input',
-            placeholder: 'Project name',
-            value: projectName,
-            onChange: function (e) { setProjectName(e.target.value); }
-          }),
-          h(Button, {
-            className: 'hc-btn hc-btn-primary',
-            onClick: onCreate,
-            disabled: creating
-          }, creating ? 'Creating...' : 'Create')
-        ),
-        h('input', {
-          className: 'hc-input',
-          placeholder: props.defaultProjectParent ? 'Default: ' + props.defaultProjectParent : 'Default: ~/.hermes/canvas-projects',
-          value: parentDir,
-          onChange: function (e) { setParentDir(e.target.value); }
-        }),
-        h('p', { className: 'text-xs text-muted-foreground' },
-          'Leave blank to create under ',
-          h('code', null, props.defaultProjectParent || '~/.hermes/canvas-projects')
-        )
-      ),
+          // Open-existing first: primary path for real apps (AIFIN, etc.)
+          h('div', { className: 'flex flex-col gap-2' },
+            h('label', { className: 'text-xs text-muted-foreground' }, 'Open existing project'),
+            h('p', { className: 'text-xs text-muted-foreground' },
+              'Type or paste a full folder path that contains package.json or index.html, then click Open.'
+            ),
+            h('div', { className: 'hc-form-row' },
+              h('input', {
+                className: 'hc-input',
+                placeholder: 'I:\\PROJECTS\\AIFIN\\frontend',
+                value: openPath,
+                onChange: function (e) { setOpenPath(e.target.value); },
+                onKeyDown: function (e) {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    onOpen();
+                  }
+                }
+              }),
+              h(Button, {
+                className: 'hc-btn hc-btn-primary',
+                onClick: onOpen,
+                disabled: opening
+              }, opening ? 'Opening...' : 'Open')
+            )
+          ),
 
-      h(Separator, null),
+          h(Separator, null),
 
-      h('div', { className: 'flex flex-col gap-2' },
-        h('label', { className: 'text-xs text-muted-foreground' }, 'Open existing project'),
-        h('div', { className: 'hc-form-row' },
-          h('input', {
-            className: 'hc-input',
-            placeholder: '/path/to/project',
-            value: openPath,
-            onChange: function (e) { setOpenPath(e.target.value); }
-          }),
-          h(Button, {
-            className: 'hc-btn hc-btn-primary',
-            onClick: onOpen,
-            disabled: opening
-          }, opening ? 'Opening...' : 'Open')
-        )
-      )
-    );
+          h('div', { className: 'flex flex-col gap-2' },
+            h('label', { className: 'text-xs text-muted-foreground' }, 'Create new project'),
+            h('div', { className: 'hc-form-row' },
+              h('input', {
+                className: 'hc-input',
+                placeholder: 'Project name',
+                value: projectName,
+                onChange: function (e) { setProjectName(e.target.value); }
+              }),
+              h(Button, {
+                className: 'hc-btn hc-btn-primary',
+                onClick: onCreate,
+                disabled: creating
+              }, creating ? 'Creating...' : 'Create')
+            ),
+            h('input', {
+              className: 'hc-input',
+              placeholder: props.defaultProjectParent ? 'Default: ' + props.defaultProjectParent : 'Default: ~/.hermes/canvas-projects',
+              value: parentDir,
+              onChange: function (e) { setParentDir(e.target.value); }
+            }),
+            h('p', { className: 'text-xs text-muted-foreground' },
+              'Leave blank to create under ',
+              h('code', null, props.defaultProjectParent || '~/.hermes/canvas-projects')
+            )
+          )
+        );
   }
 
   // -------------------------------------------------------------------------
@@ -403,6 +464,36 @@
   }
 
   // -------------------------------------------------------------------------
+  // PhaseStepperPanel -- live phase of the currently-running/most-recent agent job
+  // -------------------------------------------------------------------------
+  function PhaseStepperPanel(props) {
+    const phase = props.phase;
+    if (!phase) return null;
+
+    const failed = phase === 'done_failed';
+    const stepEls = PHASE_STEP_ORDER.map(function (s) {
+      const reached = PHASE_STEP_ORDER.indexOf(s) <= PHASE_STEP_ORDER.indexOf(phase);
+      return h('span', {
+        key: s,
+        className: join('step', !failed && reached && 'active')
+      }, PHASE_LABEL[s]);
+    });
+    if (phase === 'needs_shell') {
+      stepEls.push(h('span', { key: 'needs_shell', className: 'step active' }, PHASE_LABEL.needs_shell));
+    }
+    if (failed) {
+      stepEls.push(h('span', { key: 'done_failed', className: 'step failed' }, PHASE_LABEL.done_failed));
+    }
+
+    return h('div', { className: 'hc-panel' },
+      h('div', { className: 'hc-panel-title' }, 'Agent Status'),
+      h('div', { className: 'hermes-phase' }, stepEls),
+      props.authError ? h('p', { className: 'text-xs text-red-500' }, 'Authentication failed - refresh token') : null,
+      props.targetFile ? h('p', { className: 'text-xs text-muted-foreground' }, 'Editing: ' + props.targetFile) : null
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // AgentJobsPanel
   // -------------------------------------------------------------------------
   function AgentJobsPanel(props) {
@@ -488,9 +579,13 @@
     const [hasNpm, setHasNpm] = useState(true);
     const [clearingActivity, setClearingActivity] = useState(false);
     const [defaultProjectParent, setDefaultProjectParent] = useState('');
+    const [currentJobId, setCurrentJobId] = useState(null);
+    const [jobStatus, setJobStatus] = useState(null);
     const iframeRef = useRef(null);
     const statusInterval = useRef(null);
     const logsInterval = useRef(null);
+    const jobStatusInterval = useRef(null);
+    const prevPhaseRef = useRef(null);
 
     // Poll status
     const fetchStatus = useCallback(function () {
@@ -530,6 +625,31 @@
         clearInterval(logsInterval.current);
       };
     }, [fetchStatus, fetchLogs]);
+
+    // Poll the current job's /agent/status/{job_id} for phase, and reload the
+    // preview exactly once on the transition into done_ok.
+    const fetchJobStatus = useCallback(function (jobId) {
+      getJSON('/agent/status/' + jobId)
+        .then(function (data) {
+          if (!data || !data.ok) return;
+          checkStatusFieldContract(data);
+          setJobStatus(data);
+          if (prevPhaseRef.current !== 'done_ok' && data.phase === 'done_ok') {
+            reloadPreviewOnce();
+          }
+          prevPhaseRef.current = data.phase;
+        })
+        .catch(function (err) {
+          console.error('Job status poll failed:', err);
+        });
+    }, []);
+
+    useEffect(function () {
+      if (!currentJobId) return undefined;
+      fetchJobStatus(currentJobId);
+      jobStatusInterval.current = setInterval(function () { fetchJobStatus(currentJobId); }, 3000);
+      return function () { clearInterval(jobStatusInterval.current); };
+    }, [currentJobId, fetchJobStatus]);
 
     // Listen for postMessage from iframe (selection)
     useEffect(function () {
@@ -577,6 +697,9 @@
     }, [fetchStatus]);
 
     const onJobStarted = useCallback(function (jobId) {
+      prevPhaseRef.current = null;
+      setJobStatus(null);
+      setCurrentJobId(jobId);
       fetchStatus();
     }, [fetchStatus]);
 
@@ -629,6 +752,11 @@
         h(SelectionPanel, {
           selectedElement: selectedElement,
           onClear: function () { setSelectedElement(null); }
+        }),
+        h(PhaseStepperPanel, {
+          phase: jobStatus && jobStatus.phase,
+          authError: !!(jobStatus && jobStatus.auth_error),
+          targetFile: jobStatus && jobStatus.target_file
         }),
         h(AgentJobsPanel, {
           jobs: jobs,

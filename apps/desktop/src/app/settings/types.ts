@@ -32,7 +32,17 @@ export interface DesktopConfigSection {
   id: string
   label: string
   icon: IconComponent
+  /**
+   * Explicit schema field keys to show. When empty and `schemaCategory` is set,
+   * all fields whose schema.category matches are shown (web-dashboard parity).
+   */
   keys: string[]
+  /**
+   * Upstream CONFIG_SCHEMA category id (hermes_cli/web_server.py _CATEGORY_ORDER).
+   * When set, ConfigSettings includes every schema field in that category — so
+   * new DEFAULT_CONFIG keys appear without a desktop SECTIONS edit.
+   */
+  schemaCategory?: string
 }
 
 export interface EnvRowProps {

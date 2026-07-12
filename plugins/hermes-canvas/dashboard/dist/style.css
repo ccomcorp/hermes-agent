@@ -234,6 +234,30 @@ body:has(.hc-root) .theme-default-filler {
   color: var(--dt-foreground);
 }
 
+/* Current project path — deliberately NOT .hc-input styled so users don't try
+   to type into it. Open-existing lives in a real input further down. */
+.hc-current-path {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.375rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px dashed var(--dt-border);
+  background: transparent;
+  color: var(--dt-muted-foreground);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  user-select: text;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.hc-error {
+  margin: 0.25rem 0 0.5rem;
+  line-height: 1.35;
+}
+
 /* Status badges keep their semantic hue (green=ok, amber=stopped) but derive a
    subtle tint from it and blend the text toward the theme foreground so they
    stay legible on both light and dark themes. */
@@ -321,6 +345,12 @@ body:has(.hc-root) .theme-default-filler {
 @keyframes hc-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Agent phase stepper (Task 7: canvas fast-edit v1). */
+.hermes-phase { display: flex; gap: 8px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.hermes-phase .step { opacity: .4; }
+.hermes-phase .step.active { opacity: 1; font-weight: 600; }
+.hermes-phase .step.failed { color: #c0392b; opacity: 1; }
 
 /* Responsive */
 @media (max-width: 900px) {

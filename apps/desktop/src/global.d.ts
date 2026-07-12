@@ -1,4 +1,25 @@
 import type {
+  PluginTesterCollection,
+  PluginTesterEnvironment,
+  PluginTesterExecuteResult,
+  PluginTesterHistoryEntry,
+  PluginTesterRequest,
+  WorkbenchChangeSet,
+  WorkbenchDesignArtifact,
+  WorkbenchDesignSettings,
+  WorkbenchPlan,
+  WorkbenchRequirement,
+  WorkbenchRequirementStatus,
+  WorkbenchRequirementTrace,
+  WorkbenchWorkflow,
+  WorkbenchWorkflowEdge,
+  WorkbenchWorkflowNode,
+  WorkbenchWriteExportFormat,
+  WorkbenchWriteProject,
+  WorkbenchWriteRecentEdit
+} from '@hermes/shared'
+
+import type {
   PetOverlayBounds,
   PetOverlayControl,
   PetOverlayOpenRequest,
@@ -6,6 +27,11 @@ import type {
 } from './store/pet-overlay'
 
 export {}
+
+// AIOS: Hermes Workbench IPC result wrapper type
+export type WorkbenchIpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; message: string; code?: string }
 
 declare global {
   interface Window {
@@ -199,6 +225,312 @@ declare global {
         // Search the Marketplace for color-theme extensions. An empty query
         // returns the most-installed themes.
         searchMarketplace: (query: string) => Promise<DesktopMarketplaceSearchItem[]>
+      }
+      // AIOS: Hermes Workbench — artifact management IPC
+      workbench: {
+        requirements: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            markdown?: string
+            source?: 'user' | 'chat' | 'import'
+            sourceSessionId?: string
+          }) => Promise<WorkbenchIpcResult<{ requirement: WorkbenchRequirement; trace: WorkbenchRequirementTrace }>>
+          read: (payload: {
+            workspaceRoot: string
+            requirementId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            markdown: string
+            trace: WorkbenchRequirementTrace | null
+            draftRelativePath: string
+            traceRelativePath: string
+          }>>
+          update: (payload: {
+            workspaceRoot: string
+            requirementId: string
+            markdown: string
+            title?: string
+            status?: WorkbenchRequirementStatus
+            autoAdvance?: boolean
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title?: string
+            status?: WorkbenchRequirementStatus
+            contentHash: string
+            updatedAt: string
+          }>>
+          // Records a Kanban card id into the requirement trace's
+          // linkedKanbanCardIds (Workbench → card backlink). Resolves to the
+          // updated trace on success; a discriminated failure
+          // (EMPTY_CARD_ID/TRACE_NOT_FOUND/IO_ERROR) on link failure.
+          linkKanbanCard: (payload: {
+            workspaceRoot: string
+            requirementId: string
+            cardId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchRequirementTrace>>
+        }
+        plans: {
+          list: (payload: { workspaceRoot: string; requirementId?: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            markdown: string
+            title?: string
+            sourceRequest?: string
+            operation: 'draft' | 'refine'
+            requirementId?: string
+          }) => Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>>
+          read: (payload: {
+            workspaceRoot: string
+            planId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            markdown: string
+            relativePath: string
+            contentHash: string
+            byteSize: number
+            savedAt: string
+            version: number
+            supersedesPlanId?: string
+          }>>
+          // Versioned refine — keeps history. Writes a NEW plan version file
+          // that supersedes the prior one; the prior version is never
+          // overwritten. Wired to the `hermes:workbench:plans:update` channel.
+          update: (payload: {
+            workspaceRoot: string
+            planId: string
+            markdown: string
+            title?: string
+            sourceRequest?: string
+            requirementId?: string
+            planRelativePath?: string
+            operation?: 'refine'
+          }) => Promise<WorkbenchIpcResult<{ plan: WorkbenchPlan; summary: string }>>
+        }
+        changesets: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            source: string
+            title: string
+            summary?: string
+            requirementId?: string
+            planId?: string
+            files: any[]
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          read: (payload: {
+            workspaceRoot: string
+            changesetId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          update: (payload: {
+            workspaceRoot: string
+            changesetId: string
+            statusPatch: {
+              status?: string
+              fileUpdates?: { path: string; status: string }[]
+              approval?: { kind: string; decision: string; reason?: string }
+            }
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          // Slice E — writes each eligible file's diff to the REAL workspace
+          // (requires status 'accepted'; fails closed otherwise). Per-file
+          // outcomes are reported on the returned changeset's `files[]`
+          // (`applyResult`/`applyMessage`), not just an overall pass/fail.
+          apply: (payload: {
+            workspaceRoot: string
+            changesetId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchChangeSet>>
+          // Slice E — a separate, explicit action (never auto-triggered by
+          // apply). Stages+commits only the files this changeset applied.
+          commit: (payload: {
+            workspaceRoot: string
+            changesetId: string
+            message?: string
+          }) => Promise<WorkbenchIpcResult<{ committed: boolean; files: string[]; message: string }>>
+        }
+        // Design SETTINGS only (Slice F) — a single per-workspace document,
+        // not a list. No generation/preview/changeset-apply channel exists.
+        design: {
+          settings: {
+            read: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
+            write: (payload: {
+              workspaceRoot: string
+              settings: WorkbenchDesignSettings
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignSettings>>
+          }
+          // Design artifact generation storage (Slice G) — pure CRUD; every
+          // create is a brand-new artifact, there is no update channel.
+          artifacts: {
+            create: (payload: {
+              workspaceRoot: string
+              requirementId: string
+              kind: WorkbenchDesignArtifact['kind']
+              content: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact>>
+            list: (payload: {
+              workspaceRoot: string
+              requirementId: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact[]>>
+            read: (payload: {
+              workspaceRoot: string
+              artifactId: string
+            }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>>
+          }
+        }
+        // Write Workspace — CRUD (Slice J) + export (Slice L). A write project
+        // is a single markdown document + metadata, same shape as a
+        // Requirement. No quick-actions/inline-edit/retrieval channel exists
+        // here — that is Slice K, not built in this slice.
+        write: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            markdown?: string
+          }) => Promise<WorkbenchIpcResult<{ project: WorkbenchWriteProject }>>
+          read: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title: string
+            markdown: string
+            rootRelativeDir: string
+            activeFileRelativePath?: string
+            createdAt: string
+            updatedAt: string
+            recentEdits: WorkbenchWriteRecentEdit[]
+          }>>
+          update: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+            markdown: string
+            title?: string
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title?: string
+            contentHash: string
+            updatedAt: string
+          }>>
+          // Renders `html` (a complete standalone document the renderer
+          // already built) to the requested format and writes it ONLY to a
+          // path the user picks via the OS save dialog. `canceled: true`
+          // means the user dismissed the dialog — no file was written and
+          // this is not an error.
+          export: (payload: {
+            workspaceRoot: string
+            writeProjectId: string
+            format: WorkbenchWriteExportFormat
+            title: string
+            html: string
+          }) => Promise<WorkbenchIpcResult<{
+            canceled: boolean
+            path?: string
+            format?: WorkbenchWriteExportFormat
+            exportedAt?: string
+          }>>
+        }
+        // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
+        // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN.
+        // No run/execute channel exists here.
+        workflow: {
+          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
+          create: (payload: {
+            workspaceRoot: string
+            title: string
+            nodes?: WorkbenchWorkflowNode[]
+            edges?: WorkbenchWorkflowEdge[]
+            enabled?: boolean
+          }) => Promise<WorkbenchIpcResult<{ workflow: WorkbenchWorkflow }>>
+          read: (payload: {
+            workspaceRoot: string
+            workflowId: string
+          }) => Promise<WorkbenchIpcResult<WorkbenchWorkflow>>
+          update: (payload: {
+            workspaceRoot: string
+            workflowId: string
+            nodes: WorkbenchWorkflowNode[]
+            edges: WorkbenchWorkflowEdge[]
+            title?: string
+            enabled?: boolean
+          }) => Promise<WorkbenchIpcResult<{
+            id: string
+            title: string
+            enabled: boolean
+            contentHash: string
+            updatedAt: string
+          }>>
+        }
+        // Plugin Tester — HTTP request executor + persistence (Slice N).
+        // Executes real HTTP requests via the main process and persists
+        // collections, history, and environments under
+        // .hermes/workbench/plugin-tester/.
+        pluginTester: {
+          execute: (payload: {
+            workspaceRoot: string
+            request: PluginTesterRequest
+            environmentId?: string
+            collectionId?: string
+          }) => Promise<WorkbenchIpcResult<PluginTesterExecuteResult>>
+          collections: {
+            list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+            create: (payload: {
+              workspaceRoot: string
+              name: string
+              description: string
+              requests: PluginTesterRequest[]
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            read: (payload: {
+              workspaceRoot: string
+              collectionId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            update: (payload: {
+              workspaceRoot: string
+              collectionId: string
+              name: string
+              description: string
+              requests: PluginTesterRequest[]
+            }) => Promise<WorkbenchIpcResult<PluginTesterCollection>>
+            delete: (payload: {
+              workspaceRoot: string
+              collectionId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+          }
+          history: {
+            list: (payload: { workspaceRoot: string; collectionId?: string }) => Promise<WorkbenchIpcResult<any>>
+            read: (payload: {
+              workspaceRoot: string
+              historyId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterHistoryEntry>>
+            delete: (payload: {
+              workspaceRoot: string
+              historyId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+            clear: (payload: { workspaceRoot: string; collectionId?: string }) => Promise<WorkbenchIpcResult<void>>
+          }
+          environments: {
+            list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any>>
+            create: (payload: {
+              workspaceRoot: string
+              name: string
+              variables: Record<string, string>
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            read: (payload: {
+              workspaceRoot: string
+              environmentId: string
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            update: (payload: {
+              workspaceRoot: string
+              environmentId: string
+              name: string
+              variables: Record<string, string>
+            }) => Promise<WorkbenchIpcResult<PluginTesterEnvironment>>
+            delete: (payload: {
+              workspaceRoot: string
+              environmentId: string
+            }) => Promise<WorkbenchIpcResult<void>>
+          }
+        }
       }
     }
   }

@@ -142,6 +142,7 @@ export type SidebarNavId =
   | 'skills'
   | 'system'
   | 'webhooks'
+  | 'workbench'
 
 export interface SidebarNavItem {
   id: SidebarNavId

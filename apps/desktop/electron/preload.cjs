@@ -226,5 +226,97 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   themes: {
     fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
     searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
+  },
+  workbench: {
+    requirements: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:requirements:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:requirements:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:requirements:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:requirements:update', payload),
+      // Records a Kanban card id into the requirement trace (Workbench → card
+      // backlink for the "Send to Kanban" design handoff).
+      linkKanbanCard: payload => ipcRenderer.invoke('hermes:workbench:requirements:link-kanban-card', payload)
+    },
+    plans: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:plans:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:plans:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:plans:read', payload),
+      // Versioned refine — writes a NEW plan version linked to the prior one.
+      update: payload => ipcRenderer.invoke('hermes:workbench:plans:update', payload)
+    },
+    changesets: {
+      list: payload => ipcRenderer.invoke('hermes:workbench:changesets:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:changesets:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:changesets:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:changesets:update', payload),
+      // Slice E — apply a changeset's file diffs to the REAL workspace
+      // (requires status 'accepted'), and a separate, explicit commit of
+      // exactly the files that got applied. Never auto-triggered by apply.
+      apply: payload => ipcRenderer.invoke('hermes:workbench:changesets:apply', payload),
+      commit: payload => ipcRenderer.invoke('hermes:workbench:changesets:commit', payload)
+    },
+    design: {
+      settings: {
+        // Design SETTINGS only (Slice F) — a single object per workspace, not
+        // a list. No generation/preview/changeset-apply channel exists here.
+        read: payload => ipcRenderer.invoke('hermes:workbench:design:settings:read', payload),
+        write: payload => ipcRenderer.invoke('hermes:workbench:design:settings:write', payload)
+      },
+      artifacts: {
+        // Design artifact generation storage (Slice G) — pure CRUD; no
+        // generation/model call happens in the main process. Every create is
+        // a brand-new artifact; there is no update channel.
+        create: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:create', payload),
+        list: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:list', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:read', payload)
+      }
+    },
+    write: {
+      // Write Workspace — CRUD (Slice J) + export (Slice L). No quick-actions,
+      // inline-edit, or retrieval channel exists here — those are Slice K.
+      list: payload => ipcRenderer.invoke('hermes:workbench:write:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:write:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:write:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:write:update', payload),
+      // Renders to HTML/PDF/DOCX/PNG and writes ONLY to a path the user picks
+      // via the OS save dialog (main-process side) — never a fixed location.
+      export: payload => ipcRenderer.invoke('hermes:workbench:write:export', payload)
+    },
+    workflow: {
+      // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
+      // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN —
+      // no run/execute channel exists here or anywhere else in this slice.
+      list: payload => ipcRenderer.invoke('hermes:workbench:workflows:list', payload),
+      create: payload => ipcRenderer.invoke('hermes:workbench:workflows:create', payload),
+      read: payload => ipcRenderer.invoke('hermes:workbench:workflows:read', payload),
+      update: payload => ipcRenderer.invoke('hermes:workbench:workflows:update', payload)
+    },
+    pluginTester: {
+      // Plugin Tester — HTTP request executor + persistence (Slice N).
+      // Executes real HTTP requests via the main process (renderer never speaks
+      // directly to the network) and persists collections, history, and
+      // environment variable sets under .hermes/workbench/plugin-tester/.
+      execute: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:execute', payload),
+      collections: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:list', payload),
+        create: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:create', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:read', payload),
+        update: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:update', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:collections:delete', payload)
+      },
+      history: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:list', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:read', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:delete', payload),
+        clear: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:history:clear', payload)
+      },
+      environments: {
+        list: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:list', payload),
+        create: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:create', payload),
+        read: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:read', payload),
+        update: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:update', payload),
+        delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:delete', payload)
+      }
+    }
   }
 })

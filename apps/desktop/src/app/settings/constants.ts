@@ -1,15 +1,29 @@
 import {
   Box,
   Brain,
+  Clipboard,
+  Clock,
+  Cpu,
+  FileText,
   type IconComponent,
+  GitBranch,
+  Globe,
+  LayoutDashboard,
   Lock,
   MessageCircle,
   Mic,
   Monitor,
   Moon,
+  Package,
   Palette,
+  RefreshCw,
+  Settings,
   Sun,
-  Wrench
+  Terminal,
+  Users,
+  Volume2,
+  Wrench,
+  Zap
 } from '@/lib/icons'
 import type { ThemeMode } from '@/themes/context'
 
@@ -234,7 +248,9 @@ export const BUILTIN_PERSONALITIES = [
 // backend schema only declares a string type.
 export const ENUM_OPTIONS: Record<string, string[]> = {
   'agent.image_input_mode': ['auto', 'native', 'text'],
+  // Keep in sync with hermes_cli/config.py approvals block.
   'approvals.mode': ['manual', 'smart', 'off'],
+  'approvals.cron_mode': ['deny', 'approve'],
   'code_execution.mode': ['project', 'strict'],
   'context.engine': ['compressor', 'default', 'custom'],
   'delegation.reasoning_effort': ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
@@ -313,12 +329,29 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   approvals: {
     mode: 'Approval Mode',
     timeout: 'Approval Timeout',
-    mcpReloadConfirm: 'Confirm MCP Reloads'
+    cronMode: 'Cron Approval Mode',
+    deny: 'Deny Rules',
+    mcpReloadConfirm: 'Confirm MCP Reloads',
+    destructiveSlashConfirm: 'Confirm Destructive Slash Commands'
   },
   commandAllowlist: 'Command Allowlist',
+  privacy: {
+    redactPii: 'Redact PII'
+  },
   security: {
     redactSecrets: 'Redact Secrets',
-    allowPrivateUrls: 'Allow Private URLs'
+    allowPrivateUrls: 'Allow Private URLs',
+    tirithEnabled: 'Tirith Pre-Exec Scan',
+    tirithPath: 'Tirith Path',
+    tirithTimeout: 'Tirith Timeout (seconds)',
+    tirithFailOpen: 'Tirith Fail-Open',
+    allowLazyInstalls: 'Allow Lazy Package Installs',
+    ackedAdvisories: 'Acknowledged Advisories',
+    websiteBlocklist: {
+      enabled: 'Website Blocklist',
+      domains: 'Blocked Domains',
+      sharedFiles: 'Blocklist Shared Files'
+    }
   },
   browser: {
     allowPrivateUrls: 'Browser Private URLs',
@@ -454,14 +487,36 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   },
   fileReadMaxChars: 'Maximum characters Hermes can read from one file request.',
   approvals: {
-    mode: 'How Hermes handles commands that need explicit approval.',
-    timeout: 'How long approval prompts wait before timing out.'
+    mode: 'How Hermes handles commands that need explicit approval (manual / smart / off).',
+    timeout: 'How long approval prompts wait before timing out.',
+    cronMode:
+      'When a scheduled cron job hits a dangerous command: deny blocks it (safe default); approve auto-allows.',
+    deny: 'fnmatch globs that always block a terminal command, even under YOLO / mode=off. Comma-separated.',
+    mcpReloadConfirm: 'Ask before /reload-mcp, which invalidates the prompt cache and can re-send full context.',
+    destructiveSlashConfirm: 'Confirm /clear, /new, /reset, and /undo before discarding conversation state.'
+  },
+  privacy: {
+    redactPii: 'Hash user IDs and strip phone numbers from LLM context when true.'
   },
   security: {
-    redactSecrets: 'Hide detected secrets from model-visible content when possible.'
+    redactSecrets: 'Hide detected secrets from model-visible content when possible.',
+    allowPrivateUrls: 'Allow agent HTTP tools to reach private/internal IPs (LAN, VPN, OpenWrt).',
+    tirithEnabled: 'Run Tirith pre-exec scanning on terminal commands (homograph URLs, pipe-to-shell, etc.).',
+    tirithPath: 'Executable name or path for the Tirith binary.',
+    tirithTimeout: 'Seconds to wait for a Tirith scan before giving up.',
+    tirithFailOpen: 'If Tirith is missing or times out, allow the command instead of blocking it.',
+    allowLazyInstalls:
+      'Let Hermes pip-install opt-in backend packages the first time you enable a feature that needs them.',
+    ackedAdvisories: 'Supply-chain advisory IDs silenced via hermes doctor --ack. Comma-separated.',
+    websiteBlocklist: {
+      enabled: 'Block agent web access to listed domains.',
+      domains: 'Domains the agent must not visit. Comma-separated hostnames.',
+      sharedFiles: 'Optional shared blocklist file paths. Comma-separated.'
+    }
   },
   checkpoints: {
-    enabled: 'Create rollback snapshots before file edits.'
+    enabled: 'Create rollback snapshots before file edits.',
+    maxSnapshots: 'Maximum number of file-checkpoint snapshots to retain.'
   },
   memory: {
     memoryEnabled: 'Save durable memories that can help future sessions.',
@@ -498,7 +553,12 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   }
 })
 
-// Curated desktop config surface: only fields a user might tune from the app.
+// Desktop config tabs — aligned with upstream web dashboard category order
+// (hermes_cli/web_server.py `_CATEGORY_ORDER` + schema categories).
+// Sections with `schemaCategory` pull ALL fields for that category from
+// GET /api/config/schema (so new DEFAULT_CONFIG keys show without a desktop edit).
+// Desktop-only: `model` (ModelSettings host) and `appearance` (themes).
+// Security matches the web Config → Security side panel (approvals/privacy/security.*).
 export const SECTIONS: DesktopConfigSection[] = [
   {
     id: 'model',
@@ -507,132 +567,41 @@ export const SECTIONS: DesktopConfigSection[] = [
     keys: ['model_context_length', 'fallback_providers']
   },
   {
-    id: 'chat',
-    label: 'Chat',
-    icon: MessageCircle,
-    keys: ['display.personality', 'timezone', 'display.show_reasoning', 'agent.image_input_mode']
-  },
-  {
     id: 'appearance',
     label: 'Appearance',
     icon: Palette,
     keys: []
   },
+  { id: 'general', label: 'General', icon: Settings, keys: [], schemaCategory: 'general' },
+  { id: 'agent', label: 'Agent', icon: Cpu, keys: [], schemaCategory: 'agent' },
+  { id: 'terminal', label: 'Terminal', icon: Terminal, keys: [], schemaCategory: 'terminal' },
+  { id: 'display', label: 'Display', icon: Monitor, keys: [], schemaCategory: 'display' },
+  { id: 'delegation', label: 'Delegation', icon: Users, keys: [], schemaCategory: 'delegation' },
+  { id: 'memory', label: 'Memory', icon: Brain, keys: [], schemaCategory: 'memory' },
+  { id: 'compression', label: 'Compression', icon: Package, keys: [], schemaCategory: 'compression' },
+  { id: 'security', label: 'Security', icon: Lock, keys: [], schemaCategory: 'security' },
+  { id: 'browser', label: 'Browser', icon: Globe, keys: [], schemaCategory: 'browser' },
+  { id: 'voice', label: 'Voice', icon: Mic, keys: [], schemaCategory: 'voice' },
+  { id: 'tts', label: 'TTS', icon: Volume2, keys: [], schemaCategory: 'tts' },
+  { id: 'stt', label: 'STT', icon: Mic, keys: [], schemaCategory: 'stt' },
+  { id: 'logging', label: 'Logging', icon: Clipboard, keys: [], schemaCategory: 'logging' },
+  { id: 'discord', label: 'Discord', icon: MessageCircle, keys: [], schemaCategory: 'discord' },
+  { id: 'auxiliary', label: 'Auxiliary', icon: Wrench, keys: [], schemaCategory: 'auxiliary' },
+  { id: 'bedrock', label: 'Bedrock', icon: Globe, keys: [], schemaCategory: 'bedrock' },
+  { id: 'curator', label: 'Curator', icon: Zap, keys: [], schemaCategory: 'curator' },
+  { id: 'kanban', label: 'Kanban', icon: LayoutDashboard, keys: [], schemaCategory: 'kanban' },
+  { id: 'model_catalog', label: 'Model catalog', icon: FileText, keys: [], schemaCategory: 'model_catalog' },
+  { id: 'openrouter', label: 'OpenRouter', icon: GitBranch, keys: [], schemaCategory: 'openrouter' },
+  { id: 'sessions', label: 'Sessions', icon: Clock, keys: [], schemaCategory: 'sessions' },
   {
-    id: 'workspace',
-    label: 'Workspace',
-    icon: Monitor,
-    keys: [
-      'terminal.cwd',
-      'code_execution.mode',
-      'terminal.persistent_shell',
-      'terminal.env_passthrough',
-      'file_read_max_chars'
-    ]
-  },
-  {
-    id: 'safety',
-    label: 'Safety',
+    id: 'tool_loop_guardrails',
+    label: 'Tool loop guardrails',
     icon: Lock,
-    keys: [
-      'approvals.mode',
-      'approvals.timeout',
-      'approvals.mcp_reload_confirm',
-      'command_allowlist',
-      'security.redact_secrets',
-      'security.allow_private_urls',
-      'browser.allow_private_urls',
-      'browser.auto_local_for_private_urls',
-      'checkpoints.enabled'
-    ]
+    keys: [],
+    schemaCategory: 'tool_loop_guardrails'
   },
-  {
-    id: 'memory',
-    label: 'Memory & Context',
-    icon: Brain,
-    keys: [
-      'memory.memory_enabled',
-      'memory.user_profile_enabled',
-      'memory.memory_char_limit',
-      'memory.user_char_limit',
-      'memory.provider',
-      'context.engine',
-      'compression.enabled',
-      'compression.threshold',
-      'compression.target_ratio',
-      'compression.protect_last_n'
-    ]
-  },
-  {
-    id: 'voice',
-    label: 'Voice',
-    icon: Mic,
-    keys: [
-      'tts.provider',
-      'stt.enabled',
-      'stt.echo_transcripts',
-      'stt.provider',
-      'voice.auto_tts',
-      'tts.edge.voice',
-      'tts.openai.model',
-      'tts.openai.voice',
-      'tts.elevenlabs.voice_id',
-      'tts.elevenlabs.model_id',
-      'tts.xai.voice_id',
-      'tts.xai.language',
-      'tts.minimax.model',
-      'tts.minimax.voice_id',
-      'tts.mistral.model',
-      'tts.mistral.voice_id',
-      'tts.gemini.model',
-      'tts.gemini.voice',
-      'tts.neutts.model',
-      'tts.neutts.device',
-      'tts.kittentts.model',
-      'tts.kittentts.voice',
-      'tts.piper.voice',
-      'stt.local.model',
-      'stt.local.language',
-      'stt.openai.model',
-      'stt.groq.model',
-      'stt.mistral.model',
-      'stt.elevenlabs.model_id',
-      'stt.elevenlabs.language_code',
-      'stt.elevenlabs.tag_audio_events',
-      'stt.elevenlabs.diarize',
-      'voice.record_key',
-      'voice.max_recording_seconds'
-    ]
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    icon: Wrench,
-    keys: [
-      'toolsets',
-      'terminal.backend',
-      'terminal.timeout',
-      'terminal.docker_image',
-      'terminal.singularity_image',
-      'terminal.modal_image',
-      'terminal.daytona_image',
-      'tool_output.max_bytes',
-      'tool_output.max_lines',
-      'tool_output.max_line_length',
-      'checkpoints.max_snapshots',
-      'agent.max_turns',
-      'agent.api_max_retries',
-      'agent.service_tier',
-      'agent.tool_use_enforcement',
-      'delegation.model',
-      'delegation.provider',
-      'delegation.max_iterations',
-      'delegation.max_concurrent_children',
-      'delegation.child_timeout_seconds',
-      'delegation.reasoning_effort',
-      'updates.non_interactive_local_changes'
-    ]
-  }
+  { id: 'tool_output', label: 'Tool output', icon: FileText, keys: [], schemaCategory: 'tool_output' },
+  { id: 'updates', label: 'Updates', icon: RefreshCw, keys: [], schemaCategory: 'updates' }
 ]
 
 export interface ModeOption {

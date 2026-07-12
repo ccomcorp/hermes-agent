@@ -17,13 +17,31 @@
  *
  * Section selection is persisted in the URL via `useRouteEnumParam` (the chassis
  * convention used by Settings, so the active section survives a refresh).
+ *
+ * Config path + import/export/reset: mirrors the web dashboard Config page
+ * header (path display, JSON export/import, reset). Path is profile-scoped
+ * (HERMES_HOME) — not an arbitrary free-text path; Reveal opens the folder.
  */
 import type * as React from 'react'
-import { useEffect, useMemo, useRef } from 'react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Tip } from '@/components/ui/tooltip'
+import {
+  getHermesConfigDefaults,
+  getHermesConfigRaw,
+  getHermesConfigRecord,
+  saveHermesConfig
+} from '@/hermes'
+import { revealDesktopPath } from '@/lib/desktop-fs'
+import { triggerHaptic } from '@/lib/haptics'
+import { Copy, Download, FolderOpen, RefreshCw, Upload } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-
+import { notify, notifyError } from '@/store/notifications'
+import type { HermesConfigRecord } from '@/types/hermes'
+import { setHermesConfigCache } from '../hooks/use-config-record'
+import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { PAGE_INSET_X } from '../layout-constants'
 import { AppearanceSettings } from '../settings/appearance-settings'
@@ -55,15 +73,151 @@ export function ConfigView({
     sectionIds[0] ?? 'model'
   )
 
-  // ConfigSettings owns a hidden file input for config import; this pane has no
-  // import affordance, but the prop is required, so pass a real ref.
+  // Own the import input here so Import works even when Appearance is selected
+  // (ConfigSettings is unmounted in that case). Settings overlay keeps its own.
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  // Required by ConfigSettings when mounted — unused for the toolbar import.
+  const settingsImportRef = useRef<HTMLInputElement | null>(null)
+
+  const [configPath, setConfigPath] = useState<string | null>(null)
+  const [pathLoading, setPathLoading] = useState(true)
+  // Bump to force ConfigSettings remount after external import/reset so fields refresh.
+  const [configEpoch, setConfigEpoch] = useState(0)
+
+  const loadConfigPath = useCallback(async () => {
+    setPathLoading(true)
+
+    try {
+      const raw = await getHermesConfigRaw()
+      setConfigPath(raw.path || null)
+    } catch {
+      setConfigPath(null)
+    } finally {
+      setPathLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    setStatusbarItemGroup?.('config', [])
+    void loadConfigPath()
+  }, [loadConfigPath])
+
+  // Profile switch changes HERMES_HOME → different config.yaml path.
+  useOnProfileSwitch(() => {
+    void loadConfigPath()
+  })
+
+  useEffect(() => {
+    setStatusbarItemGroup?.('config', [
+      {
+        id: 'config-yaml-path',
+        label: s.configFileLabel,
+        detail: pathLoading ? '…' : configPath || '—',
+        title: configPath || s.configFileUnavailable,
+        variant: 'text'
+      }
+    ])
 
     return () => setStatusbarItemGroup?.('config', [])
-  }, [setStatusbarItemGroup])
+  }, [configPath, pathLoading, setStatusbarItemGroup])
+
+  const copyPath = useCallback(async () => {
+    if (!configPath) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(configPath)
+      notify({ kind: 'success', title: s.pathCopied, message: configPath })
+    } catch (err) {
+      notifyError(err, s.copyPath)
+    }
+  }, [configPath])
+
+  const exportConfig = useCallback(async () => {
+    try {
+      const cfg = await getHermesConfigRecord()
+      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'hermes-config.json'
+      a.click()
+      URL.revokeObjectURL(url)
+      triggerHaptic('success')
+      notify({ kind: 'success', title: s.exportDone, message: 'hermes-config.json' })
+    } catch (err) {
+      notifyError(err, s.exportFailed)
+    }
+  }, [])
+
+  const resetConfig = useCallback(async () => {
+    if (!window.confirm(s.resetConfirm)) {
+      return
+    }
+
+    try {
+      const defaults = await getHermesConfigDefaults()
+      await saveHermesConfig(defaults)
+      setHermesConfigCache(defaults)
+      setConfigEpoch(n => n + 1)
+      triggerHaptic('success')
+      notify({ kind: 'success', title: s.resetDone, message: s.configFileLabel })
+      onConfigSaved?.()
+      void loadConfigPath()
+    } catch (err) {
+      notifyError(err, s.resetFailed)
+    }
+  }, [loadConfigPath, onConfigSaved])
+
+  const revealConfig = useCallback(async () => {
+    if (!configPath) {
+      return
+    }
+
+    try {
+      await revealDesktopPath(configPath)
+    } catch (err) {
+      notifyError(err, s.revealFailed)
+    }
+  }, [configPath])
+
+  const openImport = useCallback(() => {
+    triggerHaptic('open')
+    importInputRef.current?.click()
+  }, [])
+
+  const handleImportFile = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+
+      if (!file) {
+        return
+      }
+
+      const reader = new FileReader()
+
+      reader.onload = () => {
+        void (async () => {
+          try {
+            const imported = JSON.parse(String(reader.result)) as HermesConfigRecord
+            await saveHermesConfig(imported)
+            setHermesConfigCache(imported)
+            setConfigEpoch(n => n + 1)
+            triggerHaptic('success')
+            notify({ kind: 'success', title: s.importConfig, message: 'Saved' })
+            onConfigSaved?.()
+            void loadConfigPath()
+          } catch (err) {
+            notifyError(err, s.importFailed)
+          }
+        })()
+      }
+
+      reader.readAsText(file)
+    },
+    [loadConfigPath, onConfigSaved]
+  )
 
   return (
     <section
@@ -78,13 +232,103 @@ export function ConfigView({
         )}
       >
         <div className="mx-auto w-full max-w-4xl">
-          <div className="flex items-center gap-2 pb-3">
+          <div className="flex items-center gap-2 pb-2">
             <Codicon className="text-muted-foreground" name="settings-gear" size="1rem" />
             <h1 className="text-[length:var(--conversation-text-font-size)] font-medium text-foreground">
               {s.title}
             </h1>
             <span className="text-xs text-muted-foreground">{s.subtitle}</span>
           </div>
+
+          {/* Absolute config.yaml path + web-parity toolbar */}
+          <div className="mb-3 flex min-w-0 flex-col gap-2 rounded-md border border-(--ui-stroke-tertiary) bg-(--ui-bg-tertiary)/40 px-2.5 py-1.5 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Codicon className="shrink-0 text-muted-foreground" name="file" size="0.875rem" />
+              <code
+                className="min-w-0 flex-1 truncate font-mono text-[0.7rem] text-muted-foreground"
+                title={configPath || s.pathHint}
+              >
+                {pathLoading ? s.configFileLoading : configPath || s.configFileUnavailable}
+              </code>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-0.5">
+              <Tip label={s.copyPath}>
+                <Button
+                  className="h-7 gap-1 px-2 text-[0.7rem]"
+                  disabled={!configPath}
+                  onClick={() => void copyPath()}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Copy className="size-3.5" />
+                  <span className="hidden sm:inline">{s.copyPath}</span>
+                </Button>
+              </Tip>
+
+              <Tip label={s.revealInFolder}>
+                <Button
+                  className="h-7 gap-1 px-2 text-[0.7rem]"
+                  disabled={!configPath}
+                  onClick={() => void revealConfig()}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <FolderOpen className="size-3.5" />
+                  <span className="hidden sm:inline">{s.revealInFolder}</span>
+                </Button>
+              </Tip>
+
+              <div className="mx-0.5 h-4 w-px bg-(--ui-stroke-tertiary)" />
+
+              <Tip label={s.exportConfig}>
+                <Button
+                  className="h-7 gap-1 px-2 text-[0.7rem]"
+                  onClick={() => void exportConfig()}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Download className="size-3.5" />
+                  <span className="hidden sm:inline">{s.exportConfig}</span>
+                </Button>
+              </Tip>
+
+              <Tip label={s.importConfig}>
+                <Button
+                  className="h-7 gap-1 px-2 text-[0.7rem]"
+                  onClick={openImport}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Upload className="size-3.5" />
+                  <span className="hidden sm:inline">{s.importConfig}</span>
+                </Button>
+              </Tip>
+
+              <Tip label={s.resetToDefaults}>
+                <Button
+                  className="h-7 gap-1 px-2 text-[0.7rem] hover:text-destructive"
+                  onClick={() => {
+                    triggerHaptic('warning')
+                    void resetConfig()
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <RefreshCw className="size-3.5" />
+                  <span className="hidden sm:inline">{s.resetToDefaults}</span>
+                </Button>
+              </Tip>
+            </div>
+          </div>
+
+          <p className="mb-2 text-[0.65rem] leading-snug text-muted-foreground">{s.pathHint}</p>
+
           <nav aria-label={s.sectionNavLabel} className="-mb-px flex flex-wrap gap-1 pb-1">
             {SECTIONS.map(section => {
               const Icon = section.icon
@@ -123,12 +367,21 @@ export function ConfigView({
         ) : (
           <ConfigSettings
             activeSectionId={activeSectionId}
-            importInputRef={importInputRef}
+            importInputRef={settingsImportRef}
+            key={`config-body-${configEpoch}`}
             onConfigSaved={onConfigSaved}
             onMainModelChanged={onMainModelChanged}
           />
         )}
       </div>
+
+      <input
+        accept=".json,application/json"
+        className="hidden"
+        onChange={handleImportFile}
+        ref={importInputRef}
+        type="file"
+      />
     </section>
   )
 }
