@@ -20,5 +20,20 @@ export const configStrings = {
   configFileLoading: 'Resolving config path…',
   configFileUnavailable: 'Config path unavailable',
   copyPath: 'Copy path',
-  pathCopied: 'Path copied'
+  pathCopied: 'Path copied',
+  // Toolbar — web Config page + Settings overlay parity.
+  exportConfig: 'Export config',
+  importConfig: 'Import config',
+  resetToDefaults: 'Reset to defaults',
+  revealInFolder: 'Show in folder',
+  exportFailed: 'Export failed',
+  exportDone: 'Config exported',
+  importFailed: 'Import failed',
+  resetConfirm:
+    'Reset all configuration to Hermes defaults? This overwrites your current config.yaml after save.',
+  resetFailed: 'Reset failed',
+  resetDone: 'Config reset to defaults',
+  revealFailed: 'Could not open the config folder',
+  pathHint:
+    'Path is fixed per profile (HERMES_HOME). Switch profile to use a different config.yaml; use Show in folder to open it.'
 } as const
