@@ -160,3 +160,39 @@ def test_sync_returns_change_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_commit_if_changed", lambda p: False)
     assert mod._sync_worktree_changes(proj, proj / ".worktrees" / "w1") is False
     assert mod._sync_worktree_changes(proj, None) is False
+
+# --- loose-ends coverage (fix/canvas-loose-ends) ---
+
+def test_list_source_files_excludes_skip_dirs(tmp_path):
+    # A source file buried in an excluded dir (node_modules) must NOT be listed,
+    # so the unique-text resolver can't accidentally target a dependency file.
+    mod = _load()
+    proj = _mkproject(tmp_path, {
+        "src/App.jsx": "export default () => <p>real source</p>",
+        "node_modules/pkg/index.jsx": "export default () => <p>real source</p>",
+        "dist/bundle.js": "console.log('built')",
+    })
+    names = {str(p.relative_to(proj)).replace("\\", "/") for p in mod._list_source_files(proj)}
+    assert "src/App.jsx" in names
+    assert "node_modules/pkg/index.jsx" not in names
+    assert "dist/bundle.js" not in names
+
+def test_resolve_via_attr_when_no_text_trusts_attr(tmp_path):
+    # No text to verify against -> the hermes_file attr is the only signal and is
+    # trusted without a content read (the _contains no-text short-circuit).
+    mod = _load()
+    proj = _mkproject(tmp_path, SRC_EXTS_FIXTURE)
+    el = {"text": "", "hermesAttributes": {"file": "index.html"}}
+    r = mod._resolve_target_file(proj, el)
+    assert r is not None and r["rel_path"] == "index.html" and r["source"] == "hermes_file"
+
+def test_build_edit_prompt_marks_unreadable_file(tmp_path):
+    # If the resolved path can't be read, the prompt must surface an honest marker
+    # instead of an empty body (a directory read raises -> exercises the except path).
+    mod = _load()
+    unreadable = tmp_path / "adir"
+    unreadable.mkdir()
+    resolved = {"rel_path": "adir", "abs_path": str(unreadable), "source": "hermes_file"}
+    p = mod._build_edit_prompt("edit it", resolved, {"text": "x"}, [])
+    assert "could not be read" in p
+    assert "PATH: adir" in p
