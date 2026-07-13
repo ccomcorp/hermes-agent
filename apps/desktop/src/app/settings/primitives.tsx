@@ -8,11 +8,13 @@ import { cn } from '@/lib/utils'
 
 import { PAGE_INSET_X } from '../layout-constants'
 
-export function SettingsContent({ children }: { children: ReactNode }) {
+// `bare` drops the page gutters + tall bottom pad for embedding in a tighter
+// surface (e.g. the boot-failure recovery card owns its own padding).
+export function SettingsContent({ children, bare = false }: { children: ReactNode; bare?: boolean }) {
   return (
     <section className="h-full min-h-0 overflow-hidden">
-      <div className={cn('h-full min-h-0 overflow-y-auto pb-20', PAGE_INSET_X)}>
-        <div className="mx-auto w-full max-w-4xl">{children}</div>
+      <div className={cn('h-full min-h-0 overflow-y-auto', bare ? 'px-5 pb-6' : cn('pb-20', PAGE_INSET_X))}>
+        {bare ? children : <div className="mx-auto w-full max-w-4xl">{children}</div>}
       </div>
     </section>
   )
