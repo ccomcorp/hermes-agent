@@ -137,9 +137,9 @@ def test_tool_policy_charges_budget_and_gates_child_egress():
     g = WorkflowGuard()
     b = Budget(max_steps=10)
     ctx = _ctx(sink=FailClosedSink(), budget=b, http_allowlist=("api.example.com",))
-    assert g.tool_policy("web_extract_tool", {"url": "https://api.example.com/x"}, ctx).allowed
+    assert g.tool_policy("web_extract", {"urls": ["https://api.example.com/x"]}, ctx).allowed
     assert b.steps == 1  # a child tool call costs budget
-    assert not g.tool_policy("web_extract_tool", {"url": "https://evil.test/x"}, ctx).allowed
+    assert not g.tool_policy("web_extract", {"urls": ["https://evil.test/x"]}, ctx).allowed
 
 
 def test_tool_policy_gates_child_write_and_shell():
@@ -163,3 +163,29 @@ def test_derive_child_shares_budget_and_sink():
     assert child.budget is parent.budget            # same instance → shared bound (R1/R3)
     assert child.approval_sink is parent.approval_sink
     assert child.http_allowlist == parent.http_allowlist
+
+
+# --- WF0 hardening (spec-13 elicitation: F2 capability map, D1 dry_run) ----------
+
+def test_tool_policy_unknown_tool_default_denies():
+    g = WorkflowGuard()
+    assert g.classify_tool("web_search") == "egress"
+    assert g.classify_tool("read_file") == "read"
+    assert g.classify_tool("some_new_mcp_tool") == "unknown"
+    # unknown child tool must default-DENY under fail-closed (not slip through)
+    assert not g.tool_policy("some_new_mcp_tool", {}, _ctx(sink=FailClosedSink())).allowed
+
+
+def test_dry_run_traces_side_effecting_without_executing():
+    g = WorkflowGuard()
+    called = []
+    g.register("http-request", lambda n, c: called.append(1))
+    ctx = _ctx(sink=_AllowSink())
+    ctx.dry_run = True
+    out = g.dispatch({"kind": "http-request", "config": {"url": "https://x/y"}}, ctx)
+    assert out.get("__dry__") and out.get("wouldRun") is True and called == []
+    # unknown side-effecting kind in dry mode -> wouldRun False, still no raise
+    out2 = g.dispatch({"kind": "mystery-node"}, ctx)
+    assert out2.get("__dry__") and out2.get("wouldRun") is False
+    # pure node in dry mode still returns None (the engine runs it)
+    assert g.dispatch({"kind": "set-fields"}, ctx) is None

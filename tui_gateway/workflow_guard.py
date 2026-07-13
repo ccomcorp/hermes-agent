@@ -22,6 +22,7 @@ are the *integration* slices (WF2/WF3) that CONSUME these primitives.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -53,12 +54,18 @@ class Budget:
     max_seconds: float = 300.0
     _steps: int = field(default=0, init=False)
     _start: float = field(default_factory=time.monotonic, init=False)
+    # charge() is called from parallel child threads (delegate runs children in a
+    # ThreadPoolExecutor) sharing one Budget — the increment must be atomic (C1).
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def charge(self, steps: int = 1) -> None:
-        self._steps += steps
-        if self._steps > self.max_steps:
-            raise WorkflowHalted(f"step budget exceeded ({self._steps}/{self.max_steps})")
-        if (time.monotonic() - self._start) > self.max_seconds:
+        with self._lock:
+            self._steps += steps
+            steps_now = self._steps
+            elapsed = time.monotonic() - self._start
+        if steps_now > self.max_steps:
+            raise WorkflowHalted(f"step budget exceeded ({steps_now}/{self.max_steps})")
+        if elapsed > self.max_seconds:
             raise WorkflowHalted(f"time budget exceeded (> {self.max_seconds}s)")
 
     @property
@@ -137,6 +144,9 @@ class RunContext:
     model: Optional[str] = None
     http_allowlist: tuple[str, ...] = ()
     allow_code_node: bool = False
+    # Dry run (D1): dispatch records a "would-run" trace for side-effecting kinds and
+    # does NOT execute or prompt for approval; pure kinds still run (side-effect-free).
+    dry_run: bool = False
     # Synthetic sid ("run:<id>") so the runId-addressable gateway approval/event
     # queue can address a run with no desktop session (R2 / §2). Set by workflow.run.
     run_channel: Optional[str] = None
@@ -224,34 +234,57 @@ class WorkflowGuard:
     # tool_policy() before EVERY child tool call, so that loop cannot bypass the
     # guard: it charges the shared budget (bounding the child loop) and applies
     # the same per-capability policy (egress allowlist, no unapproved writes/shell).
-    # Name-hint matching is a first-cut; WF3 refines it against the real tool
-    # registry. Default is ALLOW only for read-only/benign tools.
-    _CHILD_EGRESS_HINT = ("http", "web", "fetch", "url", "request", "curl")
-    _CHILD_WRITE_HINT = ("write", "edit", "create", "delete", "move", "rename", "save")
-    _CHILD_SHELL_HINT = ("terminal", "shell", "command", "exec", "bash", "run_")
+    # Real registry tool name -> capability class. Default (unknown) = DENY so a new
+    # tool cannot slip through ungated (F2). WF3 extends this from the live tool
+    # registry; egress uses `urls`/`url` args (web_extract passes a list, not a scalar).
+    _TOOL_CAPABILITY: dict[str, str] = {
+        "web_search": "egress", "web_extract": "egress", "web_fetch": "egress",
+        "browser_open": "egress", "browser_navigate": "egress", "http_request": "egress",
+        "file_write": "write", "write_file": "write", "edit_file": "write",
+        "str_replace": "write", "apply_patch": "write", "create_file": "write",
+        "delete_file": "write", "move_file": "write",
+        "terminal": "shell", "execute_command": "shell", "run_command": "shell",
+        "execute_code": "shell",
+        "read_file": "read", "list_dir": "read", "grep": "read", "glob": "read",
+        "read_terminal": "read",
+    }
+
+    def classify_tool(self, tool_name: str) -> str:
+        return self._TOOL_CAPABILITY.get((tool_name or "").lower(), "unknown")
 
     def tool_policy(self, tool_name: str, args: dict, ctx: RunContext) -> GuardResult:
-        name = (tool_name or "").lower()
         ctx.budget.charge()                       # a child tool call costs budget too
         args = args or {}
-        if any(h in name for h in self._CHILD_EGRESS_HINT):
-            host = _host_of(args.get("url") or args.get("host") or "")
-            if host and host in ctx.http_allowlist:
+        cap = self.classify_tool(tool_name)
+        if cap == "read":
+            return GuardResult(True)
+        if cap == "egress":
+            urls = list(args["urls"]) if isinstance(args.get("urls"), list) else []
+            if args.get("url"):
+                urls.append(args["url"])
+            hosts = [h for h in (_host_of(u) for u in urls) if h]
+            if hosts and all(h in ctx.http_allowlist for h in hosts):
                 return GuardResult(True)
-            return self._approve(ctx, name, f"child egress to {host or '<unknown host>'} (not allowlisted)")
-        if any(h in name for h in self._CHILD_WRITE_HINT):
-            return self._approve(ctx, name, f"child file mutation via '{name}'")
-        if any(h in name for h in self._CHILD_SHELL_HINT):
-            return self._approve(ctx, name, f"child shell via '{name}'")
-        return GuardResult(True)                  # read-only / benign child tool
+            return self._approve(ctx, tool_name, f"child egress via '{tool_name}' to {hosts or '<no url>'}")
+        if cap in ("write", "shell"):
+            return self._approve(ctx, tool_name, f"child {cap} via '{tool_name}'")
+        # unknown -> default-DENY (route to approval; fail-closed under non-interactive)
+        return self._approve(ctx, tool_name, f"unclassified child tool '{tool_name}' (default-deny)")
 
     # --- dispatch (the only path to an executor) ------------------------------
     def dispatch(self, node: dict, ctx: RunContext) -> Any:
         ctx.budget.charge()                       # every node costs budget (R3)
+        kind = node.get("kind", "")
+        # Dry run (D1): pure kinds are side-effect-free so they still execute; a
+        # side-effecting kind records a "would-run" trace with NO approval prompt and
+        # NO executor call — never raises, so dryRun traces the WHOLE graph.
+        if ctx.dry_run and kind not in self.PURE_KINDS:
+            known = kind in self._APPROVAL_KINDS or kind in ("http-request", "code")
+            return {"__dry__": True, "kind": kind, "wouldRun": known,
+                    "reason": None if known else f"unknown node kind '{kind}'"}
         result = self.policy(node, ctx)           # gate BEFORE any side effect (R1)
         if not result.allowed:
-            raise WorkflowGuardDenied(node.get("kind", ""), result.reason)
-        kind = node.get("kind", "")
+            raise WorkflowGuardDenied(kind, result.reason)
         executor = self.__executors.get(kind)
         if executor is None:
             if kind in self.PURE_KINDS:
