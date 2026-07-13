@@ -21,13 +21,21 @@ from typing import Any, Callable, Optional
 from tui_gateway.workflow_guard import RunContext, WorkflowGuard
 
 # An ai-agent workflow node's child is a REASONING/generation agent only. The
-# chassis restricts a child by ALLOWLIST (delegate_task intersects the requested
-# per-task ``toolsets`` with the parent's — tools/delegate_tool.py:1121), so R1 is
-# closed by naming the ONLY toolset the child may have: ``safe``, a registered
-# toolset whose tool list is empty (verified: TOOLSETS["safe"] == []). The child
-# therefore gets zero tools — it can reason, but cannot egress/write/shell/run code
-# — whether or not the parent carries ``safe`` (the intersection is empty either
-# way). This is the live-verified equivalent of "strip every side-effecting toolset".
+# chassis restricts a child by ALLOWLIST: delegate_task intersects the requested
+# per-task ``toolsets`` with the PARENT's concrete toolsets (delegate_tool.py:1126).
+# R1 is closed by the COMBINATION of two live-verified facts, NOT by "safe being
+# empty" (it is NOT: TOOLSETS["safe"] has tools==[] but includes ["web","vision",
+# "image_gen"], so it composites in web EGRESS):
+#   1. Intersection collapse — a real parent carries concrete toolsets (web/file/
+#      terminal), never the composite name "safe", so ["safe"] ∩ parent == []
+#      (verified for every realistic parent). The child's enabled_toolsets is [].
+#   2. Empty-list ≠ None — model_tools._compute_tool_definitions gates on
+#      ``if enabled_toolsets is not None`` (model_tools.py:367), so [] takes the
+#      RESTRICTING branch and loads ZERO tools; only None means "all tools".
+#      (Verified live: []→0 tools, None→36 incl execute_code/terminal/web_*/write_file.)
+# The child can reason but cannot egress/write/shell/run code. Both facts are locked
+# by test_ai_node_restriction_semantics_live_chassis — if EITHER regresses (e.g. the
+# gate becomes a falsy check, inverting [] to "all tools"), R1 silently breaks.
 AI_NODE_ALLOWED_TOOLSETS = ("safe",)
 
 

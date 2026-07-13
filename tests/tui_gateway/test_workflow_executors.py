@@ -75,11 +75,46 @@ def test_default_adapters_match_live_chassis_signatures():
     cp = inspect.signature(execute_code).parameters
     assert "code" in cp
 
-    # The 'safe' allowlist really is an empty (zero-tool) toolset.
+
+def test_ai_node_restriction_semantics_live_chassis():
+    """SEMANTIC lock for R1 (companion to the signature-lock above).
+
+    R1 does NOT rest on "safe is an empty toolset" — it is NOT empty: its direct
+    ``tools`` list is [] but it ``includes`` web (an EGRESS toolset). The deny-path
+    actually holds on TWO live-chassis facts; if either regresses, the ai-agent
+    node's child silently regains side-effecting tools.
+    """
     from toolsets import TOOLSETS
+    from model_tools import _compute_tool_definitions
+
+    # Fact 0 (documents the trap): "safe" composites in web egress — so nobody
+    # re-asserts the false "safe == zero tools" and calls R1 done.
     safe = TOOLSETS.get("safe")
-    safe_tools = safe.get("tools") if isinstance(safe, dict) else getattr(safe, "tools", safe)
-    assert safe_tools == []
+    assert isinstance(safe, dict) and safe.get("tools") == []
+    assert "web" in (safe.get("includes") or []), "if this changes, revisit the R1 rationale"
+
+    def _names(defs):
+        out = set()
+        for d in defs:
+            n = (d.get("function", {}) or {}).get("name") or d.get("name")
+            if n:
+                out.add(n)
+        return out
+
+    danger = {"web_search", "web_extract", "web_fetch", "file_write", "write_file",
+              "edit_file", "terminal", "execute_command", "execute_code"}
+
+    # Fact 1 — the load-bearing gate: an EMPTY enabled_toolsets ([], not None) loads
+    # ZERO tools. If model_tools.py:367 ever became a falsy check, [] would fall to
+    # the "all tools" branch and this inverts (the exact silent break we guard).
+    empty_tools = _names(_compute_tool_definitions(enabled_toolsets=[], quiet_mode=True))
+    assert empty_tools == set(), f"empty toolset must load no tools, got {empty_tools}"
+
+    # Fact 2 — [] and None are NOT equivalent: None IS "all tools" (incl. dangerous).
+    # This proves the []→0 result above is the restricting branch, not an empty chassis.
+    all_tools = _names(_compute_tool_definitions(enabled_toolsets=None, quiet_mode=True))
+    assert danger & all_tools, "None must grant the full (dangerous) surface"
+    assert not (danger & empty_tools), "restricted child must have no egress/write/shell tool"
 
 
 def test_ai_agent_fail_closed_when_no_agent_for_noninteractive_origin_F5():
