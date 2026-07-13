@@ -1,9 +1,19 @@
+import { useStore } from '@nanostores/react'
 import type * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { CopyButton } from '@/components/ui/copy-button'
 import {
   Dialog,
@@ -13,7 +23,16 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { renameSession } from '@/hermes'
 import { useI18n } from '@/i18n'
@@ -21,8 +40,17 @@ import { triggerHaptic } from '@/lib/haptics'
 import { exportSession } from '@/lib/session-export'
 import { activeGateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
-import { $activeSessionId, $selectedStoredSessionId, setSessions } from '@/store/session'
+import {
+  $projects,
+  createProjectAndMoveSession,
+  moveSessionToProject,
+  pickProjectFolder,
+  projectWorkspacePath,
+  refreshProjects
+} from '@/store/projects'
+import { $activeSessionId, $currentCwd, $selectedStoredSessionId, setSessions } from '@/store/session'
 import { canOpenSessionWindow, openSessionInNewWindow } from '@/store/windows'
+import type { ProjectInfo } from '@/types/hermes'
 
 import type { SessionTitleResponse } from '../../types'
 
@@ -106,6 +134,47 @@ function useSessionActions({
   const { t } = useI18n()
   const r = t.sidebar.row
   const [renameOpen, setRenameOpen] = useState(false)
+  const [moveCreateOpen, setMoveCreateOpen] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const allProjects = useStore($projects)
+
+  // Explicit, non-archived projects with at least one folder — those are the
+  // only targets that can own a session via cwd-prefix.
+  const moveTargets = useMemo(
+    () =>
+      allProjects
+        .filter(project => !project.archived && projectWorkspacePath(project))
+        .slice()
+        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)),
+    [allProjects]
+  )
+
+  useEffect(() => {
+    // Keep the submenu list fresh when the menu mounts (projects can lag).
+    void refreshProjects().catch(() => undefined)
+  }, [])
+
+  const runMove = async (project: ProjectInfo) => {
+    if (!sessionId || moving) {
+      return
+    }
+
+    setMoving(true)
+    triggerHaptic('selection')
+
+    try {
+      await moveSessionToProject({ sessionId, project, profile })
+      notify({
+        durationMs: 2_500,
+        kind: 'success',
+        message: r.movedToProject(project.name || project.id)
+      })
+    } catch (err) {
+      notifyError(err, r.moveFailed)
+    } finally {
+      setMoving(false)
+    }
+  }
 
   const pinItem: ItemSpec = {
     disabled: !onPin,
@@ -187,7 +256,55 @@ function useSessionActions({
     </Item>
   )
 
-  const renderItems = (Item: MenuItem) => (
+  const renderMoveSubmenu = (variant: 'dropdown' | 'context') => {
+    const Sub = variant === 'dropdown' ? DropdownMenuSub : ContextMenuSub
+    const SubTrigger = variant === 'dropdown' ? DropdownMenuSubTrigger : ContextMenuSubTrigger
+    const SubContent = variant === 'dropdown' ? DropdownMenuSubContent : ContextMenuSubContent
+    const Item = variant === 'dropdown' ? DropdownMenuItem : ContextMenuItem
+    const Separator = variant === 'dropdown' ? DropdownMenuSeparator : ContextMenuSeparator
+
+    return (
+      <Sub key="move-to-project">
+        <SubTrigger disabled={!sessionId || moving} className="gap-2">
+          <Codicon name="folder" size="0.875rem" />
+          <span>{r.moveToProject}</span>
+        </SubTrigger>
+        <SubContent className="max-h-72 w-56 overflow-y-auto">
+          {moveTargets.length === 0 ? (
+            <Item disabled>
+              <span className="text-muted-foreground">{r.moveNoProjects}</span>
+            </Item>
+          ) : (
+            moveTargets.map(project => (
+              <Item
+                disabled={moving}
+                key={project.id}
+                onSelect={() => {
+                  void runMove(project)
+                }}
+              >
+                <Codicon name="folder" size="0.875rem" />
+                <span className="truncate">{project.name || project.id}</span>
+              </Item>
+            ))
+          )}
+          <Separator />
+          <Item
+            disabled={!sessionId || moving}
+            onSelect={() => {
+              triggerHaptic('selection')
+              setMoveCreateOpen(true)
+            }}
+          >
+            <Codicon name="new-folder" size="0.875rem" />
+            <span>{r.moveNewProject}</span>
+          </Item>
+        </SubContent>
+      </Sub>
+    )
+  }
+
+  const renderItems = (Item: MenuItem, variant: 'dropdown' | 'context') => (
     <>
       {renderMenuItem(Item, pinItem)}
       <CopyButton
@@ -200,6 +317,7 @@ function useSessionActions({
         onCopyError={err => notifyError(err, r.copyIdFailed)}
         text={sessionId}
       />
+      {renderMoveSubmenu(variant)}
       {items.map(spec => renderMenuItem(Item, spec))}
     </>
   )
@@ -214,7 +332,17 @@ function useSessionActions({
     />
   )
 
-  return { renameDialog, renderItems }
+  const moveCreateDialog = (
+    <MoveToNewProjectDialog
+      onOpenChange={setMoveCreateOpen}
+      open={moveCreateOpen}
+      profile={profile}
+      sessionId={sessionId}
+      sessionTitle={title}
+    />
+  )
+
+  return { moveCreateDialog, renameDialog, renderItems }
 }
 
 interface SessionActionsMenuProps
@@ -224,7 +352,7 @@ interface SessionActionsMenuProps
 
 export function SessionActionsMenu({ children, align = 'end', sideOffset = 6, ...actions }: SessionActionsMenuProps) {
   const { t } = useI18n()
-  const { renameDialog, renderItems } = useSessionActions(actions)
+  const { moveCreateDialog, renameDialog, renderItems } = useSessionActions(actions)
 
   return (
     <>
@@ -233,13 +361,14 @@ export function SessionActionsMenu({ children, align = 'end', sideOffset = 6, ..
         <DropdownMenuContent
           align={align}
           aria-label={t.sidebar.row.actionsFor(actions.title)}
-          className="w-40"
+          className="w-48"
           sideOffset={sideOffset}
         >
-          {renderItems(DropdownMenuItem)}
+          {renderItems(DropdownMenuItem, 'dropdown')}
         </DropdownMenuContent>
       </DropdownMenu>
       {renameDialog}
+      {moveCreateDialog}
     </>
   )
 }
@@ -250,17 +379,18 @@ interface SessionContextMenuProps extends SessionActions {
 
 export function SessionContextMenu({ children, ...actions }: SessionContextMenuProps) {
   const { t } = useI18n()
-  const { renameDialog, renderItems } = useSessionActions(actions)
+  const { moveCreateDialog, renameDialog, renderItems } = useSessionActions(actions)
 
   return (
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent aria-label={t.sidebar.row.actionsFor(actions.title)} className="w-40">
-          {renderItems(ContextMenuItem)}
+        <ContextMenuContent aria-label={t.sidebar.row.actionsFor(actions.title)} className="w-48">
+          {renderItems(ContextMenuItem, 'context')}
         </ContextMenuContent>
       </ContextMenu>
       {renameDialog}
+      {moveCreateDialog}
     </>
   )
 }
@@ -344,6 +474,146 @@ function RenameSessionDialog({ open, onOpenChange, sessionId, currentTitle, prof
           </Button>
           <Button disabled={submitting} onClick={() => void submit()} type="button">
             {t.common.save}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+interface MoveToNewProjectDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  sessionId: string
+  sessionTitle: string
+  profile?: string
+}
+
+function MoveToNewProjectDialog({
+  open,
+  onOpenChange,
+  sessionId,
+  sessionTitle,
+  profile
+}: MoveToNewProjectDialogProps) {
+  const { t } = useI18n()
+  const r = t.sidebar.row
+  const [name, setName] = useState('')
+  const [folder, setFolder] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    // Default name from the chat title when it looks usable; folder from the
+    // live workspace chip (or empty → user picks).
+    const defaultName = (sessionTitle || '').trim()
+    setName(defaultName && defaultName.length <= 60 ? defaultName : '')
+    setFolder(($currentCwd.get() || '').trim())
+    setSubmitting(false)
+    window.setTimeout(() => nameRef.current?.select(), 0)
+  }, [open, sessionTitle])
+
+  const submit = async () => {
+    const trimmedName = name.trim()
+    const trimmedFolder = folder.trim()
+
+    if (!sessionId || !trimmedName || !trimmedFolder || submitting) {
+      return
+    }
+
+    setSubmitting(true)
+
+    try {
+      const created = await createProjectAndMoveSession({
+        sessionId,
+        name: trimmedName,
+        folder: trimmedFolder,
+        profile
+      })
+      notify({
+        durationMs: 2_500,
+        kind: 'success',
+        message: r.movedToProject(created.name || trimmedName)
+      })
+      onOpenChange(false)
+    } catch (err) {
+      notifyError(err, r.moveFailed)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{r.moveNewProjectTitle}</DialogTitle>
+          <DialogDescription>{r.moveNewProjectDesc}</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-muted-foreground text-xs font-medium" htmlFor="move-project-name">
+              {r.moveProjectName}
+            </label>
+            <Input
+              autoFocus
+              disabled={submitting}
+              id="move-project-name"
+              onChange={event => setName(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void submit()
+                }
+              }}
+              placeholder="Hermes Update"
+              ref={nameRef}
+              value={name}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-muted-foreground text-xs font-medium" htmlFor="move-project-folder">
+              {r.moveProjectFolder}
+            </label>
+            <div className="flex gap-2">
+              <Input
+                disabled={submitting}
+                id="move-project-folder"
+                onChange={event => setFolder(event.target.value)}
+                placeholder={r.moveProjectFolderPlaceholder}
+                value={folder}
+              />
+              <Button
+                disabled={submitting}
+                onClick={() => {
+                  void pickProjectFolder().then(dir => {
+                    if (dir) {
+                      setFolder(dir)
+                    }
+                  })
+                }}
+                type="button"
+                variant="outline"
+              >
+                {r.moveBrowse}
+              </Button>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={submitting} onClick={() => onOpenChange(false)} type="button" variant="ghost">
+            {t.common.cancel}
+          </Button>
+          <Button
+            disabled={submitting || !name.trim() || !folder.trim()}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {r.moveCreateAndMove}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -5946,26 +5946,74 @@ def _(rid, params: dict) -> dict:
 
 @method("session.cwd.set")
 def _(rid, params: dict) -> dict:
-    session, err = _sess_nowait(params, rid)
-    if err:
-        return err
-    if session.get("running"):
-        return _err(rid, 4009, "session busy")
+    """Re-anchor a session's workspace (cwd).
+
+    Live sessions update in-memory + DB and emit ``session.info`` so the desktop
+    follows. Stored-only sessions (not currently loaded in the gateway) update
+    ``state.db`` so project grouping can re-home history without resuming first.
+    """
     raw = str(params.get("cwd", "") or "").strip()
     if not raw:
         return _err(rid, 4016, "cwd required")
+
+    session, err = _sess_nowait(params, rid)
+    if session is not None:
+        if session.get("running"):
+            return _err(rid, 4009, "session busy")
+        try:
+            cwd = _set_session_cwd(session, raw)
+        except ValueError as e:
+            return _err(rid, 4017, str(e))
+        agent = session.get("agent")
+        info = (
+            _session_info(agent, session)
+            if agent is not None
+            else {"cwd": cwd, "branch": _git_branch_for_cwd(cwd), "lazy": True}
+        )
+        _emit("session.info", params.get("session_id", ""), info)
+        return _ok(rid, info)
+
+    # Stored-only: resolve the path, then update the sessions row in state.db.
+    session_id = str(params.get("session_id") or "").strip()
+    if not session_id:
+        return err if err else _err(rid, 4001, "session not found")
+
     try:
-        cwd = _set_session_cwd(session, raw)
-    except ValueError as e:
-        return _err(rid, 4017, str(e))
-    agent = session.get("agent")
-    info = _session_info(agent, session) if agent is not None else {
-        "cwd": cwd,
-        "branch": _git_branch_for_cwd(cwd),
-        "lazy": True,
-    }
-    _emit("session.info", params.get("session_id", ""), info)
-    return _ok(rid, info)
+        resolved = os.path.abspath(os.path.expanduser(raw))
+    except Exception as e:
+        return _err(rid, 4017, str(e) or "invalid cwd")
+    if not os.path.isdir(resolved):
+        return _err(rid, 4017, f"not a directory: {resolved}")
+
+    branch = _git_branch_for_cwd(resolved)
+    root = ""
+    try:
+        root = _git_common_repo_root_for_cwd(resolved) or _git_repo_root_for_cwd(resolved) or ""
+    except Exception:
+        root = ""
+
+    db = _get_db()
+    if db is None:
+        return _err(rid, 4001, "session store unavailable")
+    try:
+        sid = db.resolve_session_id(session_id)
+    except Exception:
+        sid = None
+    if not sid:
+        return _err(rid, 4001, "session not found")
+    try:
+        if root:
+            db.update_session_cwd(sid, resolved, branch, root)
+        else:
+            db.update_session_cwd(sid, resolved, branch)
+    except Exception as e:
+        return _err(rid, 4017, str(e) or "failed to update session cwd")
+
+    return _ok(
+        rid,
+        {"cwd": resolved, "branch": branch or "", "lazy": True, "stored_only": True},
+    )
+
 
 
 def _session_pending_kind(sid: str) -> str:

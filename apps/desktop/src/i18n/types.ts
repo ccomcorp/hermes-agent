@@ -1359,6 +1359,21 @@ export interface Translations {
       renameTitle: string
       renameDesc: string
       untitledPlaceholder: string
+      moveToProject: string
+      moveNoProjects: string
+      moveNewProject: string
+      moveNewProjectTitle: string
+      moveNewProjectDesc: string
+      moveProjectName: string
+      moveProjectFolder: string
+      moveProjectFolderPlaceholder: string
+      moveBrowse: string
+      moveCreateAndMove: string
+      movedToProject: (name: string) => string
+      moveFailed: string
+      moveNoFolder: string
+      moveNoGateway: string
+      moveCreateFailed: string
       ageNow: string
       ageDay: string
       ageHour: string
