@@ -709,6 +709,90 @@ describe('overlayLiveLanes', () => {
   })
 })
 
+
+  it('places a live session under only the longest matching repo (no multi-repo clones)', () => {
+    const session = {
+      id: 's1',
+      title: 'Developing AIFIN Frontend',
+      cwd: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+      started_at: 2,
+      ended_at: null,
+      message_count: 3
+    } as SessionInfo
+
+    const project: SidebarProjectTree = {
+      id: 'p_aifin',
+      label: 'AIFIN',
+      path: 'I:\\\\PROJECTS\\\\AIFIN',
+      sessionCount: 0,
+      repos: [
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN',
+          label: 'AIFIN',
+          path: 'I:\\\\PROJECTS\\\\AIFIN',
+          sessionCount: 0,
+          groups: [{ id: 'main-a', label: 'dev', path: 'I:\\\\PROJECTS\\\\AIFIN', isMain: true, sessions: [] }]
+        },
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+          label: 'frontend',
+          path: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+          sessionCount: 0,
+          groups: [{ id: 'main-f', label: 'dev', path: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend', isMain: true, sessions: [] }]
+        }
+      ]
+    }
+
+    const overlaid = overlayLiveLanes(project, [session])
+    const placements = overlaid.repos.flatMap(repo =>
+      repo.groups.flatMap(group => group.sessions.map(s => ({ repo: repo.id, session: s.id })))
+    )
+
+    expect(placements).toEqual([{ repo: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend', session: 's1' }])
+  })
+
+  it('evicts a moved session from the previous lane when live cwd changes', () => {
+    const session = {
+      id: 's1',
+      title: 'Chat',
+      cwd: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+      started_at: 2,
+      ended_at: null,
+      message_count: 1
+    } as SessionInfo
+
+    const project: SidebarProjectTree = {
+      id: 'p_aifin',
+      label: 'AIFIN',
+      path: 'I:\\\\PROJECTS\\\\AIFIN',
+      sessionCount: 1,
+      repos: [
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN',
+          label: 'AIFIN',
+          path: 'I:\\\\PROJECTS\\\\AIFIN',
+          sessionCount: 1,
+          groups: [
+            {
+              id: 'old-main',
+              label: 'dev',
+              path: 'I:\\\\PROJECTS\\\\AIFIN',
+              isMain: true,
+              // Stale snapshot still has the session on the old root lane.
+              sessions: [{ ...session, cwd: 'I:\\\\PROJECTS\\\\AIFIN' }]
+            }
+          ]
+        }
+      ]
+    }
+
+    const overlaid = overlayLiveLanes(project, [session])
+    const all = overlaid.repos.flatMap(r => r.groups.flatMap(g => g.sessions))
+    expect(all.map(s => s.id)).toEqual(['s1'])
+    expect(all[0].cwd).toContain('frontend')
+  })
+
+
 describe('overlayLivePreviews', () => {
   it('merges live sessions into a project preview, live first, capped to the limit', () => {
     const project = projectNode({

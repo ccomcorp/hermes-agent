@@ -275,10 +275,18 @@ export async function moveSessionToProject(opts: {
   const cwd = (info.cwd || path).trim()
   const branch = (info.branch || '').trim()
 
+  // Update every list row that is this conversation (stored id and/or live
+  // runtime id). Do not invent a second row — only rewrite cwd on matches.
+  const matchIds = new Set([opts.sessionId, targetId].filter(Boolean))
   $sessions.set(
     $sessions.get().map(session =>
-      session.id === opts.sessionId || session.id === targetId
-        ? { ...session, cwd, git_branch: branch || session.git_branch || null }
+      matchIds.has(session.id)
+        ? {
+            ...session,
+            cwd,
+            git_branch: branch || session.git_branch || null,
+            git_repo_root: cwd
+          }
         : session
     )
   )
@@ -288,12 +296,15 @@ export async function moveSessionToProject(opts: {
     setCurrentBranch(branch)
   }
 
-  await followActiveSessionCwd(cwd)
+  // Structural regroup: refresh tree membership from the server so the sidebar
+  // does not keep a stale lane placement next to the optimistic live overlay.
+  await Promise.all([refreshProjects(), refreshProjectTree()])
 
-  // Prefer the explicit project id when it's a durable p_* row.
   if (opts.project.id.startsWith('p_')) {
     setSidebarAgentsGrouped(true)
     enterProject(opts.project.id)
+  } else {
+    await followActiveSessionCwd(cwd)
   }
 
   return { cwd, branch }
