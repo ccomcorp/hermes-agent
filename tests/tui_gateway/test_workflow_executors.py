@@ -3,8 +3,10 @@ fail-closed on non-interactive origin, injectable backends, engine integration."
 
 import pytest
 
+import inspect
+
 from tui_gateway.workflow_executors import (
-    AI_NODE_BLOCKED_TOOLSETS,
+    AI_NODE_ALLOWED_TOOLSETS,
     ExecutorError,
     ai_agent_executor,
     code_executor,
@@ -40,17 +42,44 @@ def _ctx(origin="manual", headless_agent=None, allow=True, http_allowlist=(), al
 def test_ai_agent_child_gets_restricted_toolset_R1():
     seen = {}
 
-    def fake_delegate(*, prompt, agent, blocked_toolsets, run_ctx):
-        seen["blocked"] = blocked_toolsets
+    def fake_delegate(*, prompt, agent, allowed_toolsets, run_ctx):
+        seen["allowed"] = allowed_toolsets
         seen["prompt"] = prompt
         return "child reply"
 
     out = ai_agent_executor({"config": {"prompt": "summarize"}}, _ctx(), delegate_fn=fake_delegate)
     assert out == {"text": "child reply"}
-    # The child physically cannot egress/write/shell — those toolsets are stripped.
-    for blocked in ("web", "file", "terminal", "code_execution"):
-        assert blocked in seen["blocked"]
-    assert set(AI_NODE_BLOCKED_TOOLSETS) <= set(seen["blocked"])
+    # R1 by allowlist: the child may ONLY have the 'safe' (empty) toolset — no
+    # side-effecting toolset is granted, so it cannot egress/write/shell/run code.
+    assert seen["allowed"] == ["safe"]
+    assert list(AI_NODE_ALLOWED_TOOLSETS) == ["safe"]
+    for dangerous in ("web", "file", "terminal", "code_execution"):
+        assert dangerous not in seen["allowed"]
+
+
+def test_default_adapters_match_live_chassis_signatures():
+    """Signature-lock: fails if delegate_task / web_extract_tool / execute_code drift
+    from what the default adapters call (the live-verification this task performed)."""
+    from tools.code_execution_tool import execute_code
+    from tools.delegate_tool import delegate_task
+    from tools.web_tools import web_extract_tool
+
+    dp = inspect.signature(delegate_task).parameters
+    assert "tasks" in dp and "parent_agent" in dp   # batch form + parent required
+    assert "task" not in dp and "blocked_toolsets" not in dp  # the old wrong guess
+
+    wp = inspect.signature(web_extract_tool).parameters
+    assert "urls" in wp
+    assert inspect.iscoroutinefunction(web_extract_tool)  # adapter awaits it
+
+    cp = inspect.signature(execute_code).parameters
+    assert "code" in cp
+
+    # The 'safe' allowlist really is an empty (zero-tool) toolset.
+    from toolsets import TOOLSETS
+    safe = TOOLSETS.get("safe")
+    safe_tools = safe.get("tools") if isinstance(safe, dict) else getattr(safe, "tools", safe)
+    assert safe_tools == []
 
 
 def test_ai_agent_fail_closed_when_no_agent_for_noninteractive_origin_F5():
@@ -63,7 +92,7 @@ def test_ai_agent_fail_closed_when_no_agent_for_noninteractive_origin_F5():
 def test_ai_agent_uses_headless_agent_for_cron_origin():
     called = {}
 
-    def fake_delegate(*, prompt, agent, blocked_toolsets, run_ctx):
+    def fake_delegate(*, prompt, agent, allowed_toolsets, run_ctx):
         called["agent"] = agent
         return "ok"
 

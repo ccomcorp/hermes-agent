@@ -20,11 +20,15 @@ from typing import Any, Callable, Optional
 
 from tui_gateway.workflow_guard import RunContext, WorkflowGuard
 
-# An ai-agent workflow node's child is a REASONING/generation agent only. Every
-# side-effecting toolset is stripped so the child cannot egress/write/shell (R1).
-AI_NODE_BLOCKED_TOOLSETS = (
-    "web", "file", "terminal", "code_execution", "browser", "computer_use", "mcp",
-)
+# An ai-agent workflow node's child is a REASONING/generation agent only. The
+# chassis restricts a child by ALLOWLIST (delegate_task intersects the requested
+# per-task ``toolsets`` with the parent's — tools/delegate_tool.py:1121), so R1 is
+# closed by naming the ONLY toolset the child may have: ``safe``, a registered
+# toolset whose tool list is empty (verified: TOOLSETS["safe"] == []). The child
+# therefore gets zero tools — it can reason, but cannot egress/write/shell/run code
+# — whether or not the parent carries ``safe`` (the intersection is empty either
+# way). This is the live-verified equivalent of "strip every side-effecting toolset".
+AI_NODE_ALLOWED_TOOLSETS = ("safe",)
 
 
 class ExecutorError(Exception):
@@ -46,7 +50,7 @@ def ai_agent_executor(node: dict, ctx: RunContext, *, delegate_fn: Optional[Call
         return {"__denied__": True,
                 "reason": f"ai-agent node has no agent for non-interactive origin '{ctx.origin}'"}
     fn = delegate_fn or _default_delegate
-    text = fn(prompt=prompt, agent=agent, blocked_toolsets=list(AI_NODE_BLOCKED_TOOLSETS), run_ctx=ctx)
+    text = fn(prompt=prompt, agent=agent, allowed_toolsets=list(AI_NODE_ALLOWED_TOOLSETS), run_ctx=ctx)
     return {"text": text}
 
 
@@ -83,18 +87,42 @@ def register_executors(
 
 
 # --------------------------------------------------------------------------- default chassis adapters
-# (thin; exact signatures verified during live integration — see spec 13 Risk 1)
+# Signatures verified live against the merged chassis (2026-07-13):
+#   delegate_task(goal, context, tasks, max_iterations, role, background, parent_agent)
+#     -> toolset control is per-task ONLY (single-mode `goal` omits toolsets at
+#        delegate_tool.py:2515), so the batch `tasks=[{...}]` form is required.
+#   web_extract_tool(urls: List, format=None, char_limit=None) -> ASYNC, returns str.
+#   execute_code(code: str, task_id=None, enabled_tools=None) -> str (sync).
+# The signature-lock test in tests/tui_gateway/test_workflow_executors.py fails if
+# any of these drift.
 
-def _default_delegate(*, prompt: str, agent: Any, blocked_toolsets: list, run_ctx: RunContext) -> str:
+def _default_delegate(*, prompt: str, agent: Any, allowed_toolsets: list, run_ctx: RunContext) -> str:
     from tools.delegate_tool import delegate_task  # lazy import
-    # delegate_task honors DELEGATE_BLOCKED_TOOLS + parent-toolset intersection; the
-    # restricted set keeps the child from calling web/file/terminal (R1 by restriction).
-    return delegate_task(task=prompt, parent_agent=agent, blocked_toolsets=list(blocked_toolsets))
+    # Restrict the child by ALLOWLIST (the chassis intersects per-task `toolsets`
+    # with the parent). `allowed_toolsets` = ("safe",) => an empty toolset => the
+    # child has NO tools and cannot bypass the guard (R1). `role="leaf"` also blocks
+    # recursive delegation. delegate_task returns a JSON string (results array).
+    return delegate_task(
+        tasks=[{"goal": prompt, "toolsets": list(allowed_toolsets), "role": "leaf"}],
+        parent_agent=agent,
+    )
 
 
 def _default_fetch(*, url: str, method: str, headers: Any, body: Any) -> dict:
-    from tools.web_tools import web_extract  # lazy import
-    return {"url": url, "content": web_extract(urls=[url])}
+    import asyncio
+
+    from tools.web_tools import web_extract_tool  # lazy import (async)
+    # web_extract_tool is a coroutine; run it on a fresh loop from this sync
+    # executor. If ever called from within a running loop, fall back to a thread.
+    coro = web_extract_tool(urls=[url])
+    try:
+        content = asyncio.run(coro)
+    except RuntimeError:  # already inside an event loop
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            content = pool.submit(lambda: asyncio.run(web_extract_tool(urls=[url]))).result()
+    return {"url": url, "content": content}
 
 
 def _default_exec(*, code: str, run_ctx: RunContext) -> dict:
