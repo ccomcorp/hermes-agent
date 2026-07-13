@@ -49,14 +49,16 @@ import { useStore } from '@nanostores/react'
 import type { Connection, Edge, EdgeChange, Node, NodeChange, NodeProps } from '@xyflow/react'
 import { addEdge, applyEdgeChanges, applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider } from '@xyflow/react'
 import type * as React from 'react'
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { dryRunWorkflowRemote, onWorkflowRunEvent, runWorkflowRemote, toEngineGraph, type WorkflowRunEvent, type WorkflowRunResult } from '@/lib/workflow-run'
 import { notify, notifyError } from '@/store/notifications'
+import { $activeSessionId } from '@/store/session'
 
 import { ListColumn, MasterDetail } from '../master-detail'
 import { PanelEmpty, PanelListRow } from '../overlays/panel'
@@ -256,6 +258,12 @@ const RUN_STATUS_ICON: Record<RunWorkflowResult['status'], string> = {
   refused_unsupported_node: 'error'
 }
 
+const REMOTE_STATUS_ICON: Record<WorkflowRunResult['status'], string> = {
+  completed: 'check',
+  failed: 'error',
+  halted: 'warning'
+}
+
 interface WorkflowEditorProps {
   initial: WorkbenchWorkflow
   onSaved: (result: UpdateWorkbenchWorkflowResult) => void
@@ -278,6 +286,15 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
   // closed. See handleRun/RunResultDialog below.
   const [runResult, setRunResult] = useState<null | RunWorkflowResult>(null)
   const [runDialogOpen, setRunDialogOpen] = useState(false)
+  // Gateway-backed run (lib/workflow-run.ts) — SEPARATE from the pure preview
+  // run above. `remoteBusy` gates the buttons; `remoteEvents` is the streamed
+  // progress; `remoteResult` is the final run_graph result. Ephemeral, like the
+  // preview: reset on each launch and dialog close.
+  const [remoteOpen, setRemoteOpen] = useState(false)
+  const [remoteBusy, setRemoteBusy] = useState<'dry' | 'idle' | 'run'>('idle')
+  const [remoteEvents, setRemoteEvents] = useState<WorkflowRunEvent[]>([])
+  const [remoteResult, setRemoteResult] = useState<null | WorkflowRunResult>(null)
+  const remoteUnsub = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     setTitle(initial.title)
@@ -285,6 +302,9 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
     setEdges(toFlowEdges(initial.edges))
     setDirty(false)
   }, [initial])
+
+  // Drop any live run-event subscription if the editor unmounts mid-run.
+  useEffect(() => () => remoteUnsub.current?.(), [])
 
   const onNodesChange = useCallback((changes: NodeChange<WorkflowNode>[]) => {
     setNodes(current => applyNodeChanges(changes, current))
@@ -374,6 +394,74 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
     setRunResult(null)
   }, [])
 
+  // Dry run through the gateway (workflow.dryRun): traces the WHOLE current
+  // in-editor graph server-side with NO side effects and NO approvals (would-run
+  // markers), translated to the engine graph shape first.
+  const handleDryRun = useCallback(async () => {
+    setRemoteBusy('dry')
+    setRemoteEvents([])
+    setRemoteResult(null)
+    setRemoteOpen(true)
+
+    try {
+      const result = await dryRunWorkflowRemote(toEngineGraph(fromFlowNodes(nodes), fromFlowEdges(edges)), { workflowId: initial.id })
+
+      setRemoteResult(result)
+      setRemoteEvents(result.events)
+    } catch (err) {
+      notifyError(err, s.workflow.remoteRunFailed)
+      setRemoteOpen(false)
+    } finally {
+      setRemoteBusy('idle')
+    }
+  }, [edges, initial.id, nodes])
+
+  // Live run through the gateway (workflow.run): every node dispatched through
+  // the WF0 guard. Nothing is pre-approved here, so side-effecting kinds fail
+  // closed — the UI's 3 creatable kinds are all pure, so an authored graph runs
+  // cleanly; a graph loaded with side-effecting kinds surfaces per-node denials
+  // in the streamed progress. Requires an active session (the gateway routes run
+  // events back on it).
+  const handleLiveRun = useCallback(async () => {
+    const sessionId = $activeSessionId.get()
+
+    if (!sessionId) {
+      notify({ kind: 'error', message: s.workflow.remoteNoSession, title: s.workflow.remoteRunFailed })
+
+      return
+    }
+
+    setRemoteBusy('run')
+    setRemoteEvents([])
+    setRemoteResult(null)
+    setRemoteOpen(true)
+
+    remoteUnsub.current?.()
+    remoteUnsub.current = onWorkflowRunEvent(sessionId, event => {
+      setRemoteEvents(current => [...current, event])
+    })
+
+    try {
+      const result = await runWorkflowRemote(toEngineGraph(fromFlowNodes(nodes), fromFlowEdges(edges)), { sessionId, workflowId: initial.id })
+
+      setRemoteResult(result)
+    } catch (err) {
+      notifyError(err, s.workflow.remoteRunFailed)
+    } finally {
+      remoteUnsub.current?.()
+      remoteUnsub.current = null
+      setRemoteBusy('idle')
+    }
+  }, [edges, initial.id, nodes])
+
+  const closeRemoteDialog = useCallback(() => {
+    remoteUnsub.current?.()
+    remoteUnsub.current = null
+    setRemoteOpen(false)
+    setRemoteEvents([])
+    setRemoteResult(null)
+  }, [])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -401,6 +489,14 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
             <Codicon name="debug-start" size="0.8125rem" />
             {s.workflow.run}
           </Button>
+          <Button disabled={remoteBusy !== 'idle'} onClick={() => void handleDryRun()} size="sm" variant="outline">
+            <Codicon name={remoteBusy === 'dry' ? 'loading' : 'debug-step-over'} size="0.8125rem" spinning={remoteBusy === 'dry'} />
+            {s.workflow.dryRun}
+          </Button>
+          <Button disabled={remoteBusy !== 'idle'} onClick={() => void handleLiveRun()} size="sm" variant="outline">
+            <Codicon name={remoteBusy === 'run' ? 'loading' : 'run-all'} size="0.8125rem" spinning={remoteBusy === 'run'} />
+            {s.workflow.liveRun}
+          </Button>
           <Button disabled={saving || !dirty} onClick={() => void handleSave()} size="sm">
             <Codicon name={saving ? 'loading' : 'save'} size="0.875rem" spinning={saving} />
             {saving ? s.workflow.saving : s.workflow.save}
@@ -427,7 +523,80 @@ function WorkflowEditor({ initial, onSaved, workspaceRoot }: WorkflowEditorProps
       </div>
 
       <RunResultDialog onClose={closeRunDialog} open={runDialogOpen} result={runResult} />
+      <RemoteRunDialog busy={remoteBusy} events={remoteEvents} onClose={closeRemoteDialog} open={remoteOpen} result={remoteResult} />
     </div>
+  )
+}
+
+// Gateway-run dialog — live progress (streamed `workflow.run.event` payloads)
+// plus the final run_graph result/status. Transient React state like
+// RunResultDialog: cleared on close. Distinct from the pure-preview dialog above
+// (this one reflects a real, guard-dispatched server run).
+function RemoteRunDialog({
+  busy,
+  events,
+  onClose,
+  open,
+  result
+}: {
+  busy: 'dry' | 'idle' | 'run'
+  events: WorkflowRunEvent[]
+  onClose: () => void
+  open: boolean
+  result: null | WorkflowRunResult
+}) {
+  return (
+    <Dialog onOpenChange={next => !next && onClose()} open={open}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{s.workflow.remoteRunHeading}</DialogTitle>
+          <DialogDescription>
+            {busy !== 'idle' ? (
+              <span className="flex items-center gap-1.5">
+                <Codicon name="loading" size="0.8125rem" spinning />
+                {busy === 'dry' ? s.workflow.remoteDryRunning : s.workflow.remoteRunning}
+              </span>
+            ) : result ? (
+              <span className="flex items-center gap-1.5">
+                <Codicon name={REMOTE_STATUS_ICON[result.status]} size="0.8125rem" />
+                {result.status}
+                {result.error ? ` — ${result.error}` : ''}
+              </span>
+            ) : (
+              s.workflow.remoteDryHint
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid max-h-96 gap-3 overflow-y-auto text-xs">
+          <div>
+            <div className="mb-1 font-medium text-foreground">{s.workflow.remoteEventsHeading}</div>
+            {events.length === 0 ? (
+              <p className="text-muted-foreground/60">{s.workflow.remoteEventsEmpty}</p>
+            ) : (
+              <ol className="grid gap-1">
+                {events.map((event, index) => (
+                  <li className="rounded border border-(--ui-stroke-tertiary) px-2 py-1" key={`${event.seq}-${index}`}>
+                    <span className="font-medium text-foreground">{event.type.replace('workflow.run.', '')}</span>
+                    {event.nodeId ? <span className="text-muted-foreground/60"> · {event.nodeId}</span> : null}
+                    {event.kind ? <span className="text-muted-foreground/60"> ({event.kind})</span> : null}
+                    {event.status ? <span className="text-muted-foreground/60"> — {event.status}</span> : null}
+                    {event.reason ? <span className="text-muted-foreground/60"> — {event.reason}</span> : null}
+                    {event.error ? <span className="text-muted-foreground/60"> — {event.error}</span> : null}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button onClick={onClose} variant="outline">
+            {s.cancel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

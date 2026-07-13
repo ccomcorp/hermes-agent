@@ -548,6 +548,20 @@ export const workbenchStrings = {
     runOutputsHeading: 'Outputs',
     runOutputsEmpty: 'No output node was reached.',
 
+    // Gateway-backed run (lib/workflow-run.ts → tui_gateway workflow.run/dryRun),
+    // as opposed to the pure in-memory preview `run` above.
+    dryRun: 'Dry run',
+    liveRun: 'Live run',
+    remoteRunHeading: 'Gateway run',
+    remoteRunFailed: 'Gateway run failed',
+    remoteNoSession: 'Open a chat session first — a live run routes progress through the active session.',
+    remoteRunning: 'Running…',
+    remoteDryRunning: 'Tracing…',
+    remoteEventsHeading: 'Progress',
+    remoteEventsEmpty: 'No events yet.',
+    remoteResultHeading: 'Result',
+    remoteDryHint: 'Trace only — no node runs and nothing is approved.',
+
     runStatusNames: {
       completed: 'Completed',
       halted_cycle: 'Stopped — cycle detected',
