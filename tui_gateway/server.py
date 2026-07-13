@@ -6367,6 +6367,100 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"text": text})
 
 
+@method("workflow.dryRun")
+def _(rid, params: dict) -> dict:
+    """Trace a workflow graph WITHOUT side effects or approvals (WF2 / D1).
+
+    Every node still routes through the WF0 guard (budget charged, policy read),
+    but side-effecting kinds are reported as ``__dry__`` "would-run" markers and
+    nothing executes. Returns ``{runId, status, steps, outputs, events}``.
+    """
+    graph = params.get("graph")
+    if not isinstance(graph, dict) or not graph.get("nodes"):
+        return _err(rid, 4040, "workflow.dryRun requires a graph with nodes")
+    session = _sessions.get(params.get("session_id") or "")
+    workspace_root = (session.get("cwd") if session else "") or ""
+    try:
+        import uuid
+
+        from tui_gateway.workflow_guard import Budget, FailClosedSink, RunContext, WorkflowGuard
+        from tui_gateway.workflow_runtime import dry_run_graph
+
+        ctx = RunContext(
+            run_id="dry-" + uuid.uuid4().hex[:12],
+            workflow_id=str(params.get("workflow_id") or "wf"),
+            workspace_root=workspace_root,
+            origin=str(params.get("origin") or "manual"),
+            approval_sink=FailClosedSink(),
+            budget=Budget(max_steps=int(params.get("max_steps") or 1000)),
+        )
+        result = dry_run_graph(graph, ctx, WorkflowGuard())
+    except Exception as e:
+        logger.warning("workflow.dryRun failed: %s", e)
+        return _err(rid, 5040, f"workflow dry-run failed: {e}")
+    return _ok(rid, result)
+
+
+@method("workflow.run")
+def _(rid, params: dict) -> dict:
+    """Execute a workflow graph through the WF0 guard (WF2/WF3).
+
+    Every node is dispatched through the guard (inescapable budget + policy). The
+    caller pre-approves side-effecting node kinds in the UI and passes them as
+    ``approved_kinds`` (an ``AllowlistSink``); anything not listed fails closed.
+    ``http_allowlist`` / ``allow_code_node`` narrow egress/code policy. Run events
+    stream to the launching session as ``workflow.run.event``. (Per-node interactive
+    approval mid-run is the runId-addressable follow-on slice; this seam pre-approves.)
+    """
+    graph = params.get("graph")
+    if not isinstance(graph, dict) or not graph.get("nodes"):
+        return _err(rid, 4041, "workflow.run requires a graph with nodes")
+    sid = params.get("session_id") or ""
+    session = _sessions.get(sid)
+    workspace_root = (session.get("cwd") if session else "") or ""
+    approved = params.get("approved_kinds")
+    approved_kinds = {str(k) for k in approved} if isinstance(approved, list) else set()
+    try:
+        import uuid
+
+        from tui_gateway.workflow_executors import register_executors
+        from tui_gateway.workflow_guard import (
+            AllowlistSink,
+            Budget,
+            FailClosedSink,
+            RunContext,
+            WorkflowGuard,
+        )
+        from tui_gateway.workflow_runtime import run_graph
+
+        run_id = "run-" + uuid.uuid4().hex[:12]
+        sink = AllowlistSink(approved_kinds, fallback=FailClosedSink()) if approved_kinds else FailClosedSink()
+        ctx = RunContext(
+            run_id=run_id,
+            workflow_id=str(params.get("workflow_id") or "wf"),
+            workspace_root=workspace_root,
+            origin=str(params.get("origin") or "manual"),
+            approval_sink=sink,
+            budget=Budget(max_steps=int(params.get("max_steps") or 1000)),
+            http_allowlist=tuple(params.get("http_allowlist") or ()),
+            allow_code_node=bool(params.get("allow_code_node")),
+            run_channel=f"run:{run_id}",
+            headless_agent=session.get("agent") if session else None,
+        )
+        guard = WorkflowGuard()
+        register_executors(guard)  # ai-agent (restricted child), http-request, code
+
+        def _forward(ev: dict) -> None:
+            if sid:
+                _emit("workflow.run.event", sid, ev)
+
+        result = run_graph(graph, ctx, guard, emit=_forward)
+    except Exception as e:
+        logger.warning("workflow.run failed: %s", e)
+        return _err(rid, 5041, f"workflow run failed: {e}")
+    return _ok(rid, result)
+
+
 @method("handoff.request")
 def _(rid, params: dict) -> dict:
     """Queue a handoff of this session to a messaging platform.
