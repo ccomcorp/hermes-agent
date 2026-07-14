@@ -8,3 +8,15 @@ web/package-lock.json linguist-generated=true
 Dockerfile  text eol=lf
 *.dockerfile text eol=lf
 docker/entrypoint.sh text eol=lf
+
+# Normalize ALL text files to LF on commit (binaries auto-detected & left alone).
+# Prevents a Windows editor re-saving a file as CRLF from showing up as a
+# whole-file diff — hit 2026-07-14 on config-settings.tsx / web_server.py /
+# provider.py: a ~19k-line false diff that hid only ~360 real changed lines.
+* text=auto eol=lf
+
+# Windows-native scripts keep CRLF (PowerShell/batch need it; .ps1 also has
+# BOM/encoding sensitivity — never force these to LF).
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
