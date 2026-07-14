@@ -494,6 +494,29 @@ describe('liveSessionProjectId', () => {
 
     expect(id).toBe('p_app')
   })
+
+  it('matches a mixed-case/separator Windows cwd to its explicit project in the live overlay', () => {
+    // The bug: a fresh Windows session drops into the overlay before the next
+    // backend refresh; case-sensitive matching missed its project until then.
+    const id = liveSessionProjectId(makeSession('c:/work/notes/SUB'), [makeProject('p_notes', ['C:\\Work\\Notes'])])
+
+    expect(id).toBe('p_notes')
+  })
+
+  it('matches a root-relative WSL cwd (single backslash) case-insensitively', () => {
+    const id = liveSessionProjectId(makeSession('//wsl.localhost/Ubuntu/home/alice/PROJ'), [
+      makeProject('p_proj', ['\\wsl.localhost\\Ubuntu\\home\\alice\\proj'])
+    ])
+
+    expect(id).toBe('p_proj')
+  })
+
+  it('keeps POSIX cwd matching case-sensitive (no false project match)', () => {
+    // Distinct case on POSIX is a distinct path → falls back to its own auto id.
+    expect(liveSessionProjectId(makeSession('/work/notes'), [makeProject('p_notes', ['/Work/Notes'])])).toBe(
+      '/work/notes'
+    )
+  })
 })
 
 describe('overlayLiveLanes', () => {
@@ -685,6 +708,90 @@ describe('overlayLiveLanes', () => {
     expect(overlaid.sessionCount).toBe(1)
   })
 })
+
+
+  it('places a live session under only the longest matching repo (no multi-repo clones)', () => {
+    const session = {
+      id: 's1',
+      title: 'Developing AIFIN Frontend',
+      cwd: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+      started_at: 2,
+      ended_at: null,
+      message_count: 3
+    } as SessionInfo
+
+    const project: SidebarProjectTree = {
+      id: 'p_aifin',
+      label: 'AIFIN',
+      path: 'I:\\\\PROJECTS\\\\AIFIN',
+      sessionCount: 0,
+      repos: [
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN',
+          label: 'AIFIN',
+          path: 'I:\\\\PROJECTS\\\\AIFIN',
+          sessionCount: 0,
+          groups: [{ id: 'main-a', label: 'dev', path: 'I:\\\\PROJECTS\\\\AIFIN', isMain: true, sessions: [] }]
+        },
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+          label: 'frontend',
+          path: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+          sessionCount: 0,
+          groups: [{ id: 'main-f', label: 'dev', path: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend', isMain: true, sessions: [] }]
+        }
+      ]
+    }
+
+    const overlaid = overlayLiveLanes(project, [session])
+    const placements = overlaid.repos.flatMap(repo =>
+      repo.groups.flatMap(group => group.sessions.map(s => ({ repo: repo.id, session: s.id })))
+    )
+
+    expect(placements).toEqual([{ repo: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend', session: 's1' }])
+  })
+
+  it('evicts a moved session from the previous lane when live cwd changes', () => {
+    const session = {
+      id: 's1',
+      title: 'Chat',
+      cwd: 'I:\\\\PROJECTS\\\\AIFIN\\\\frontend',
+      started_at: 2,
+      ended_at: null,
+      message_count: 1
+    } as SessionInfo
+
+    const project: SidebarProjectTree = {
+      id: 'p_aifin',
+      label: 'AIFIN',
+      path: 'I:\\\\PROJECTS\\\\AIFIN',
+      sessionCount: 1,
+      repos: [
+        {
+          id: 'I:\\\\PROJECTS\\\\AIFIN',
+          label: 'AIFIN',
+          path: 'I:\\\\PROJECTS\\\\AIFIN',
+          sessionCount: 1,
+          groups: [
+            {
+              id: 'old-main',
+              label: 'dev',
+              path: 'I:\\\\PROJECTS\\\\AIFIN',
+              isMain: true,
+              // Stale snapshot still has the session on the old root lane.
+              sessions: [{ ...session, cwd: 'I:\\\\PROJECTS\\\\AIFIN' }]
+            }
+          ]
+        }
+      ]
+    }
+
+    const overlaid = overlayLiveLanes(project, [session])
+    const all = overlaid.repos.flatMap(r => r.groups.flatMap(g => g.sessions))
+    expect(all.map(s => s.id)).toEqual(['s1'])
+    expect(all[0].cwd).toContain('frontend')
+  })
+
 
 describe('overlayLivePreviews', () => {
   it('merges live sessions into a project preview, live first, capped to the limit', () => {

@@ -9,11 +9,13 @@ export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
 export const KANBAN_ROUTE = '/kanban'
+export const CANVAS_ROUTE = '/canvas' // AIOS: hermes-canvas plugin tab
 export const PAIRING_ROUTE = '/pairing'
 export const WEBHOOKS_ROUTE = '/webhooks'
 export const PLUGINS_ROUTE = '/plugins'
 export const FILES_ROUTE = '/files'
 export const CHANNELS_ROUTE = '/channels'
+export const WORKBENCH_ROUTE = '/workbench'
 export const SYSTEM_ROUTE = '/system'
 // AIOS Track-B panels (Wave 2b)
 export const CONFIG_ROUTE = '/config'
@@ -24,6 +26,7 @@ export const STARMAP_ROUTE = '/starmap'
 export type AppView =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'chat'
   | 'command-center'
@@ -42,10 +45,12 @@ export type AppView =
   | 'system'
   | 'webhooks'
   | 'starmap'
+  | 'workbench'
 
 export type AppRouteId =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'command-center'
   | 'config'
@@ -64,6 +69,7 @@ export type AppRouteId =
   | 'system'
   | 'webhooks'
   | 'starmap'
+  | 'workbench'
 
 export interface AppRoute {
   id: AppRouteId
@@ -80,6 +86,7 @@ export const APP_ROUTES = [
   { id: 'artifacts', path: ARTIFACTS_ROUTE, view: 'artifacts' },
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
   { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
+  { id: 'canvas', path: CANVAS_ROUTE, view: 'canvas' }, // AIOS: hermes-canvas
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },
   { id: 'pairing', path: PAIRING_ROUTE, view: 'pairing' },
@@ -87,6 +94,7 @@ export const APP_ROUTES = [
   { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
   { id: 'files', path: FILES_ROUTE, view: 'files' },
   { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
+  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
   { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
   { id: 'config', path: CONFIG_ROUTE, view: 'config' },
   { id: 'logs', path: LOGS_ROUTE, view: 'logs' },

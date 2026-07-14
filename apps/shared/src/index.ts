@@ -19,3 +19,11 @@ export {
   type ResolveGatewayWsUrlDeps,
   type WebSocketAuthParam
 } from './websocket-url'
+
+// ---------------------------------------------------------------------------
+// Workbench shared contracts
+// ---------------------------------------------------------------------------
+
+export * from './workbench/types'
+export * from './workbench/paths'
+export * from './workbench/validators'

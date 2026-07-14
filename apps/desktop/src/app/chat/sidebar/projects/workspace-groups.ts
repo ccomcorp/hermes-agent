@@ -1,5 +1,6 @@
 import type { HermesGitWorktree } from '@/global'
 import type { ProjectInfo, SessionInfo } from '@/hermes'
+import { normalize } from '@/lib/text'
 
 // Session grouping is now computed authoritatively on the backend
 // (`tui_gateway/project_tree.py`, exposed via `projects.tree` /
@@ -71,6 +72,27 @@ const segments = (path: string): string[] =>
 
 /** A path with trailing separators stripped, for stable equality checks. */
 const normalizePath = (path: null | string | undefined): string => (path ?? '').replace(/[/\\]+$/, '')
+
+// Windows spellings: drive-letter (`C:\…`), UNC (`\\srv`, `//srv`), or any
+// backslash-rooted path (`\wsl.localhost\…`). A single leading `/` stays POSIX.
+// Mirrors the backend `_is_windows_path` so the live overlay places rows into
+// the same project the backend tree would.
+const isWindowsPath = (path: string): boolean =>
+  /^[A-Za-z]:[/\\]/.test(path) || path.startsWith('\\') || path.startsWith('//')
+
+/**
+ * Segments for identity comparison: Windows paths fold case (and separators, via
+ * {@link segments}) so `C:\Work` and `c:/work` are one lane; POSIX stays
+ * case-sensitive. Comparison-only — emitted ids/labels keep their spelling.
+ */
+const comparisonSegments = (path: string): string[] => {
+  const segs = segments(path)
+
+  return isWindowsPath(path) ? segs.map(seg => seg.toLowerCase()) : segs
+}
+
+/** Canonical per-host comparison key (separator/case/trailing-slash agnostic). */
+const pathKey = (path: null | string | undefined): string => comparisonSegments(path ?? '').join('/')
 
 /** Last path segment. */
 export const baseName = (path: string): string | undefined => segments(path).pop()
@@ -191,7 +213,7 @@ export function mergeRepoWorktreeGroups(
       return branchForPath !== group.label ? { ...group, label: branchForPath } : group
     }
 
-    const livePath = livePathByBranch.get(group.label.trim().toLowerCase())
+    const livePath = livePathByBranch.get(normalize(group.label))
 
     if (livePath && normalizePath(livePath) !== normalizePath(group.path)) {
       return { ...group, id: livePath, path: livePath }
@@ -316,8 +338,8 @@ export function mergeRepoWorktreeGroups(
 
 /** True when `target` equals `folder` or is nested under it (segment-wise). */
 function isPathUnder(folder: string, target: string): boolean {
-  const f = segments(folder)
-  const t = segments(target)
+  const f = comparisonSegments(folder)
+  const t = comparisonSegments(target)
 
   if (!f.length || f.length > t.length) {
     return false
@@ -346,9 +368,8 @@ export function liveSessionProjectId(session: SessionInfo, explicitProjects: Pro
 
   // No persisted repo root yet (brand-new session) → the cwd is the root.
   const repoRoot = (session.git_repo_root || '').trim() || cwd
-  const underRepo = cwd === repoRoot || cwd.startsWith(`${repoRoot}/`) || cwd.startsWith(`${repoRoot}\\`)
 
-  if (!underRepo) {
+  if (!isPathUnder(repoRoot, cwd)) {
     return null
   }
 
@@ -375,8 +396,21 @@ export function liveSessionProjectId(session: SessionInfo, explicitProjects: Pro
   return projectId || repoRoot
 }
 
-const upsertSession = (rows: SessionInfo[], session: SessionInfo): SessionInfo[] =>
-  [session, ...rows.filter(row => row.id !== session.id)].sort((a, b) => b.started_at - a.started_at)
+const sessionLineageKeys = (session: SessionInfo): Set<string> => {
+  const keys = new Set<string>([session.id])
+  const root = (session as SessionInfo & { _lineage_root_id?: null | string })._lineage_root_id
+  if (root) {
+    keys.add(root)
+  }
+  return keys
+}
+
+const upsertSession = (rows: SessionInfo[], session: SessionInfo): SessionInfo[] => {
+  const lineage = sessionLineageKeys(session)
+  return [session, ...rows.filter(row => !lineage.has(row.id) && !sessionLineageKeys(row).has(session.id))].sort(
+    (a, b) => b.started_at - a.started_at
+  )
+}
 
 /**
  * The lane a live session belongs to WITHIN a known repo root, by path — the
@@ -422,7 +456,7 @@ export function overlayRepoLanes(
   live: SessionInfo[],
   removed: ReadonlySet<string> = NO_REMOVED
 ): SidebarWorkspaceTree {
-  const repoRoot = normalizePath(repo.path)
+  const repoRootKey = pathKey(repo.path)
   let changed = false
 
   // Snapshot lanes minus anything the user just deleted/archived.
@@ -456,7 +490,7 @@ export function overlayRepoLanes(
     for (const g of lanes) {
       const lanePath = normalizePath(g.path)
 
-      if (!lanePath || lanePath === repoRoot || !isPathUnder(lanePath, cwd)) {
+      if (!lanePath || pathKey(lanePath) === repoRootKey || !isPathUnder(lanePath, cwd)) {
         continue
       }
 
@@ -479,14 +513,14 @@ export function overlayRepoLanes(
         continue
       }
 
-      const placedPath = normalizePath(placed.path)
+      const placedKey = pathKey(placed.path)
 
       lane =
         lanes.find(g => g.id === placed.id) ??
         (placed.isMain
           ? lanes.find(g => g.isMain && g.label.toLowerCase() === placed.label.toLowerCase())
           : undefined) ??
-        (!placed.isMain && placedPath ? lanes.find(g => normalizePath(g.path) === placedPath) : undefined)
+        (!placed.isMain && placedKey ? lanes.find(g => pathKey(g.path) === placedKey) : undefined)
 
       if (!lane) {
         lane = { ...placed, sessions: [] }
@@ -494,7 +528,23 @@ export function overlayRepoLanes(
       }
     }
 
-    lane.sessions = upsertSession(lane.sessions, session)
+    // Evict this session (and any lineage twin) from every OTHER lane first so a
+    // cwd move cannot leave a stale copy under the previous worktree/main row.
+    // Without this, backend snapshot placement + live re-placement stack duplicates.
+    const lineage = sessionLineageKeys(session)
+    for (const g of lanes) {
+      if (g === lane) {
+        continue
+      }
+      const before = g.sessions.length
+      g.sessions = g.sessions.filter(row => !lineage.has(row.id) && !sessionLineageKeys(row).has(session.id))
+      changed ||= g.sessions.length !== before
+    }
+
+    lane.sessions = upsertSession(
+      lane.sessions.filter(row => !lineage.has(row.id) || row.id === session.id),
+      session
+    )
     changed = true
   }
 
@@ -515,10 +565,64 @@ export function overlayLiveLanes(
   live: SessionInfo[],
   removed: ReadonlySet<string> = NO_REMOVED
 ): SidebarProjectTree {
+  // Assign each live session to exactly ONE repo — the longest path prefix that
+  // contains its cwd. Applying every session to every matching repo (parent +
+  // nested folder, monorepo packages, etc.) was stacking the same chat under
+  // multiple "AIFIN / dev" blocks after a Move-to-project cwd change.
+  const bestRepoIdBySession = new Map<string, string>()
+
+  for (const session of live) {
+    if (removed.has(session.id)) {
+      continue
+    }
+
+    const cwd = (session.cwd || '').trim()
+    if (!cwd) {
+      continue
+    }
+
+    let bestId = ''
+    let bestScore = -1
+
+    for (const repo of project.repos) {
+      // Score by the most specific match this repo offers:
+      //  - nested under repo.path (common case)
+      //  - nested under an EXISTING lane path (sibling/out-of-tree worktrees —
+      //    those lanes are not under the main root but still belong to the repo)
+      let score = -1
+      const root = (repo.path || '').trim()
+      if (root && isPathUnder(root, cwd)) {
+        score = segments(root).length
+      }
+
+      for (const group of repo.groups) {
+        const lanePath = normalizePath(group.path)
+        if (lanePath && isPathUnder(lanePath, cwd)) {
+          // Lane matches dominate root matches so a session in a sibling
+          // worktree is attributed to its owning repo even when cwd is not
+          // under repo.path.
+          score = Math.max(score, segments(lanePath).length + 1_000)
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score
+        bestId = repo.id
+      }
+    }
+
+    if (bestId) {
+      bestRepoIdBySession.set(session.id, bestId)
+    }
+  }
+
   let changed = false
 
   const repos = project.repos.map(repo => {
-    const next = overlayRepoLanes(repo, live, removed)
+    const scopedLive = live.filter(session => bestRepoIdBySession.get(session.id) === repo.id)
+    // Still pass `removed` so snapshot rows can be evicted even when no live
+    // session is scoped to this repo.
+    const next = overlayRepoLanes(repo, scopedLive, removed)
 
     changed ||= next !== repo
 

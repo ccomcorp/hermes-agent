@@ -9,6 +9,25 @@
   width: 100%;
 }
 
+/* ---- Muted-text contrast/legibility fix (2026-07-09) ----------------- *
+ * The active theme's --color-muted-foreground lands too low-contrast on
+ * BOTH the cream/"Editor" theme (too light a gray on cream) and the dark
+ * theme (too dark on near-black), leaving muted labels/placeholders — the
+ * "— add parent —"/"— add child —"/"Upload file" affordances, the Worker
+ * log / run-metadata labels, event payloads and meta rows — barely
+ * readable. Each theme's token block lives in the host app, not this
+ * bundle, so we can't bump the per-theme value directly. Instead re-derive
+ * a legible muted value from the theme's OWN tokens: mix --color-foreground
+ * 70% toward --color-card. That darkens muted on the cream theme and
+ * lightens it on the dark theme (~AA in both) while staying clearly
+ * secondary — never equal to primary --color-foreground. Scoped to both
+ * plugin roots because the task-detail drawer renders body-level, outside
+ * .hermes-kanban. */
+.hermes-kanban,
+.hermes-kanban-drawer-shade {
+  --color-muted-foreground: color-mix(in srgb, var(--color-foreground) 70%, var(--color-card));
+}
+
 /* ---- Code/pre reset (theme-immune default) --------------------------- *
  *
  * Themes (shipped AND user-installable) routinely paint every <code> and
@@ -67,6 +86,15 @@
   gap: 0.75rem;
   align-items: start;
   overflow-x: auto;
+}
+
+.hermes-kanban-columns--scrollable {
+  cursor: grab;
+}
+
+.hermes-kanban-columns--panning,
+.hermes-kanban-columns--panning * {
+  cursor: grabbing !important;
 }
 
 .hermes-kanban-column {
@@ -332,7 +360,10 @@
 }
 
 .hermes-kanban-drawer {
-  width: min(var(--hermes-kanban-drawer-width, 640px), 92vw);
+  /* Card-detail drawer widened ~2x (640px -> 1200px fallback) so description
+     code blocks aren't cramped. min() with 92vw keeps it from overflowing a
+     small window; --hermes-kanban-drawer-width can still override. (2026-07-09) */
+  width: min(var(--hermes-kanban-drawer-width, 1200px), 92vw);
   height: 100vh;
   /* Dynamic viewport unit excludes the mobile browser's collapsing chrome
      (URL/nav bars) so the drawer's bottom row stays reachable. Falls back to
@@ -879,6 +910,10 @@
   white-space: pre;
   font-size: 0.78rem;
   line-height: 1.5;
+  /* Log readout is primary content, not a muted label. It otherwise inherits
+     an unreliable color and renders very dark on the near-black drawer in the
+     dark theme; pin it to the theme foreground for legibility. (2026-07-09) */
+  color: var(--color-foreground);
 }
 
 

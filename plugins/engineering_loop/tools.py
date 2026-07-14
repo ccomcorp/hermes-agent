@@ -10,6 +10,7 @@ engineering_loop plugin is loaded and active.
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
 import logging
@@ -46,41 +47,66 @@ from .feedback import (
 from .loop_classifier import classify_loop
 from .app_monitor import AppMonitor
 from .reviewer import build_review_context, parse_review_response, check_same_model
-from .git_commit import commit, get_diff, get_changed_files, get_commit_hash
+from .git_commit import (
+    commit,
+    get_diff,
+    get_changed_files,
+    get_commit_hash,
+    stage_files_safely,
+)
 from .traces import export_trace_to_file
 
 logger = logging.getLogger(__name__)
 
-# Module-level state (per-session, managed by hooks)
-_current_state: Optional[EngineeringRunState] = None
-_current_manager: Optional[StateManager] = None
+# App monitor is tool-local; run state and manager are owned by plugin hooks.
 _app_monitor: Optional[AppMonitor] = None
+
+
+def _plugin_module() -> Any:
+    """Return the plugin package module that owns session state.
+
+    Resolve lazily to avoid a circular import while the package imports this
+    tools module during initialization.
+    """
+    return importlib.import_module(__package__ or "plugins.engineering_loop")
+
+
+def reset_session_state() -> None:
+    """Clear cached tool state for a new session or isolated test.
+
+    Tool handlers cache their ``StateManager`` to avoid rebuilding it on every
+    call.  That cache is session-scoped, not process-scoped: a new Hermes
+    session or a test that changes cwd/HERMES_HOME must not inherit the prior
+    workspace's active run.
+    """
+    global _app_monitor
+    _app_monitor = None
+    try:
+        plugin = _plugin_module()
+        plugin._session_state = None
+        plugin._session_manager = None
+    except Exception:
+        logger.debug("engineering_loop: failed to reset plugin state", exc_info=True)
 
 
 def _get_manager() -> StateManager:
     """Get or create the state manager for the current workspace."""
-    global _current_manager
-    if _current_manager is None:
-        cwd = Path.cwd()
-        _current_manager = StateManager(cwd)
-    return _current_manager
+    return _plugin_module()._get_manager()
 
 
 def _get_state() -> Optional[EngineeringRunState]:
     """Get the current run state (from memory or disk)."""
-    global _current_state
-    if _current_state is None:
-        mgr = _get_manager()
-        _current_state = mgr.load()
-    return _current_state
+    return _plugin_module()._get_state()
 
 
 def _save_state() -> None:
     """Persist the current run state."""
-    global _current_state
-    if _current_state is not None:
-        mgr = _get_manager()
-        mgr.save(_current_state)
+    _plugin_module()._save_state()
+
+
+def _set_state(state: EngineeringRunState) -> None:
+    """Replace the shared plugin-owned state object."""
+    _plugin_module()._session_state = state
 
 
 # ── Tool: engineering_loop_start ───────────────────────────────────────────
@@ -92,18 +118,21 @@ def _handle_start(
     loop_type: str = "",
     task_source: str = "",
     session_id: str = "",
+    force: bool = False,
 ) -> Dict[str, Any]:
     """Start a new engineering loop run."""
-    global _current_state
-
     mgr = _get_manager()
     existing = mgr.load()
     if existing and existing.active:
-        return {
-            "ok": False,
-            "error": "An active engineering run already exists. Complete it first.",
-            "run_id": existing.run_id,
-        }
+        if not force:
+            return {
+                "ok": False,
+                "error": "An active engineering run already exists. Complete it first or pass force=true to archive it.",
+                "run_id": existing.run_id,
+            }
+        existing.outcome = "Force-finalized before replacement engineering run."
+        mgr.finalize(existing)
+        _plugin_module()._session_state = None
 
     # Auto-classify if loop_type not specified
     if not loop_type:
@@ -117,7 +146,7 @@ def _handle_start(
         session_id=session_id,
         task_source=task_source,
     )
-    _current_state = state
+    _set_state(state)
 
     header = mgr.build_header(state)
     return {
@@ -304,7 +333,35 @@ def _handle_run_gate(
     if not state.verification_gates and not gate_name:
         discovered = discover_gates(Path(state.workspace_path))
         if not discovered:
-            return {"ok": True, "gates": [], "message": "No gates discovered for this project."}
+            result = GateResult(
+                gate_name="gate-discovery",
+                command="discover_gates",
+                exit_code=0,
+                passed=True,
+                duration_seconds=0.0,
+                required=False,
+                stdout_snippet="No gates discovered for this project.",
+                executed_at=time.time(),
+            )
+            state.verification_gates = [result]
+            mgr.save_gate_results(state.verification_gates)
+            _save_state()
+            return {
+                "ok": True,
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "results": [
+                    {
+                        "name": result.gate_name,
+                        "passed": result.passed,
+                        "required": result.required,
+                        "duration_s": 0.0,
+                        "error": "",
+                    }
+                ],
+                "message": "No gates discovered for this project; recorded optional gate-discovery evidence.",
+            }
         # Convert to definitions that will be executed
         gates_to_run = discovered
     elif gate_name:
@@ -322,6 +379,12 @@ def _handle_run_gate(
     # Execute gates
     results = execute_gates(gates_to_run, log_dir, stop_on_failure=True)
 
+    if not results and state.verification_gates:
+        # Re-running all_gates in a project with no discovered gates must be
+        # idempotent. Preserve prior optional gate-discovery evidence instead
+        # of overwriting it with an empty list.
+        results = state.verification_gates
+
     # Merge results into state
     state.verification_gates = results
     mgr.save_gate_results(results)
@@ -337,6 +400,7 @@ def _handle_run_gate(
             {
                 "name": r.gate_name,
                 "passed": r.passed,
+                "required": r.required,
                 "duration_s": round(r.duration_seconds, 1),
                 "error": r.error[:200] if r.error else "",
             }
@@ -485,6 +549,7 @@ def _handle_check_termination(
         return {"ok": False, "error": "No engineering run active."}
 
     issues: List[str] = []
+    warnings: List[str] = []
 
     # 1. Check acceptance criteria
     if not state.acceptance_criteria:
@@ -495,7 +560,7 @@ def _handle_check_termination(
         issues.append("No verification gates have been run.")
     else:
         for gate in state.verification_gates:
-            if gate.required and not gate.passed:
+            if getattr(gate, "required", True) and not gate.passed:
                 issues.append(f"Required gate '{gate.gate_name}' failed.")
 
     # 3. Check reviewer
@@ -504,13 +569,24 @@ def _handle_check_termination(
         state.reviewer = parsed
         state.reviewer.reviewer_model = reviewer_model
 
-        # Check same-model
+        # Check same-model.  Deterministic and hybrid work require an
+        # independent reviewer; subjective/non-deterministic work records the
+        # warning but does not block termination.
         if check_same_model(main_model, "", reviewer_model, ""):
             state.reviewer.same_model_warning = True
-            issues.append(
+            warning = (
                 "WARNING: Reviewer used the same model as the main agent. "
-                "Independent review requires a different model."
+                "Independent review is required for deterministic and hybrid work."
             )
+            loop_type = (
+                state.loop_type.value
+                if hasattr(state.loop_type, "value")
+                else str(state.loop_type)
+            )
+            if loop_type == LoopType.NON_DETERMINISTIC.value:
+                warnings.append(warning)
+            else:
+                issues.append(warning)
 
         mgr = _get_manager()
         mgr.save_reviewer_feedback(parsed)
@@ -539,6 +615,7 @@ def _handle_check_termination(
         "ok": True,
         "can_complete": can_complete,
         "issues": issues,
+        "warnings": warnings,
         "phase": state.phase,
         "reviewer_status": (
             state.reviewer.status.value
@@ -562,6 +639,47 @@ def _handle_commit(
         return {"ok": False, "error": "No engineering run active."}
 
     workspace = Path(state.workspace_path)
+
+    issues: List[str] = []
+    if not state.verification_gates:
+        issues.append("No verification gates have been run.")
+    else:
+        for gate in state.verification_gates:
+            if getattr(gate, "required", True) and not gate.passed:
+                issues.append(f"Required gate '{gate.gate_name}' failed.")
+
+    if state.reviewer.status != ReviewerStatus.PASS:
+        issues.append("Adversarial review has not passed.")
+    else:
+        loop_type = (
+            state.loop_type.value
+            if hasattr(state.loop_type, "value")
+            else str(state.loop_type)
+        )
+        if state.reviewer.same_model_warning and loop_type in (
+            LoopType.DETERMINISTIC.value,
+            LoopType.HYBRID.value,
+        ):
+            issues.append(
+                "Reviewer used the same model as the main agent. "
+                "Independent review is required for deterministic and hybrid work."
+            )
+
+    if issues:
+        state.commit_status = CommitStatus.FAILED.value
+        _save_state()
+        return {
+            "ok": False,
+            "commit_hash": "",
+            "error": "Cannot commit: " + "; ".join(issues),
+        }
+
+    files_to_stage = state.changed_files or get_changed_files(workspace)
+    staged, stage_error = stage_files_safely(workspace, files_to_stage)
+    if not staged:
+        state.commit_status = CommitStatus.FAILED.value
+        _save_state()
+        return {"ok": False, "commit_hash": "", "error": stage_error}
 
     # Build commit message if not provided
     if not message:
@@ -646,6 +764,10 @@ TOOL_DEFINITIONS = [
                 "session_id": {
                     "type": "string",
                     "description": "Current session identifier.",
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Archive/finalize an existing active run before starting a replacement.",
                 },
             },
             "required": ["goal"],

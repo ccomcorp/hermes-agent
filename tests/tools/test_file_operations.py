@@ -211,6 +211,53 @@ class TestReadResult:
         assert d["mime_type"] == "image/png"
 
 
+
+class _AtomicWriteFallbackEnv:
+    """Fake env that forces the shell writer to fail, then accepts Python."""
+
+    cwd = "/tmp"
+
+    def __init__(self):
+        self.commands = []
+
+    def execute(self, command, cwd=None, **kwargs):
+        self.commands.append(command)
+        if command.startswith("python3 -c"):
+            return {"returncode": 0, "output": ""}
+        return {
+            "returncode": 2,
+            "output": "/bin/bash: -c: line 1: unexpected EOF while looking for matching `'",
+        }
+
+
+class TestAtomicWriteFallback:
+    def test_retries_with_python_when_shell_rejects_script(self):
+        env = _AtomicWriteFallbackEnv()
+        ops = ShellFileOperations(env)
+
+        result = ops._atomic_write("/tmp/example.txt", "content with ' quotes\n")
+
+        assert result.exit_code == 0
+        assert len(env.commands) == 2
+        assert "mktemp" in env.commands[0]
+        assert env.commands[1].startswith("python3 -c")
+
+    def test_non_shell_write_failures_do_not_fallback(self):
+        class PermissionDeniedEnv(_AtomicWriteFallbackEnv):
+            def execute(self, command, cwd=None, **kwargs):
+                self.commands.append(command)
+                return {"returncode": 1, "output": "permission denied"}
+
+        env = PermissionDeniedEnv()
+        ops = ShellFileOperations(env)
+
+        result = ops._atomic_write("/root/example.txt", "content\n")
+
+        assert result.exit_code == 1
+        assert result.stdout == "permission denied"
+        assert len(env.commands) == 1
+
+
 class TestWriteResult:
     def test_to_dict_omits_none(self):
         r = WriteResult(bytes_written=100)
@@ -466,6 +513,61 @@ class TestShellFileOpsHelpers:
         assert "'" in result
         # Should be safely escaped
         assert result.count("'") >= 4  # wrapping + escaping
+
+    def test_escape_shell_arg_rewrites_windows_drive_paths_to_msys(self, monkeypatch, file_ops):
+        # bash eats backslashes and MSYS mangles ``C:\...``; the Git Bash
+        # ``/c/...`` form is the reliable one (reuses _windows_to_msys_path).
+        import tools.environments.local as local_mod
+
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        assert file_ops._escape_shell_arg(r"C:\Users\alice\notes.txt") == "'/c/Users/alice/notes.txt'"
+        # Non-drive paths are untouched.
+        assert file_ops._escape_shell_arg("/tmp/foo") == "'/tmp/foo'"
+
+    def test_escape_shell_arg_normalizes_mixed_msys_paths(self, monkeypatch, file_ops):
+        import tools.environments.local as local_mod
+
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        mixed = r"/c/Users/Alexander\Documents\NewTEST\readme.txt"
+        assert file_ops._escape_shell_arg(mixed) == (
+            "'/c/Users/Alexander/Documents/NewTEST/readme.txt'"
+        )
+
+    def test_escape_shell_arg_rewrites_forward_slash_native_paths(self, monkeypatch, file_ops):
+        import tools.environments.local as local_mod
+
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        assert file_ops._escape_shell_arg(
+            "C:/Users/alice/notes.txt"
+        ) == "'/c/Users/alice/notes.txt'"
+
+    def test_read_file_uses_bash_safe_windows_paths(self, mock_env, monkeypatch):
+        import tools.environments.local as local_mod
+
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        commands = []
+
+        def side_effect(command, **kwargs):
+            commands.append(command)
+            if command.startswith("wc -c"):
+                return {"output": "5\n", "returncode": 0}
+            if command.startswith("head -c"):
+                return {"output": "hello", "returncode": 0}
+            if command.startswith("sed -n"):
+                return {"output": "hello\n", "returncode": 0}
+            if command.startswith("wc -l"):
+                return {"output": "1\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+        mock_env.execute.side_effect = side_effect
+        ops = ShellFileOperations(mock_env)
+        result = ops.read_file(r"C:\Users\alice\notes.txt")
+
+        assert result.error is None
+        assert commands[0] == "wc -c < '/c/Users/alice/notes.txt' 2>/dev/null"
+        assert commands[1] == "head -c 1000 '/c/Users/alice/notes.txt' 2>/dev/null"
+        assert commands[2] == "sed -n '1,500p' '/c/Users/alice/notes.txt'"
+        assert commands[3] == "wc -l < '/c/Users/alice/notes.txt'"
 
     def test_is_likely_binary_by_extension(self, file_ops):
         assert file_ops._is_likely_binary("photo.png") is True

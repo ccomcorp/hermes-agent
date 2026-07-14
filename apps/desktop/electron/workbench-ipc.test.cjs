@@ -1,0 +1,860 @@
+'use strict'
+
+// Hermes Workbench IPC handler tests.
+//
+// Same harness style as workbench-artifacts.test.cjs (node:test + tmp
+// workspaces). Because the handlers register through Electron's `ipcMain`, we
+// intercept `require('electron')` with a fake ipcMain that just captures the
+// handler functions by channel, then invoke them directly. This lets us test
+// the real registration + validation + normalization path with no Electron
+// runtime.
+
+const { test } = require('node:test')
+const assert = require('node:assert')
+const fs = require('fs')
+const path = require('path')
+const os = require('os')
+const Module = require('node:module')
+
+// ---------------------------------------------------------------------------
+// Mock electron BEFORE requiring the handler module
+// ---------------------------------------------------------------------------
+
+const handlers = new Map()
+const fakeIpcMain = {
+  handle(channel, fn) {
+    handlers.set(channel, fn)
+  }
+}
+
+const originalLoad = Module._load
+Module._load = function (request) {
+  if (request === 'electron') return { ipcMain: fakeIpcMain }
+  return originalLoad.apply(this, arguments)
+}
+
+const { registerWorkbenchIpc } = require('./workbench-ipc.cjs')
+
+// Restore immediately — the store (fs/path/crypto only) and everything else
+// must load normally, and this mock must not leak to sibling test files.
+Module._load = originalLoad
+
+registerWorkbenchIpc()
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const CH = {
+  reqList: 'hermes:workbench:requirements:list',
+  reqCreate: 'hermes:workbench:requirements:create',
+  reqRead: 'hermes:workbench:requirements:read',
+  reqUpdate: 'hermes:workbench:requirements:update',
+  planList: 'hermes:workbench:plans:list',
+  planCreate: 'hermes:workbench:plans:create',
+  planRead: 'hermes:workbench:plans:read',
+  planUpdate: 'hermes:workbench:plans:update',
+  csList: 'hermes:workbench:changesets:list',
+  csCreate: 'hermes:workbench:changesets:create',
+  csRead: 'hermes:workbench:changesets:read',
+  csUpdate: 'hermes:workbench:changesets:update',
+  csApply: 'hermes:workbench:changesets:apply',
+  csCommit: 'hermes:workbench:changesets:commit',
+  designRead: 'hermes:workbench:design:settings:read',
+  designWrite: 'hermes:workbench:design:settings:write',
+  designArtifactsCreate: 'hermes:workbench:design:artifacts:create',
+  designArtifactsList: 'hermes:workbench:design:artifacts:list',
+  designArtifactsRead: 'hermes:workbench:design:artifacts:read',
+  // Plugin Tester
+  ptExecute: 'hermes:workbench:plugin-tester:execute',
+  ptColList: 'hermes:workbench:plugin-tester:collections:list',
+  ptColCreate: 'hermes:workbench:plugin-tester:collections:create',
+  ptColRead: 'hermes:workbench:plugin-tester:collections:read',
+  ptColUpdate: 'hermes:workbench:plugin-tester:collections:update',
+  ptColDelete: 'hermes:workbench:plugin-tester:collections:delete',
+  ptHistList: 'hermes:workbench:plugin-tester:history:list',
+  ptHistCreate: 'hermes:workbench:plugin-tester:history:create',
+  ptHistRead: 'hermes:workbench:plugin-tester:history:read',
+  ptHistDelete: 'hermes:workbench:plugin-tester:history:delete',
+  ptHistClear: 'hermes:workbench:plugin-tester:history:clear',
+  ptEnvList: 'hermes:workbench:plugin-tester:environments:list',
+  ptEnvCreate: 'hermes:workbench:plugin-tester:environments:create',
+  ptEnvRead: 'hermes:workbench:plugin-tester:environments:read',
+  ptEnvUpdate: 'hermes:workbench:plugin-tester:environments:update',
+  ptEnvDelete: 'hermes:workbench:plugin-tester:environments:delete'
+}
+
+function invoke(channel, payload) {
+  const fn = handlers.get(channel)
+  if (!fn) throw new Error('No handler registered for ' + channel)
+  return fn({}, payload)
+}
+
+function createTempWorkspace() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-ipc-test-'))
+}
+
+function cleanup(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+  } catch { /* ignore */ }
+}
+
+// A response is normalized iff it is a plain WorkbenchResult:
+// { ok, value? , message?, code? } — and its `value` is NOT itself an envelope
+// (guards against double-wrapping).
+function assertNormalized(res) {
+  assert.strictEqual(typeof res, 'object', 'result must be an object')
+  assert.strictEqual(typeof res.ok, 'boolean', 'result.ok must be a boolean')
+  if (res.ok) {
+    assert.ok('value' in res, 'ok result must carry a value')
+    if (res.value && typeof res.value === 'object') {
+      assert.notStrictEqual(res.value.ok, true, 'value must not itself be a WorkbenchResult envelope')
+    }
+  } else {
+    assert.strictEqual(typeof res.message, 'string', 'error result must carry a message')
+    assert.ok(res.code, 'error result must carry a code')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// (a) Handler success paths — normalized shape
+// ---------------------------------------------------------------------------
+
+test('handlers are registered for every workbench channel', () => {
+  for (const channel of Object.values(CH)) {
+    assert.ok(handlers.has(channel), 'missing handler: ' + channel)
+  }
+})
+
+test('requirements create/read/list/update return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.reqCreate, {
+      workspaceRoot: ws,
+      title: 'Add settings export',
+      markdown: '# Add settings export\n'
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.requirement.id)
+    assert.ok(created.value.trace)
+
+    const id = created.value.requirement.id
+
+    const read = invoke(CH.reqRead, { workspaceRoot: ws, requirementId: id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.ok(read.value.markdown.includes('Add settings export'))
+
+    const list = invoke(CH.reqList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const updated = invoke(CH.reqUpdate, {
+      workspaceRoot: ws,
+      requirementId: id,
+      markdown: '# Updated\n',
+      status: 'clarified'
+    })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.status, 'clarified')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plans create/read/list return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.planCreate, {
+      workspaceRoot: ws,
+      title: 'Implementation Plan',
+      markdown: '# Plan v1\n',
+      operation: 'draft'
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.plan.id)
+    assert.strictEqual(created.value.plan.version, 1)
+
+    const read = invoke(CH.planRead, { workspaceRoot: ws, planId: created.value.plan.id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.ok(read.value.markdown.includes('Plan v1'))
+
+    const list = invoke(CH.planList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design settings read returns defaults, write persists them', () => {
+  const ws = createTempWorkspace()
+  try {
+    const initial = invoke(CH.designRead, { workspaceRoot: ws })
+    assertNormalized(initial)
+    assert.strictEqual(initial.ok, true)
+    assert.strictEqual(initial.value.designSystemPreset, 'none')
+    assert.strictEqual(initial.value.defaultViewport, 'desktop')
+
+    const written = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'mobile',
+        designSystemPreset: 'shadcn',
+        brandColor: '#112233',
+        tone: ['bold'],
+        radius: 'pill',
+        density: 'compact',
+        fontStyle: 'mono',
+        stackHint: 'react native',
+        sandboxHtmlPreview: false
+      }
+    })
+    assertNormalized(written)
+    assert.strictEqual(written.ok, true)
+    assert.strictEqual(written.value.designSystemPreset, 'shadcn')
+
+    const reread = invoke(CH.designRead, { workspaceRoot: ws })
+    assert.strictEqual(reread.ok, true)
+    assert.strictEqual(reread.value.defaultViewport, 'mobile')
+    assert.strictEqual(reread.value.brandColor, '#112233')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design settings write is rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.designWrite, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const missingSettings = invoke(CH.designWrite, { workspaceRoot: ws })
+    assert.strictEqual(missingSettings.ok, false)
+    assert.strictEqual(missingSettings.code, 'MISSING_SETTINGS')
+
+    const badPreset = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'desktop',
+        designSystemPreset: 'bogus-preset',
+        tone: [],
+        sandboxHtmlPreview: true
+      }
+    })
+    assert.strictEqual(badPreset.ok, false)
+    assert.strictEqual(badPreset.code, 'INVALID_PRESET')
+
+    const badViewport = invoke(CH.designWrite, {
+      workspaceRoot: ws,
+      settings: {
+        enabled: true,
+        defaultViewport: 'ultrawide',
+        designSystemPreset: 'none',
+        tone: [],
+        sandboxHtmlPreview: true
+      }
+    })
+    assert.strictEqual(badViewport.ok, false)
+    assert.strictEqual(badViewport.code, 'INVALID_VIEWPORT')
+
+    // Nothing should have been written to disk by any of the rejected calls.
+    const settingsPath = path.join(ws, '.hermes', 'workbench', 'designs', 'settings.json')
+    assert.ok(!fs.existsSync(settingsPath))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design artifacts create/list/read return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const reqRes = invoke(CH.reqCreate, { workspaceRoot: ws, title: 'Design artifact target' })
+    const requirementId = reqRes.value.requirement.id
+
+    const created = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId,
+      kind: 'brief',
+      content: '# Brief\n\nSome content.'
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.strictEqual(created.value.kind, 'brief')
+    assert.strictEqual(created.value.requirementId, requirementId)
+
+    const listed = invoke(CH.designArtifactsList, { workspaceRoot: ws, requirementId })
+    assertNormalized(listed)
+    assert.strictEqual(listed.ok, true)
+    assert.strictEqual(listed.value.length, 1)
+    assert.strictEqual(listed.value[0].id, created.value.id)
+
+    const read = invoke(CH.designArtifactsRead, { workspaceRoot: ws, artifactId: created.value.id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.ok(read.value.content.includes('Some content'))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('design artifacts handlers are rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullPayload = invoke(CH.designArtifactsCreate, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    const missingReq = invoke(CH.designArtifactsCreate, { workspaceRoot: ws, kind: 'brief', content: 'x' })
+    assert.strictEqual(missingReq.ok, false)
+    assert.strictEqual(missingReq.code, 'MISSING_REQUIREMENT_ID')
+
+    const badKind = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId: 'req-x',
+      kind: 'bogus',
+      content: 'x'
+    })
+    assert.strictEqual(badKind.ok, false)
+    assert.strictEqual(badKind.code, 'INVALID_KIND')
+
+    const missingContent = invoke(CH.designArtifactsCreate, {
+      workspaceRoot: ws,
+      requirementId: 'req-x',
+      kind: 'brief',
+      content: '   '
+    })
+    assert.strictEqual(missingContent.ok, false)
+    assert.strictEqual(missingContent.code, 'MISSING_CONTENT')
+
+    const listMissingReq = invoke(CH.designArtifactsList, { workspaceRoot: ws })
+    assert.strictEqual(listMissingReq.ok, false)
+    assert.strictEqual(listMissingReq.code, 'MISSING_REQUIREMENT_ID')
+
+    const readMissingId = invoke(CH.designArtifactsRead, { workspaceRoot: ws })
+    assert.strictEqual(readMissingId.ok, false)
+    assert.strictEqual(readMissingId.code, 'MISSING_ARTIFACT_ID')
+
+    const readUnknown = invoke(CH.designArtifactsRead, { workspaceRoot: ws, artifactId: 'design-nope' })
+    assert.strictEqual(readUnknown.ok, false)
+    assert.strictEqual(readUnknown.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('changesets create/read/list return normalized shape', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.csCreate, {
+      workspaceRoot: ws,
+      source: 'agent',
+      title: 'Some changes',
+      summary: 'changes',
+      files: [{ path: 'src/index.ts', status: 'pending' }]
+    })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.strictEqual(created.value.status, 'pending')
+
+    const read = invoke(CH.csRead, { workspaceRoot: ws, changesetId: created.value.id })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.id, created.value.id)
+
+    const list = invoke(CH.csList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// Slice E — apply/commit IPC handlers. Deliberately NOT declared `async` (see
+// the module comment), so validation failures return a plain object exactly
+// like every other handler's denial path — no `await` needed here either.
+test('changesets:apply and changesets:commit are rejected with structured errors on invalid payloads', () => {
+  const ws = createTempWorkspace()
+  try {
+    const nullApply = invoke(CH.csApply, null)
+    assertNormalized(nullApply)
+    assert.strictEqual(nullApply.ok, false)
+    assert.strictEqual(nullApply.code, 'INVALID_PAYLOAD')
+
+    const noRootApply = invoke(CH.csApply, { changesetId: 'cs-1' })
+    assert.strictEqual(noRootApply.ok, false)
+    assert.strictEqual(noRootApply.code, 'MISSING_WORKSPACE_ROOT')
+
+    const noIdApply = invoke(CH.csApply, { workspaceRoot: ws })
+    assert.strictEqual(noIdApply.ok, false)
+    assert.strictEqual(noIdApply.code, 'MISSING_CHANGESET_ID')
+
+    const nullCommit = invoke(CH.csCommit, null)
+    assert.strictEqual(nullCommit.ok, false)
+    assert.strictEqual(nullCommit.code, 'INVALID_PAYLOAD')
+
+    const noIdCommit = invoke(CH.csCommit, { workspaceRoot: ws })
+    assert.strictEqual(noIdCommit.ok, false)
+    assert.strictEqual(noIdCommit.code, 'MISSING_CHANGESET_ID')
+
+    const badMessage = invoke(CH.csCommit, {
+      workspaceRoot: ws,
+      changesetId: 'cs-1',
+      message: 'x'.repeat(2001)
+    })
+    assert.strictEqual(badMessage.ok, false)
+    assert.strictEqual(badMessage.code, 'INVALID_MESSAGE')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// End-to-end through the real IPC handler (not the apply module directly):
+// proves `changesets:apply` is refused for a non-accepted changeset, and that
+// a genuinely `accepted` changeset can be applied through the handler.
+test('changesets:apply end-to-end through the IPC handler', async () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.csCreate, {
+      workspaceRoot: ws,
+      source: 'agent',
+      title: 'Some changes',
+      summary: 'changes',
+      files: [{ diff: 'hello from apply\n', path: 'apply-me.txt', status: 'pending' }]
+    })
+    assert.strictEqual(created.ok, true)
+
+    // Not yet accepted — apply must be refused.
+    const tooEarly = await invoke(CH.csApply, { workspaceRoot: ws, changesetId: created.value.id })
+    assert.strictEqual(tooEarly.ok, false)
+    assert.strictEqual(tooEarly.code, 'NOT_ACCEPTED')
+
+    const accepted = invoke(CH.csUpdate, {
+      workspaceRoot: ws,
+      changesetId: created.value.id,
+      statusPatch: { status: 'accepted' }
+    })
+    assert.strictEqual(accepted.ok, true)
+
+    const applied = await invoke(CH.csApply, { workspaceRoot: ws, changesetId: created.value.id })
+    assertNormalized(applied)
+    assert.strictEqual(applied.ok, true)
+    assert.strictEqual(applied.value.status, 'applied')
+    assert.strictEqual(
+      fs.readFileSync(path.join(ws, 'apply-me.txt'), 'utf8'),
+      'hello from apply\n'
+    )
+
+    // Not a git repo — commit must be refused, not throw.
+    const commitResult = await invoke(CH.csCommit, { workspaceRoot: ws, changesetId: created.value.id })
+    assert.strictEqual(commitResult.ok, false)
+    assert.strictEqual(commitResult.code, 'NOT_A_REPO')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// (a) Versioned refine keeps the prior version
+// ---------------------------------------------------------------------------
+
+test('plans:update refine writes a new version and keeps the prior one', () => {
+  const ws = createTempWorkspace()
+  try {
+    const req = invoke(CH.reqCreate, { workspaceRoot: ws, title: 'Refine Target' })
+    const reqId = req.value.requirement.id
+
+    const draft = invoke(CH.planCreate, {
+      workspaceRoot: ws,
+      title: 'Feature Plan',
+      markdown: '# Plan v1 contents\n',
+      operation: 'draft',
+      requirementId: reqId
+    })
+    const priorPlan = draft.value.plan
+    assert.strictEqual(priorPlan.version, 1)
+
+    const refined = invoke(CH.planUpdate, {
+      workspaceRoot: ws,
+      planId: priorPlan.id,
+      markdown: '# Plan v2 refined contents\n',
+      operation: 'refine',
+      requirementId: reqId
+    })
+    assertNormalized(refined)
+    assert.strictEqual(refined.ok, true)
+
+    const newPlan = refined.value.plan
+    assert.notStrictEqual(newPlan.id, priorPlan.id)
+    assert.strictEqual(newPlan.version, 2)
+    assert.strictEqual(newPlan.supersedesPlanId, priorPlan.id)
+
+    // Both version files exist on disk — history is never overwritten.
+    const priorFull = path.join(ws, priorPlan.relativePath)
+    const newFull = path.join(ws, newPlan.relativePath)
+    assert.ok(fs.existsSync(priorFull), 'prior plan file must survive refine')
+    assert.ok(fs.existsSync(newFull), 'new plan version file must exist')
+    assert.ok(fs.readFileSync(priorFull, 'utf8').includes('Plan v1 contents'))
+    assert.ok(fs.readFileSync(newFull, 'utf8').includes('Plan v2 refined contents'))
+
+    // The sidecar carries the supersedes link on disk.
+    const metaFull = path.join(ws, newPlan.relativePath.replace(/\.md$/, '.meta.json'))
+    assert.ok(fs.existsSync(metaFull), 'refine must write a meta sidecar')
+    const meta = JSON.parse(fs.readFileSync(metaFull, 'utf8'))
+    assert.strictEqual(meta.supersedesPlanId, priorPlan.id)
+    assert.strictEqual(meta.version, 2)
+
+    // Requirement trace records both plan ids.
+    const traceRead = invoke(CH.reqRead, { workspaceRoot: ws, requirementId: reqId })
+    assert.ok(traceRead.value.trace.linkedPlanIds.includes(priorPlan.id))
+    assert.ok(traceRead.value.trace.linkedPlanIds.includes(newPlan.id))
+    const linkEntry = traceRead.value.trace.history.find(
+      (h) => h.kind === 'plan_linked' && h.metadata && h.metadata.supersedesPlanId === priorPlan.id
+    )
+    assert.ok(linkEntry, 'trace must record the supersedes link')
+
+    // A third refine walks the version chain from disk to v3.
+    const refined3 = invoke(CH.planUpdate, {
+      workspaceRoot: ws,
+      planId: newPlan.id,
+      markdown: '# Plan v3\n',
+      operation: 'refine'
+    })
+    assert.strictEqual(refined3.value.plan.version, 3)
+    assert.strictEqual(refined3.value.plan.supersedesPlanId, newPlan.id)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// (b) Invalid payloads => structured error (never a throw)
+// ---------------------------------------------------------------------------
+
+test('invalid payloads return structured errors, not throws', () => {
+  const ws = createTempWorkspace()
+  try {
+    // null payload
+    const nullPayload = invoke(CH.reqCreate, null)
+    assertNormalized(nullPayload)
+    assert.strictEqual(nullPayload.ok, false)
+    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
+
+    // missing title
+    const noTitle = invoke(CH.reqCreate, { workspaceRoot: ws })
+    assert.strictEqual(noTitle.ok, false)
+    assert.strictEqual(noTitle.code, 'MISSING_TITLE')
+
+    // invalid requirement source
+    const badSource = invoke(CH.reqCreate, { workspaceRoot: ws, title: 'x', source: 'bogus' })
+    assert.strictEqual(badSource.ok, false)
+    assert.strictEqual(badSource.code, 'INVALID_SOURCE')
+
+    // invalid plan operation
+    const badOp = invoke(CH.planCreate, { workspaceRoot: ws, markdown: '# x', operation: 'nope' })
+    assert.strictEqual(badOp.ok, false)
+    assert.strictEqual(badOp.code, 'INVALID_OPERATION')
+
+    // plan create with no markdown
+    const noMd = invoke(CH.planCreate, { workspaceRoot: ws, operation: 'draft' })
+    assert.strictEqual(noMd.ok, false)
+    assert.strictEqual(noMd.code, 'MISSING_MARKDOWN')
+
+    // changeset with empty files
+    const emptyCs = invoke(CH.csCreate, {
+      workspaceRoot: ws,
+      title: 'x',
+      summary: '',
+      source: 'agent',
+      files: []
+    })
+    assert.strictEqual(emptyCs.ok, false)
+    assert.strictEqual(emptyCs.code, 'EMPTY_CHANGESET')
+
+    // refine without planId
+    const noPlanId = invoke(CH.planUpdate, { workspaceRoot: ws, markdown: '# x' })
+    assert.strictEqual(noPlanId.ok, false)
+    assert.strictEqual(noPlanId.code, 'MISSING_PLAN_ID')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// (c) Security denial paths (REQUIRED by the plan)
+// ---------------------------------------------------------------------------
+
+test('missing workspace root fails closed on every entry point', () => {
+  for (const channel of [
+    CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate,
+    CH.designRead, CH.designWrite
+  ]) {
+    const res = invoke(channel, {})
+    assertNormalized(res)
+    assert.strictEqual(res.ok, false, channel + ' must fail on missing workspaceRoot')
+    assert.strictEqual(res.code, 'MISSING_WORKSPACE_ROOT', channel + ' should report MISSING_WORKSPACE_ROOT')
+  }
+})
+
+test('a refine with a traversal planRelativePath is refused', () => {
+  const ws = createTempWorkspace()
+  try {
+    const res = invoke(CH.planUpdate, {
+      workspaceRoot: ws,
+      planId: 'some-plan',
+      planRelativePath: '../../../../evil.md',
+      markdown: '# evil\n',
+      operation: 'refine'
+    })
+    assertNormalized(res)
+    assert.strictEqual(res.ok, false)
+    assert.strictEqual(res.code, 'UNSAFE_PATH')
+
+    // Nothing was written outside the workspace root.
+    assert.ok(!fs.existsSync(path.resolve(ws, '..', '..', '..', '..', 'evil.md')))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('a write with a traversal identifier stays contained under the workspace', () => {
+  const ws = createTempWorkspace()
+  try {
+    // A malicious title cannot escape .hermes/workbench: it is sanitized into a
+    // safe id, so the artifact is written inside the workspace, not above it.
+    const res = invoke(CH.reqCreate, { workspaceRoot: ws, title: '../../../etc/passwd' })
+    assertNormalized(res)
+    assert.strictEqual(res.ok, true)
+
+    const relDir = res.value.requirement.relativeDir
+    assert.ok(relDir.startsWith('.hermes/workbench/requirements/'), 'artifact must live under the workbench dir')
+    assert.ok(!relDir.includes('..'), 'artifact path must contain no traversal segments')
+
+    const draftFull = path.resolve(ws, res.value.requirement.draftRelativePath)
+    assert.ok(draftFull.startsWith(path.resolve(ws) + path.sep), 'resolved write path must be inside the workspace')
+    assert.ok(fs.existsSync(draftFull))
+
+    // No file escaped one level up out of the workspace root.
+    assert.ok(!fs.existsSync(path.resolve(ws, '..', 'etc', 'passwd')))
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('reading a traversal requirement id fails closed (NOT_FOUND, no escape)', () => {
+  const ws = createTempWorkspace()
+  try {
+    const res = invoke(CH.reqRead, { workspaceRoot: ws, requirementId: '../../../../etc/passwd' })
+    assertNormalized(res)
+    assert.strictEqual(res.ok, false)
+    assert.strictEqual(res.code, 'NOT_FOUND')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Plugin Tester integration tests
+// ---------------------------------------------------------------------------
+
+test('plugin-tester collections CRUD round-trip', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptColCreate, { workspaceRoot: ws, name: 'My API Tests', description: 'Test suite' })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const cid = created.value.id
+
+    const read = invoke(CH.ptColRead, { workspaceRoot: ws, collectionId: cid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.name, 'My API Tests')
+
+    const updated = invoke(CH.ptColUpdate, { workspaceRoot: ws, collectionId: cid, name: 'Renamed' })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.name, 'Renamed')
+
+    const list = invoke(CH.ptColList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const del = invoke(CH.ptColDelete, { workspaceRoot: ws, collectionId: cid })
+    assertNormalized(del)
+    assert.strictEqual(del.ok, true)
+
+    const afterList = invoke(CH.ptColList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester environments CRUD round-trip', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptEnvCreate, { workspaceRoot: ws, name: 'Staging', variables: { BASE_URL: 'https://staging.example.com' } })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const eid = created.value.id
+
+    const read = invoke(CH.ptEnvRead, { workspaceRoot: ws, environmentId: eid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.name, 'Staging')
+    assert.strictEqual(read.value.variables.BASE_URL, 'https://staging.example.com')
+
+    const updated = invoke(CH.ptEnvUpdate, { workspaceRoot: ws, environmentId: eid, name: 'Production', variables: { BASE_URL: 'https://api.example.com' } })
+    assertNormalized(updated)
+    assert.strictEqual(updated.ok, true)
+    assert.strictEqual(updated.value.name, 'Production')
+
+    const list = invoke(CH.ptEnvList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.length, 1)
+
+    const del = invoke(CH.ptEnvDelete, { workspaceRoot: ws, environmentId: eid })
+    assertNormalized(del)
+    assert.strictEqual(del.ok, true)
+
+    const afterList = invoke(CH.ptEnvList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester history CRUD and clear', () => {
+  const ws = createTempWorkspace()
+  try {
+    const created = invoke(CH.ptHistCreate, { workspaceRoot: ws, request: { method: 'GET', url: 'https://httpbin.org/get' }, response: { status: 200 } })
+    assertNormalized(created)
+    assert.strictEqual(created.ok, true)
+    assert.ok(created.value.id)
+    const hid = created.value.id
+
+    const read = invoke(CH.ptHistRead, { workspaceRoot: ws, historyId: hid })
+    assertNormalized(read)
+    assert.strictEqual(read.ok, true)
+    assert.strictEqual(read.value.request.method, 'GET')
+
+    const list = invoke(CH.ptHistList, { workspaceRoot: ws })
+    assertNormalized(list)
+    assert.strictEqual(list.ok, true)
+    assert.strictEqual(list.value.entries.length, 1)
+
+    // Clear
+    const cleared = invoke(CH.ptHistClear, { workspaceRoot: ws })
+    assertNormalized(cleared)
+    assert.strictEqual(cleared.ok, true)
+
+    const afterList = invoke(CH.ptHistList, { workspaceRoot: ws })
+    assert.strictEqual(afterList.value.entries.length, 0)
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester execute requires method and url', () => {
+  const ws = createTempWorkspace()
+  try {
+    // Method defaults to GET — validateRequest only rejects unsupported methods.
+    // Test missing request and missing URL in the synchronous validation path.
+    const noRequest = invoke(CH.ptExecute, { workspaceRoot: ws })
+    assertNormalized(noRequest)
+    assert.strictEqual(noRequest.ok, false)
+    assert.strictEqual(noRequest.code, 'MISSING_REQUEST')
+
+    const noUrl = invoke(CH.ptExecute, { workspaceRoot: ws, request: { method: 'GET' } })
+    assertNormalized(noUrl)
+    assert.strictEqual(noUrl.ok, false)
+    assert.strictEqual(noUrl.code, 'MISSING_URL')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester execute rejects unknown HTTP methods', () => {
+  const ws = createTempWorkspace()
+  try {
+    const res = invoke(CH.ptExecute, { workspaceRoot: ws, request: { method: 'BOGUS', url: 'https://example.com' } })
+    assertNormalized(res)
+    assert.strictEqual(res.ok, false)
+    assert.strictEqual(res.code, 'INVALID_METHOD')
+  } finally {
+    cleanup(ws)
+  }
+})
+
+test('plugin-tester persisted history redacts auth credentials', () => {
+  const ws = createTempWorkspace()
+  try {
+    // Record a history entry with auth credentials via the IPC handler
+    const entry = invoke(CH.ptHistCreate, {
+      workspaceRoot: ws,
+      request: {
+        method: 'GET',
+        url: 'https://httpbin.org/get',
+        auth: {
+          type: 'bearer',
+          token: 'secret-bearer-token-abc123',
+          username: 'admin',
+          password: 'super-secret-password',
+          key: 'X-API-Key',
+          value: 'sk-live-key-12345'
+        }
+      },
+      response: { status: 200, body: '{}' }
+    })
+    assertNormalized(entry)
+    assert.strictEqual(entry.ok, true)
+    assert.ok(entry.value.id)
+
+    // Read the persisted JSON file from disk
+    const storeModule = require('./workbench-plugin-tester-store.cjs')
+    const manifest = storeModule._internal.ensureManifest(ws)
+    const histEntry = manifest.history.find(h => h.id === entry.value.id)
+    assert.ok(histEntry, 'history entry must appear in manifest')
+    assert.ok(histEntry.relativePath, 'manifest entry must carry relativePath')
+
+    const fullPath = path.join(ws, histEntry.relativePath)
+    assert.ok(fs.existsSync(fullPath), 'history file must exist on disk')
+    const onDisk = JSON.parse(fs.readFileSync(fullPath, 'utf8'))
+
+    // Verify auth values are redacted in the persisted file
+    assert.ok(onDisk.request, 'persisted entry must have request')
+    assert.ok(onDisk.request.auth, 'persisted request must have auth')
+    assert.strictEqual(onDisk.request.auth.token, '[REDACTED]')
+    assert.strictEqual(onDisk.request.auth.password, '[REDACTED]')
+    assert.strictEqual(onDisk.request.auth.value, '[REDACTED]')
+    // Non-secret auth fields are preserved
+    assert.strictEqual(onDisk.request.auth.type, 'bearer')
+    assert.strictEqual(onDisk.request.auth.username, 'admin')
+    assert.strictEqual(onDisk.request.auth.key, 'X-API-Key')
+
+    // No live credential values anywhere in the serialized JSON
+    const raw = JSON.stringify(onDisk)
+    assert.ok(!raw.includes('secret-bearer-token-abc123'), 'raw file must not contain bearer token')
+    assert.ok(!raw.includes('super-secret-password'), 'raw file must not contain password')
+    assert.ok(!raw.includes('sk-live-key-12345'), 'raw file must not contain API key value')
+  } finally {
+    cleanup(ws)
+  }
+})

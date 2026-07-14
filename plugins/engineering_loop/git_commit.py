@@ -86,6 +86,43 @@ def is_safe_to_commit(project_root: Path) -> Tuple[bool, str]:
     return True, ""
 
 
+def _is_blocked_path(filepath: str) -> bool:
+    """Return True when a path must never be staged by the harness."""
+    return any(
+        re.search(pattern, filepath, re.IGNORECASE)
+        for pattern in _BLOCKED_PATTERNS
+    )
+
+
+def stage_files_safely(project_root: Path, files: List[str]) -> Tuple[bool, str]:
+    """Stage a caller-provided file list after applying safety filters."""
+    unique_files = [f for f in dict.fromkeys(files) if f]
+    if not unique_files:
+        return False, "No changed files were provided for staging."
+
+    blocked = [f for f in unique_files if _is_blocked_path(f)]
+    if blocked:
+        return False, f"Refusing to stage blocked files: {', '.join(blocked[:5])}."
+
+    try:
+        result = subprocess.run(
+            ["git", "add", "--", *unique_files],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "git add timed out"
+    except Exception as exc:
+        return False, str(exc)
+
+    if result.returncode != 0:
+        return False, result.stderr.strip()[:500] or "git add failed"
+
+    return True, ""
+
+
 def get_changed_files(project_root: Path) -> List[str]:
     """Get list of files changed in the working tree (staged + unstaged)."""
     try:

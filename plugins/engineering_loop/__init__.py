@@ -85,6 +85,14 @@ def _on_session_start(
     _session_id = session_id
     _session_state = None
     _session_manager = None
+    try:
+        from . import tools as _tools
+        _tools.reset_session_state()
+    except Exception:
+        logger.debug(
+            "engineering_loop: failed to reset tool session state",
+            exc_info=True,
+        )
     logger.debug(
         "engineering_loop: on_session_start session=%s model=%s state_reset=True",
         session_id, model,

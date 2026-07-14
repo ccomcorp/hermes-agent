@@ -1,0 +1,14 @@
+{
+  "name": "hermes-canvas",
+  "label": "Canvas",
+  "description": "Live UI creation workspace for Hermes Agent. Create frontend projects, preview them live, and instruct Hermes to edit code with instant visual feedback.",
+  "icon": "Sparkles",
+  "version": "0.1.8",
+  "tab": {
+    "path": "/canvas",
+    "position": "after:skills"
+  },
+  "entry": "dist/index.js?v=10",
+  "css": "dist/style.css?v=8",
+  "api": "plugin_api.py"
+}

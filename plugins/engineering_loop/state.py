@@ -122,9 +122,7 @@ class StateManager:
                     FailureRecord(**f) for f in raw.get("failures", [])
                 ],
                 stuck_signals=raw.get("stuck_signals", []),
-                reviewer=ReviewerResult(**raw["reviewer"])
-                if raw.get("reviewer")
-                else ReviewerResult(),
+                reviewer=self._load_reviewer(raw.get("reviewer")),
                 human_input_required=raw.get("human_input_required", False),
                 human_input_question=raw.get("human_input_question", ""),
                 commit_status=raw.get("commit_status", "pending"),
@@ -139,6 +137,31 @@ class StateManager:
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             logger.warning("Failed to load engineering state: %s", exc)
             return None
+
+    def _load_reviewer(self, raw_reviewer: Optional[Dict[str, Any]]) -> ReviewerResult:
+        """Load reviewer feedback, repairing persisted enum strings.
+
+        Older/live state files may contain plain strings such as ``"PASS"``
+        or Python stringified enums such as ``"ReviewerStatus.PASS"``.
+        Normalize them back to ``ReviewerStatus`` so status/header rendering
+        does not crash on ``.value`` access after process restart.
+        """
+        if not raw_reviewer:
+            return ReviewerResult()
+
+        data = dict(raw_reviewer)
+        status = data.get("status", ReviewerStatus.PENDING)
+        if not isinstance(status, ReviewerStatus):
+            try:
+                if isinstance(status, str) and status.startswith("ReviewerStatus."):
+                    status = ReviewerStatus[status.split(".", 1)[1]]
+                else:
+                    status = ReviewerStatus(status)
+            except (KeyError, ValueError, TypeError):
+                logger.warning("Unknown reviewer status in engineering state: %r", status)
+                status = ReviewerStatus.PENDING
+        data["status"] = status
+        return ReviewerResult(**data)
 
     def create(
         self,
@@ -229,6 +252,7 @@ class StateManager:
                 "exit_code": r.exit_code,
                 "passed": r.passed,
                 "duration_seconds": r.duration_seconds,
+                "required": r.required,
                 "stdout_snippet": r.stdout_snippet[:2000],
                 "stderr_snippet": r.stderr_snippet[:2000],
                 "log_path": r.log_path,
@@ -288,8 +312,16 @@ class StateManager:
             gate_status = f"{passed}/{total} passed"
 
         reviewer_status = ""
-        if state.reviewer.status.value != ReviewerStatus.PENDING.value:
-            reviewer_status = state.reviewer.status.value
+        raw_reviewer_status = state.reviewer.status
+        reviewer_status_value = (
+            raw_reviewer_status.value
+            if hasattr(raw_reviewer_status, "value")
+            else str(raw_reviewer_status)
+        )
+        if reviewer_status_value.startswith("ReviewerStatus."):
+            reviewer_status_value = reviewer_status_value.split(".", 1)[1]
+        if reviewer_status_value != ReviewerStatus.PENDING.value:
+            reviewer_status = reviewer_status_value
 
         human_gate = ""
         if state.human_input_required:
@@ -327,7 +359,11 @@ class StateManager:
             return "Review blocked. Record blocker and stop."
         if not state.verification_gates:
             return "Discover and run verification gates."
-        if any(not g.passed for g in state.verification_gates if g.required):
+        if any(
+            not g.passed
+            for g in state.verification_gates
+            if getattr(g, "required", True)
+        ):
             return "Fix failing required gates before proceeding."
         if state.reviewer.status == ReviewerStatus.PENDING:
             return "Gates pass. Route to adversarial review."

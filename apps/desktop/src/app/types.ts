@@ -123,7 +123,9 @@ export type CommandDispatchResponse =
   | PrefillCommandDispatchResponse
 
 export type SidebarNavId =
+  | 'analytics'
   | 'artifacts'
+  | 'canvas'
   | 'channels'
   | 'command-center'
   | 'config'
@@ -140,6 +142,7 @@ export type SidebarNavId =
   | 'skills'
   | 'system'
   | 'webhooks'
+  | 'workbench'
 
 export interface SidebarNavItem {
   id: SidebarNavId

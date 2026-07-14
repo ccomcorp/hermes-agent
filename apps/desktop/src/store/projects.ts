@@ -2,16 +2,23 @@ import { atom } from 'nanostores'
 
 import { liveSessionProjectId, type SidebarProjectTree } from '@/app/chat/sidebar/projects/workspace-groups'
 import type { HermesGitBranch } from '@/global'
+import { translateNow } from '@/i18n'
 import { desktopDefaultCwd, selectDesktopPaths, writeDesktopFileText } from '@/lib/desktop-fs'
 import { desktopGit } from '@/lib/desktop-git'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { persistentAtom } from '@/lib/persisted'
-import { translateNow } from '@/i18n'
 import { activeGateway, ensureActiveGatewayOpen } from '@/store/gateway'
-import { notify } from '@/store/notifications'
 import { setSidebarAgentsGrouped } from '@/store/layout'
+import { notify } from '@/store/notifications'
 import { requestFreshSession } from '@/store/profile'
-import { $selectedStoredSessionId, $sessions, workspaceCwdForNewSession } from '@/store/session'
+import {
+  $activeSessionId,
+  $selectedStoredSessionId,
+  $sessions,
+  setCurrentBranch,
+  setCurrentCwd,
+  workspaceCwdForNewSession
+} from '@/store/session'
 import type { ProjectInfo, ProjectsPayload } from '@/types/hermes'
 
 // First-class, per-profile Projects (named, multi-folder workspaces). State is
@@ -208,6 +215,125 @@ export async function followActiveSessionCwd(cwd: string): Promise<void> {
       enterProject(projectId)
     }
   }
+}
+
+
+/** Primary workspace path for a project (explicit folders only). */
+export function projectWorkspacePath(project: ProjectInfo): null | string {
+  const primary = (project.primary_path || '').trim()
+  if (primary) {
+    return primary
+  }
+
+  const marked = project.folders?.find(folder => folder.is_primary)?.path?.trim()
+  if (marked) {
+    return marked
+  }
+
+  const first = project.folders?.[0]?.path?.trim()
+  return first || null
+}
+
+/**
+ * Move a session into a project's workspace by re-anchoring its cwd.
+ * Uses session.cwd.set (live or stored-only). Refreshes the project tree and,
+ * for the active chat, follows scope into that project.
+ */
+export async function moveSessionToProject(opts: {
+  sessionId: string
+  project: ProjectInfo
+  profile?: string
+}): Promise<{ cwd: string; branch?: string }> {
+  const path = projectWorkspacePath(opts.project)
+  if (!path) {
+    throw new Error(translateNow('sidebar.row.moveNoFolder') || 'This project has no folder yet')
+  }
+
+  let gateway = activeGateway()
+  if (!gateway || gateway.connectionState !== 'open') {
+    gateway = await ensureActiveGatewayOpen()
+  }
+  if (!gateway) {
+    throw new Error(translateNow('sidebar.row.moveNoGateway') || 'Gateway not connected')
+  }
+
+  const isActiveRow = opts.sessionId === $selectedStoredSessionId.get()
+  const runtimeId = isActiveRow ? $activeSessionId.get() : null
+  // Prefer the live runtime id when this is the open chat; otherwise the stored
+  // session id (backend falls back to a state.db-only cwd update).
+  const targetId = runtimeId || opts.sessionId
+
+  const info = await gateway.request<{ branch?: string; cwd?: string; stored_only?: boolean }>(
+    'session.cwd.set',
+    {
+      session_id: targetId,
+      cwd: path,
+      ...(opts.profile ? { profile: opts.profile } : {})
+    }
+  )
+
+  const cwd = (info.cwd || path).trim()
+  const branch = (info.branch || '').trim()
+
+  // Update every list row that is this conversation (stored id and/or live
+  // runtime id). Do not invent a second row — only rewrite cwd on matches.
+  const matchIds = new Set([opts.sessionId, targetId].filter(Boolean))
+  $sessions.set(
+    $sessions.get().map(session =>
+      matchIds.has(session.id)
+        ? {
+            ...session,
+            cwd,
+            git_branch: branch || session.git_branch || null,
+            git_repo_root: cwd
+          }
+        : session
+    )
+  )
+
+  if (isActiveRow) {
+    setCurrentCwd(cwd)
+    setCurrentBranch(branch)
+  }
+
+  // Structural regroup: refresh tree membership from the server so the sidebar
+  // does not keep a stale lane placement next to the optimistic live overlay.
+  await Promise.all([refreshProjects(), refreshProjectTree()])
+
+  if (opts.project.id.startsWith('p_')) {
+    setSidebarAgentsGrouped(true)
+    enterProject(opts.project.id)
+  } else {
+    await followActiveSessionCwd(cwd)
+  }
+
+  return { cwd, branch }
+}
+
+/**
+ * Create a named project rooted at `folder` and move the session into it.
+ */
+export async function createProjectAndMoveSession(opts: {
+  sessionId: string
+  name: string
+  folder: string
+  profile?: string
+}): Promise<ProjectInfo> {
+  const created = await createProject({
+    name: opts.name.trim(),
+    folders: [opts.folder],
+    primaryPath: opts.folder,
+    use: true
+  })
+  if (!created) {
+    throw new Error(translateNow('sidebar.row.moveCreateFailed') || 'Could not create project')
+  }
+  await moveSessionToProject({
+    sessionId: opts.sessionId,
+    project: created,
+    profile: opts.profile
+  })
+  return created
 }
 
 // Issue a request on whichever gateway is currently active, reconnecting once
