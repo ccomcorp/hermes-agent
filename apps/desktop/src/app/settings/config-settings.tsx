@@ -18,7 +18,7 @@ import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config
 import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { PanelEmpty } from '../overlays/panel'
 
-import { CONTROL_TEXT, EMPTY_SELECT_VALUE, FIELD_DESCRIPTIONS, FIELD_LABELS, SECTIONS } from './constants'
+import { CONTROL_TEXT, EMPTY_SELECT_VALUE, ENUM_OPTIONS, FIELD_DESCRIPTIONS, FIELD_LABELS, SECTIONS } from './constants'
 import { FallbackModelsField } from './fallback-models-field'
 import { fieldCopyForSchemaKey } from './field-copy'
 import { enumOptionsFor, getNested, prettyName, setNested } from './helpers'
@@ -340,6 +340,27 @@ export function ConfigSettings({
       return new Map<string, [string, ConfigFieldSchema][]>()
     }
 
+    // Some backends historically omit memory.provider from /api/config/schema
+    // (skipped during schema walk). Desktop still needs a selectable provider
+    // control for composite/NeuroLinked, so synthesize missing critical fields.
+    const synthetic: Record<string, ConfigFieldSchema> = {
+      'memory.provider': {
+        type: 'select',
+        description: 'Memory provider plugin (empty = built-in MEMORY.md only)',
+        options: ENUM_OPTIONS['memory.provider'] ?? [],
+        category: 'memory'
+      },
+      'context.engine': {
+        type: 'select',
+        description: 'Context management engine',
+        options: ENUM_OPTIONS['context.engine'] ?? ['compressor', 'default', 'custom'],
+        category: 'agent'
+      }
+    }
+
+    const resolveField = (key: string): ConfigFieldSchema | undefined =>
+      schema[key] ?? synthetic[key]
+
     return new Map(
       SECTIONS.map(section => {
         // Schema-category sections (web-dashboard parity): every field whose
@@ -349,18 +370,38 @@ export function ConfigSettings({
             ([, field]) => (field.category ?? 'general') === section.schemaCategory
           ) as [string, ConfigFieldSchema][]
 
-          const explicit = section.keys.flatMap(k =>
-            schema[k] ? [[k, schema[k]] as [string, ConfigFieldSchema]] : []
-          )
-          const explicitKeys = new Set(explicit.map(([k]) => k))
+          // Always surface critical Memory/Context selectors even if schema omitted them.
+          const forcedKeys =
+            section.id === 'memory'
+              ? (['memory.provider'] as const)
+              : section.id === 'context'
+                ? (['context.engine'] as const)
+                : ([] as const)
+
+          const explicit = [...section.keys, ...forcedKeys].flatMap(k => {
+            const field = resolveField(k)
+            return field ? ([[k, field]] as [string, ConfigFieldSchema][]) : []
+          })
+          // de-dupe explicit by key, preserve order
+          const seen = new Set<string>()
+          const explicitUnique: [string, ConfigFieldSchema][] = []
+          for (const pair of explicit) {
+            if (seen.has(pair[0])) continue
+            seen.add(pair[0])
+            explicitUnique.push(pair)
+          }
+          const explicitKeys = new Set(explicitUnique.map(([k]) => k))
           const rest = fromCategory.filter(([k]) => !explicitKeys.has(k))
 
-          return [section.id, [...explicit, ...rest]] as const
+          return [section.id, [...explicitUnique, ...rest]] as const
         }
 
         return [
           section.id,
-          section.keys.flatMap(k => (schema[k] ? [[k, schema[k]] as [string, ConfigFieldSchema]] : []))
+          section.keys.flatMap(k => {
+            const field = resolveField(k)
+            return field ? ([[k, field]] as [string, ConfigFieldSchema][]) : []
+          })
         ] as const
       })
     )
@@ -493,7 +534,25 @@ export function ConfigSettings({
                     : enumOptionsFor(key, getNested(config, key), config)
                 }
                 onChange={value => updateConfig(setNested(config, key, value))}
-                optionLabels={key === 'tts.elevenlabs.voice_id' ? elevenLabsVoiceLabels : undefined}
+                optionLabels={
+                  key === 'tts.elevenlabs.voice_id'
+                    ? elevenLabsVoiceLabels
+                    : key === 'memory.provider'
+                      ? {
+                          '': 'Built-in (MEMORY.md only)',
+                          builtin: 'Built-in (MEMORY.md only)',
+                          composite: 'Composite (NeuroLinked + experience store)',
+                          hindsight: 'Hindsight',
+                          honcho: 'Honcho',
+                          mem0: 'Mem0',
+                          holographic: 'Holographic',
+                          openviking: 'OpenViking',
+                          retaindb: 'RetainDB',
+                          supermemory: 'Supermemory',
+                          byterover: 'ByteRover'
+                        }
+                      : undefined
+                }
                 schema={field}
                 schemaKey={key}
                 value={getNested(config, key)}

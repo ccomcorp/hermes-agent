@@ -676,7 +676,28 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "context.engine": {
         "type": "select",
         "description": "Context management engine",
-        "options": ["default", "custom"],
+        "options": ["compressor", "default", "custom"],
+    },
+    "memory.provider": {
+        "type": "select",
+        "description": (
+            "Memory provider plugin. Empty = built-in MEMORY.md/USER.md only. "
+            "External providers add cross-session recall tools; only one can be active."
+        ),
+        "options": [
+            "",
+            "builtin",
+            "hindsight",
+            "honcho",
+            "mem0",
+            "holographic",
+            "openviking",
+            "retaindb",
+            "supermemory",
+            "byterover",
+            "composite",
+        ],
+        "category": "memory",
     },
     "human_delay.mode": {
         "type": "select",
@@ -780,7 +801,7 @@ def _build_schema_from_config(
         full_key = f"{prefix}.{key}" if prefix else key
 
         # Skip internal / version keys
-        if full_key in {"_config_version", "memory.provider"}:
+        if full_key in {"_config_version"}:
             continue
 
         # Category is the first path component for nested keys, or "general"
@@ -822,6 +843,19 @@ for _k, _v in CONFIG_SCHEMA.items():
     if _k == "model":
         _ordered_schema["model_context_length"] = _mcl_entry
 CONFIG_SCHEMA = _ordered_schema
+
+# memory.provider must appear in the schema so Desktop/web can offer a provider
+# picker. It was previously skipped in _build_schema_from_config (legacy: a
+# separate /api/memory/provider route). Skipping it left Memory settings with
+# only scalar toggles and no way to choose a provider or its detail panel.
+_mp = _SCHEMA_OVERRIDES.get("memory.provider")
+if _mp:
+    CONFIG_SCHEMA["memory.provider"] = {
+        "type": _mp.get("type", "select"),
+        "description": _mp.get("description", "Memory provider plugin"),
+        "options": list(_mp.get("options") or []),
+        "category": _mp.get("category", "memory"),
+    }
 
 
 class ConfigUpdate(BaseModel):
@@ -4785,8 +4819,18 @@ def _normalize_memory_provider_schema(name: str, provider: Any) -> List[Dict[str
 
         options = []
         for choice in choices:
-            value = str(choice)
-            options.append({"value": value, "label": value, "description": ""})
+            if isinstance(choice, dict):
+                value = str(choice.get("value") or choice.get("key") or "")
+                if not value:
+                    continue
+                options.append({
+                    "value": value,
+                    "label": str(choice.get("label") or value),
+                    "description": str(choice.get("description") or ""),
+                })
+            else:
+                value = str(choice)
+                options.append({"value": value, "label": value, "description": ""})
 
         description = str(raw.get("description") or "")
         fields.append({
