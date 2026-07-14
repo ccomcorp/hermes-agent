@@ -226,6 +226,117 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         it (D1: discovery must not construct the store; it is built in ``initialize``)."""
         return self._store is not None or self._db_path is not None
 
+    def get_config_schema(self):
+        """Desktop/web Memory settings surface for NeuroLinked + vault legs.
+
+        Composite is env-staged at gateway start (``HERMES_BRAIN_STAGE`` /
+        ``HERMES_BRAIN_URL`` / ``HERMES_VAULT_ENABLE``). The schema maps those
+        knobs so Config → Memory can edit them; ``save_config`` writes both the
+        provider JSON and the matching env vars (restart required to apply).
+        """
+        return [
+            {
+                "key": "brain_stage",
+                "label": "NeuroLinked brain stage",
+                "description": (
+                    "0 = brain leg off (default). "
+                    "1 = observe + recall from NeuroLinked. "
+                    "2 = + paired reward (learning). "
+                    "Requires a full Hermes restart after Save."
+                ),
+                "choices": [
+                    {"value": "0", "label": "0 — Off (no NeuroLinked leg)"},
+                    {"value": "1", "label": "1 — Observe + recall"},
+                    {"value": "2", "label": "2 — Observe + recall + learning reward"},
+                ],
+                "default": "0",
+                "env_var": "HERMES_BRAIN_STAGE",
+            },
+            {
+                "key": "brain_url",
+                "label": "NeuroLinked brain URL",
+                "description": (
+                    "HTTP base for the NeuroLinked brain API "
+                    "(observe/recall/feedback). Legacy memory.config used "
+                    "brain_host + brain_port — prefer a full URL here."
+                ),
+                "default": "http://1.1.11.31:8000",
+                "placeholder": "http://1.1.11.31:8000",
+                "env_var": "HERMES_BRAIN_URL",
+            },
+            {
+                "key": "vault_enable",
+                "label": "QMD vault recall leg",
+                "description": (
+                    "When on (1), merge QMD vault search into composite recall "
+                    "if an index is available. Off (0) = experience store + brain only."
+                ),
+                "choices": [
+                    {"value": "1", "label": "On — use QMD vault when available"},
+                    {"value": "0", "label": "Off — store + brain only"},
+                ],
+                "default": "1",
+                "env_var": "HERMES_VAULT_ENABLE",
+            },
+            {
+                "key": "max_recall_results",
+                "label": "Max recall results",
+                "description": "How many items each recall leg may contribute per turn.",
+                "default": "5",
+            },
+        ]
+
+    def save_config(self, values, hermes_home):
+        """Persist composite knobs to provider JSON + HERMES_HOME .env.
+
+        ``build_provider`` reads env at process start, so env write is what makes
+        brain stage/URL live after relaunch. JSON keeps the UI fields stable.
+        """
+        import json
+        from pathlib import Path
+
+        home = Path(hermes_home)
+        cfg_dir = home / "composite"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_path = cfg_dir / "config.json"
+        existing = {}
+        if cfg_path.exists():
+            try:
+                raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    existing = raw
+            except Exception:
+                existing = {}
+        cleaned = {
+            str(k): ("" if v is None else str(v)) for k, v in (values or {}).items()
+        }
+        existing.update(cleaned)
+        cfg_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+        env_map = {
+            "brain_stage": "HERMES_BRAIN_STAGE",
+            "brain_url": "HERMES_BRAIN_URL",
+            "vault_enable": "HERMES_VAULT_ENABLE",
+        }
+        try:
+            from hermes_cli.config import save_env_value
+        except Exception:
+            save_env_value = None  # type: ignore
+
+        for key, env_key in env_map.items():
+            if key not in cleaned:
+                continue
+            val = cleaned[key].strip()
+            if not val and key != "vault_enable":
+                continue
+            if save_env_value is not None:
+                try:
+                    save_env_value(env_key, val)
+                    continue
+                except Exception:
+                    logger.debug("save_env_value failed for %s", env_key, exc_info=True)
+            _upsert_env_file(home / ".env", env_key, val)
+
     def initialize(self, session_id: str, **kwargs) -> None:
         """Build the store lazily on activation (D1) and capture ``agent_context`` (#5).
 
@@ -868,21 +979,109 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         super().shutdown()
 
 
-def _resolve_brain_stage() -> int:
+
+def _upsert_env_file(env_path, key: str, value: str) -> None:
+    """Best-effort KEY=value upsert for HERMES_HOME/.env (no shelling out)."""
+    from pathlib import Path
+
+    path = Path(env_path)
+    lines = []
+    if path.exists():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            lines = []
+    prefix = f"{key}="
+    out = []
+    found = False
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):]
+        if stripped.startswith(prefix):
+            out.append(f"{key}={value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _load_composite_ui_settings(hermes_home: str) -> dict:
+    """Merge composite UI settings from JSON + config.yaml (incl. legacy memory.config)."""
+    import json
+    from pathlib import Path
+
+    settings = {}
+    home = Path(hermes_home)
+
+    for path in (home / "composite" / "config.json", home / "composite.json"):
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                settings.update({str(k): v for k, v in raw.items()})
+        except Exception:
+            pass
+
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        mem = cfg.get("memory") if isinstance(cfg, dict) else {}
+        if isinstance(mem, dict):
+            block = mem.get("composite")
+            if isinstance(block, dict):
+                settings.update({str(k): v for k, v in block.items()})
+            legacy = mem.get("config")
+            if isinstance(legacy, dict):
+                if "brain_url" not in settings:
+                    host = str(legacy.get("brain_host") or "").strip()
+                    port = legacy.get("brain_port") or 8000
+                    if host:
+                        settings["brain_url"] = f"http://{host}:{port}"
+                if (
+                    "max_recall_results" not in settings
+                    and legacy.get("max_recall_results") is not None
+                ):
+                    settings["max_recall_results"] = legacy.get("max_recall_results")
+    except Exception:
+        logger.debug("composite: load_config for UI settings failed", exc_info=True)
+
+    return settings
+
+
+def _resolve_brain_stage(settings: Optional[dict] = None) -> int:
     """Parse HERMES_BRAIN_STAGE safely. Clamps to 0..2; any garbage -> 0 (off). Default 0
     keeps the LIVE agent byte-for-byte unchanged until a stage is deliberately flipped."""
-    raw = os.environ.get("HERMES_BRAIN_STAGE", "0")
+    raw = os.environ.get("HERMES_BRAIN_STAGE")
+    if raw is None or str(raw).strip() == "":
+        if settings and settings.get("brain_stage") is not None:
+            raw = settings.get("brain_stage")
+        else:
+            raw = "0"
     try:
         return max(0, min(2, int(str(raw).strip())))
     except (TypeError, ValueError):
         return 0
 
 
-def _vault_enabled() -> bool:
+def _vault_enabled(settings: Optional[dict] = None) -> bool:
     """Parse HERMES_VAULT_ENABLE (default ON). The vault leg is cache-fronted and reaches
     only the background mem-sync worker, so it is safe to default-on; set "0"/"false"/"off"
     to disable (e.g. a host with no QMD index)."""
-    raw = (os.environ.get("HERMES_VAULT_ENABLE", "1") or "").strip().lower()
+    raw = os.environ.get("HERMES_VAULT_ENABLE")
+    if raw is None or str(raw).strip() == "":
+        if settings and settings.get("vault_enable") is not None:
+            raw = settings.get("vault_enable")
+        else:
+            raw = "1"
+    raw = (str(raw) if raw is not None else "1").strip().lower()
     return raw not in ("0", "false", "off", "no", "")
 
 
@@ -932,12 +1131,32 @@ def build_provider(hermes_home: str) -> "HermesCompositeProvider":
     the loop runs store+brain only (sync_turn reports ``vault="skipped"``).
     """
     db_path = os.path.join(hermes_home, "experience.db")
-    stage = _resolve_brain_stage()
-    recall_limit = 5
+    settings = _load_composite_ui_settings(hermes_home)
+    stage = _resolve_brain_stage(settings)
+    try:
+        recall_limit = max(
+            1,
+            int(
+                str(
+                    settings.get("max_recall_results")
+                    or os.environ.get("HERMES_COMPOSITE_RECALL_LIMIT")
+                    or "5"
+                ).strip()
+            ),
+        )
+    except (TypeError, ValueError):
+        recall_limit = 5
+    # Prefer process env; seed from UI settings when env unset so _vault_enabled sees it.
+    if not os.environ.get("HERMES_VAULT_ENABLE") and settings.get("vault_enable") is not None:
+        os.environ["HERMES_VAULT_ENABLE"] = str(settings.get("vault_enable"))
     vault = _resolve_vault(recall_limit)
     brain = None
     if stage >= 1:
-        url = os.environ.get("HERMES_BRAIN_URL") or "http://1.1.11.31:8000"
+        url = (
+            os.environ.get("HERMES_BRAIN_URL")
+            or str(settings.get("brain_url") or "").strip()
+            or "http://1.1.11.31:8000"
+        )
         try:
             from .brain_http import HttpBrainClient  # type: ignore
         except ImportError:  # loaded flat (composite dir on sys.path)

@@ -254,7 +254,21 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   'code_execution.mode': ['project', 'strict'],
   'context.engine': ['compressor', 'default', 'custom'],
   'delegation.reasoning_effort': ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  'memory.provider': ['', 'builtin', 'hindsight', 'honcho'],
+  // Keep in sync with hermes_cli/web_server.py _SCHEMA_OVERRIDES['memory.provider']
+  // and plugins/memory/* . Empty = built-in MEMORY.md only; 'builtin' accepted as alias.
+  'memory.provider': [
+    '',
+    'builtin',
+    'hindsight',
+    'honcho',
+    'mem0',
+    'holographic',
+    'openviking',
+    'retaindb',
+    'supermemory',
+    'byterover',
+    'composite'
+  ],
   // Terminal execution backends — kept in sync with the dispatch ladder in
   // tools/terminal_tool.py::_create_environment (local/docker/singularity/
   // modal/daytona/ssh). Remote backends need extra env (image, tokens, host).
@@ -577,7 +591,10 @@ export const SECTIONS: DesktopConfigSection[] = [
   { id: 'terminal', label: 'Terminal', icon: Terminal, keys: [], schemaCategory: 'terminal' },
   { id: 'display', label: 'Display', icon: Monitor, keys: [], schemaCategory: 'display' },
   { id: 'delegation', label: 'Delegation', icon: Users, keys: [], schemaCategory: 'delegation' },
-  { id: 'memory', label: 'Memory', icon: Brain, keys: [], schemaCategory: 'memory' },
+  { id: 'memory', label: 'Memory', icon: Brain, keys: ['memory.provider'], schemaCategory: 'memory' },
+  // Context engine lives under category "agent" after _CATEGORY_MERGE; surface it
+  // on its own tab so users can find it next to Memory.
+  { id: 'context', label: 'Context', icon: Package, keys: ['context.engine'] },
   { id: 'compression', label: 'Compression', icon: Package, keys: [], schemaCategory: 'compression' },
   { id: 'security', label: 'Security', icon: Lock, keys: [], schemaCategory: 'security' },
   { id: 'browser', label: 'Browser', icon: Globe, keys: [], schemaCategory: 'browser' },
