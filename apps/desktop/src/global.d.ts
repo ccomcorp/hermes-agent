@@ -13,10 +13,7 @@ import type {
   WorkbenchRequirementTrace,
   WorkbenchWorkflow,
   WorkbenchWorkflowEdge,
-  WorkbenchWorkflowNode,
-  WorkbenchWriteExportFormat,
-  WorkbenchWriteProject,
-  WorkbenchWriteRecentEdit
+  WorkbenchWorkflowNode
 } from '@hermes/shared'
 
 import type {
@@ -392,59 +389,6 @@ declare global {
               artifactId: string
             }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>>
           }
-        }
-        // Write Workspace — CRUD (Slice J) + export (Slice L). A write project
-        // is a single markdown document + metadata, same shape as a
-        // Requirement. No quick-actions/inline-edit/retrieval channel exists
-        // here — that is Slice K, not built in this slice.
-        write: {
-          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
-          create: (payload: {
-            workspaceRoot: string
-            title: string
-            markdown?: string
-          }) => Promise<WorkbenchIpcResult<{ project: WorkbenchWriteProject }>>
-          read: (payload: {
-            workspaceRoot: string
-            writeProjectId: string
-          }) => Promise<WorkbenchIpcResult<{
-            id: string
-            title: string
-            markdown: string
-            rootRelativeDir: string
-            activeFileRelativePath?: string
-            createdAt: string
-            updatedAt: string
-            recentEdits: WorkbenchWriteRecentEdit[]
-          }>>
-          update: (payload: {
-            workspaceRoot: string
-            writeProjectId: string
-            markdown: string
-            title?: string
-          }) => Promise<WorkbenchIpcResult<{
-            id: string
-            title?: string
-            contentHash: string
-            updatedAt: string
-          }>>
-          // Renders `html` (a complete standalone document the renderer
-          // already built) to the requested format and writes it ONLY to a
-          // path the user picks via the OS save dialog. `canceled: true`
-          // means the user dismissed the dialog — no file was written and
-          // this is not an error.
-          export: (payload: {
-            workspaceRoot: string
-            writeProjectId: string
-            format: WorkbenchWriteExportFormat
-            title: string
-            html: string
-          }) => Promise<WorkbenchIpcResult<{
-            canceled: boolean
-            path?: string
-            format?: WorkbenchWriteExportFormat
-            exportedAt?: string
-          }>>
         }
         // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
         // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN.

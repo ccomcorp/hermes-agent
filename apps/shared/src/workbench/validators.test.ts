@@ -5,9 +5,6 @@ import {
   validateCreatePlanRequest,
   validateCreateChangeSetRequest,
   validateWriteDesignSettingsRequest,
-  validateCreateWriteProjectRequest,
-  validateUpdateWriteProjectRequest,
-  validateExportWriteProjectRequest,
   validateCreateWorkflowRequest,
   validateUpdateWorkflowRequest
 } from './validators'
@@ -17,9 +14,6 @@ import type {
   CreateWorkbenchPlanRequest,
   CreateWorkbenchChangeSetRequest,
   WriteWorkbenchDesignSettingsRequest,
-  CreateWorkbenchWriteProjectRequest,
-  UpdateWorkbenchWriteProjectRequest,
-  WorkbenchWriteExportRequest,
   CreateWorkbenchWorkflowRequest,
   UpdateWorkbenchWorkflowRequest,
   WorkbenchWorkflowNode
@@ -345,145 +339,6 @@ describe('validateWriteDesignSettingsRequest', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('INVALID_SANDBOX_FLAG')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Write Workspace validators (Slice J)
-// ---------------------------------------------------------------------------
-
-describe('validateCreateWriteProjectRequest', () => {
-  const valid: CreateWorkbenchWriteProjectRequest = {
-    workspaceRoot: 'C:/proj',
-    title: 'My Write Project'
-  }
-
-  it('accepts a valid request', () => {
-    expect(validateCreateWriteProjectRequest(valid)).toEqual({ ok: true })
-  })
-
-  it('accepts optional markdown', () => {
-    expect(validateCreateWriteProjectRequest({ ...valid, markdown: '# Some content' })).toEqual({ ok: true })
-  })
-
-  it('rejects missing workspaceRoot', () => {
-    const result = validateCreateWriteProjectRequest({ ...valid, workspaceRoot: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
-  })
-
-  it('rejects missing title', () => {
-    const result = validateCreateWriteProjectRequest({ ...valid, title: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_TITLE')
-  })
-
-  it('rejects title that is only whitespace', () => {
-    const result = validateCreateWriteProjectRequest({ ...valid, title: '   ' })
-    expect(result.ok).toBe(false)
-  })
-
-  it('rejects an oversized title', () => {
-    const result = validateCreateWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
-  })
-
-  it('rejects oversized markdown', () => {
-    const result = validateCreateWriteProjectRequest({ ...valid, markdown: 'a'.repeat(1_000_001) })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MARKDOWN_TOO_LARGE')
-  })
-})
-
-describe('validateUpdateWriteProjectRequest', () => {
-  const valid: UpdateWorkbenchWriteProjectRequest = {
-    workspaceRoot: 'C:/proj',
-    writeProjectId: 'write-001',
-    markdown: '# Updated content'
-  }
-
-  it('accepts a valid request', () => {
-    expect(validateUpdateWriteProjectRequest(valid)).toEqual({ ok: true })
-  })
-
-  it('rejects missing writeProjectId', () => {
-    const result = validateUpdateWriteProjectRequest({ ...valid, writeProjectId: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WRITE_PROJECT_ID')
-  })
-
-  it('rejects missing markdown', () => {
-    const result = validateUpdateWriteProjectRequest({ ...valid, markdown: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_MARKDOWN')
-  })
-
-  it('rejects an oversized title', () => {
-    const result = validateUpdateWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Write Workspace export validators (Slice L)
-// ---------------------------------------------------------------------------
-
-describe('validateExportWriteProjectRequest', () => {
-  const valid: WorkbenchWriteExportRequest = {
-    workspaceRoot: 'C:/proj',
-    writeProjectId: 'write-001',
-    format: 'html',
-    title: 'My Document',
-    html: '<!doctype html><html><body><p>Hello</p></body></html>'
-  }
-
-  it('accepts a valid request', () => {
-    expect(validateExportWriteProjectRequest(valid)).toEqual({ ok: true })
-  })
-
-  it('accepts every declared export format', () => {
-    for (const format of ['html', 'pdf', 'docx', 'png'] as const) {
-      const result = validateExportWriteProjectRequest({ ...valid, format })
-      expect(result.ok, `format ${format} should be accepted`).toBe(true)
-    }
-  })
-
-  it('rejects missing workspaceRoot', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, workspaceRoot: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
-  })
-
-  it('rejects missing writeProjectId', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, writeProjectId: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WRITE_PROJECT_ID')
-  })
-
-  it('rejects an invalid format', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, format: 'exe' as never })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_FORMAT')
-  })
-
-  it('rejects missing html', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, html: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_HTML')
-  })
-
-  it('rejects oversized html', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, html: 'a'.repeat(5_000_001) })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('HTML_TOO_LARGE')
-  })
-
-  it('rejects an oversized title', () => {
-    const result = validateExportWriteProjectRequest({ ...valid, title: 'a'.repeat(501) })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
   })
 })
 

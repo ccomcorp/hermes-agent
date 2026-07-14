@@ -10,7 +10,6 @@
 const { ipcMain, BrowserWindow } = require('electron')
 
 const store = require('./workbench-artifacts.cjs')
-const { exportWriteDocument } = require('./workbench-write-export.cjs')
 const { applyChangeSet, commitChangeSet } = require('./workbench-changeset-apply.cjs')
 const testerStore = require('./workbench-plugin-tester-store.cjs')
 const testerExec = require('./workbench-plugin-tester-exec.cjs')
@@ -147,16 +146,6 @@ function validateDesignSettings(settings) {
 
 const VALID_DESIGN_ARTIFACT_KINDS = ['brief', 'design_system', 'prototype', 'quality_report']
 const MAX_DESIGN_ARTIFACT_CONTENT_LENGTH = 2_000_000
-
-// ---------------------------------------------------------------------------
-// Write Workspace export validators (mirror of validateExportWriteProjectRequest
-// in apps/shared/src/workbench/validators.ts). Slice L. The export target path
-// always comes from the OS save dialog inside workbench-write-export.cjs —
-// nothing here validates or constructs a filesystem path.
-// ---------------------------------------------------------------------------
-
-const VALID_WRITE_EXPORT_FORMATS = ['html', 'pdf', 'docx', 'png']
-const MAX_EXPORT_HTML_LENGTH = 5_000_000
 
 // ---------------------------------------------------------------------------
 // Workflow validators (mirror of validateCreate/UpdateWorkflowRequest in
@@ -737,142 +726,6 @@ function registerWorkbenchIpc(options = {}) {
     } catch (err) {
       return { ok: false, message: 'Failed to read design artifact: ' + err.message, code: 'INTERNAL_ERROR' }
     }
-  })
-
-  // -- Write Workspace — CRUD only (Slice J) ---------------------------------
-  //
-  // A write project is a single markdown document + metadata, same shape as a
-  // Requirement. No quick-actions/inline-edit/retrieval/export channel exists
-  // here — those are Slice K/L, not built in this slice.
-
-  ipcMain.handle('hermes:workbench:write:list', (_event, payload) => {
-    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    try {
-      return normalize(store.listWriteProjects(payload.workspaceRoot))
-    } catch (err) {
-      return { ok: false, message: 'Failed to list write projects: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:write:create', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    const titleCheck = validateTitle(payload.title)
-    if (!isOk(titleCheck)) return fail(titleCheck)
-
-    const mdCheck = validateMarkdown(payload.markdown, false)
-    if (!isOk(mdCheck)) return fail(mdCheck)
-
-    try {
-      return normalize(store.createWriteProject(payload.workspaceRoot, payload))
-    } catch (err) {
-      return { ok: false, message: 'Failed to create write project: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:write:read', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
-      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
-    }
-
-    try {
-      return normalize(store.readWriteProject(payload.workspaceRoot, payload.writeProjectId))
-    } catch (err) {
-      return { ok: false, message: 'Failed to read write project: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:write:update', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
-      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
-    }
-
-    const mdCheck = validateMarkdown(payload.markdown, true)
-    if (!isOk(mdCheck)) return fail(mdCheck)
-
-    if (payload.title) {
-      const titleCheck = validateTitle(payload.title)
-      if (!isOk(titleCheck)) return fail(titleCheck)
-    }
-
-    try {
-      return normalize(store.updateWriteProject(payload.workspaceRoot, payload.writeProjectId, payload))
-    } catch (err) {
-      return { ok: false, message: 'Failed to update write project: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  // -- Write Workspace export (Slice L) --------------------------------------
-  //
-  // Renders to HTML/PDF/DOCX/PNG and writes ONLY to a path the user picks via
-  // the OS save dialog — see workbench-write-export.cjs. `workspaceRoot`/
-  // `writeProjectId` get the same fail-closed validation as every other
-  // request; they are never used to build the target path here.
-
-  // Deliberately NOT declared `async`: every validation failure below returns
-  // a plain (synchronous) result, exactly like every other handler in this
-  // file, and only the final success path returns a Promise (which
-  // `ipcMain.handle` awaits natively). This keeps validation-denial testing
-  // synchronous like the rest of this suite instead of forcing every caller
-  // of this one channel to await a Promise just to see a validation error.
-  ipcMain.handle('hermes:workbench:write:export', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    if (!payload.writeProjectId || !payload.writeProjectId.trim()) {
-      return { ok: false, message: 'writeProjectId is required', code: 'MISSING_WRITE_PROJECT_ID' }
-    }
-
-    if (!payload.format || !VALID_WRITE_EXPORT_FORMATS.includes(payload.format)) {
-      return { ok: false, message: 'invalid export format', code: 'INVALID_FORMAT' }
-    }
-
-    if (!payload.html || typeof payload.html !== 'string' || !payload.html.trim()) {
-      return { ok: false, message: 'html is required', code: 'MISSING_HTML' }
-    }
-
-    if (payload.html.length > MAX_EXPORT_HTML_LENGTH) {
-      return { ok: false, message: 'html exceeds size limit', code: 'HTML_TOO_LARGE' }
-    }
-
-    if (payload.title) {
-      const titleCheck = validateTitle(payload.title)
-      if (!isOk(titleCheck)) return fail(titleCheck)
-    }
-
-    const parentWindow = BrowserWindow.getFocusedWindow()
-
-    return exportWriteDocument(
-      { format: payload.format, html: payload.html, title: payload.title || 'export' },
-      { parentWindow }
-    )
-      .then(result => normalize(result))
-      .catch(err => ({ ok: false, message: 'Failed to export write project: ' + err.message, code: 'INTERNAL_ERROR' }))
   })
 
   // -- Workflow Designer — AUTHORING ONLY (Slice M) --------------------------

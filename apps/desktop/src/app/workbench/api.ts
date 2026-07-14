@@ -25,10 +25,7 @@ import type {
   WorkbenchRequirementTrace,
   WorkbenchWorkflow,
   WorkbenchWorkflowEdge,
-  WorkbenchWorkflowNode,
-  WorkbenchWriteExportFormat,
-  WorkbenchWriteProject,
-  WorkbenchWriteRecentEdit
+  WorkbenchWorkflowNode
 } from '@hermes/shared'
 
 import type { WorkbenchIpcResult } from '@/global'
@@ -378,93 +375,6 @@ export function readDesignArtifact(
   artifactId: string
 ): Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>> {
   return window.hermesDesktop.workbench.design.artifacts.read({ workspaceRoot, artifactId })
-}
-
-// ---------------------------------------------------------------------------
-// Write Workspace — CRUD only (Slice J, go-forward plan §5).
-//
-// A write project is a single markdown document + metadata (same shape as a
-// Requirement — see requirements above), not a multi-file tree. No function
-// here calls any AI-rewrite (quick actions / selection-aware inline edit),
-// retrieval, or export API — those are Slice K/L, explicitly out of scope.
-// ---------------------------------------------------------------------------
-
-export interface WorkbenchWriteProjectDetail {
-  id: string
-  title: string
-  markdown: string
-  rootRelativeDir: string
-  activeFileRelativePath?: string
-  createdAt: string
-  updatedAt: string
-  recentEdits: WorkbenchWriteRecentEdit[]
-}
-
-export interface CreateWorkbenchWriteProjectInput {
-  workspaceRoot: string
-  title: string
-  markdown?: string
-}
-
-export interface UpdateWorkbenchWriteProjectInput {
-  workspaceRoot: string
-  writeProjectId: string
-  markdown: string
-  title?: string
-}
-
-export function listWriteProjects(workspaceRoot: string): Promise<WorkbenchIpcResult<WorkbenchManifestEntry[]>> {
-  return window.hermesDesktop.workbench.write.list({ workspaceRoot })
-}
-
-export function createWriteProject(
-  input: CreateWorkbenchWriteProjectInput
-): Promise<WorkbenchIpcResult<{ project: WorkbenchWriteProject }>> {
-  return window.hermesDesktop.workbench.write.create(input)
-}
-
-export function readWriteProject(
-  workspaceRoot: string,
-  writeProjectId: string
-): Promise<WorkbenchIpcResult<WorkbenchWriteProjectDetail>> {
-  return window.hermesDesktop.workbench.write.read({ workspaceRoot, writeProjectId })
-}
-
-export function updateWriteProject(
-  input: UpdateWorkbenchWriteProjectInput
-): Promise<WorkbenchIpcResult<{ id: string; title?: string; contentHash: string; updatedAt: string }>> {
-  return window.hermesDesktop.workbench.write.update(input)
-}
-
-// ---------------------------------------------------------------------------
-// Write Workspace — export (Slice L, go-forward plan §5).
-//
-// `html` must already be a complete, standalone HTML document — this file
-// never renders markdown itself (see write-export.tsx, which reuses the same
-// renderer CompactMarkdown uses). The main process never constructs the
-// target path: it always comes from the OS save dialog, so `canceled: true`
-// in the response means the user dismissed that dialog, not an error.
-// ---------------------------------------------------------------------------
-
-export interface ExportWorkbenchWriteProjectInput {
-  workspaceRoot: string
-  writeProjectId: string
-  format: WorkbenchWriteExportFormat
-  title: string
-  html: string
-}
-
-export interface WorkbenchWriteExportResult {
-  canceled: boolean
-  path?: string
-  format?: WorkbenchWriteExportFormat
-  exportedAt?: string
-}
-
-export function exportWriteProject(
-  input: ExportWorkbenchWriteProjectInput
-): Promise<WorkbenchIpcResult<WorkbenchWriteExportResult>> {
-  return window.hermesDesktop.workbench.write.export(input)
 }
 
 // ---------------------------------------------------------------------------
