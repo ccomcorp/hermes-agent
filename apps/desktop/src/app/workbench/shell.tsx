@@ -32,7 +32,6 @@ import { PluginTesterPanel } from './plugin-tester-panel'
 import { RequirementPanel } from './requirement-panel'
 import { $workbenchBackendMode, $workbenchWorkspaceRoot, setWorkbenchWorkspaceRoot } from './store'
 import { workbenchStrings as s } from './strings'
-import { WorkflowPanel } from './workflow-panel'
 
 // Top-level area switch (Requirements+Plans+ChangeSets+Design vs. Write
 // Workspace vs. Workflow Designer). LAYOUT DECISION (Slice J, extended by
@@ -46,7 +45,7 @@ import { WorkflowPanel } from './workflow-panel'
 // call Slices C/D/F each made when a new artifact type didn't fit the
 // existing regions cleanly. Local component state (not persisted) — matches
 // how Slice J's split-mode toggle is also a plain, non-persisted view state.
-type WorkbenchArea = 'pluginTester' | 'requirements' | 'workflow'
+type WorkbenchArea = 'pluginTester' | 'requirements'
 
 // Right rail (Plans/ChangeSets/Design Settings/Design Generation): resizable
 // via the same <Pane> drag-resize primitive the chat's preview rail uses
@@ -160,17 +159,6 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
               </button>
               <button
                 className={
-                  area === 'workflow'
-                    ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.7rem] font-medium text-foreground'
-                    : 'rounded-[0.25rem] px-2 py-0.5 text-[0.7rem] font-medium text-muted-foreground/70 hover:text-foreground'
-                }
-                onClick={() => setArea('workflow')}
-                type="button"
-              >
-                {s.workflow.navLabel}
-              </button>
-              <button
-                className={
                   area === 'pluginTester'
                     ? 'rounded-[0.25rem] bg-(--ui-control-active-background) px-2 py-0.5 text-[0.7rem] font-medium text-foreground'
                     : 'rounded-[0.25rem] px-2 py-0.5 text-[0.7rem] font-medium text-muted-foreground/70 hover:text-foreground'
@@ -199,10 +187,6 @@ export function WorkbenchShell({ setStatusbarItemGroup, ...props }: WorkbenchShe
               {s.selectWorkspace}
             </Button>
           </div>
-        </div>
-      ) : area === 'workflow' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1">
-          <WorkflowPanel workspaceRoot={workspaceRoot} />
         </div>
       ) : area === 'pluginTester' ? (
         <div className="grid min-h-0 flex-1 grid-cols-1">

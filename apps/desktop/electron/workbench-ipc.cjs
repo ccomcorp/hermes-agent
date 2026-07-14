@@ -7,7 +7,7 @@
 //
 // Do not trust renderer payloads. Every handler validates before writing.
 
-const { ipcMain, BrowserWindow } = require('electron')
+const { ipcMain } = require('electron')
 
 const store = require('./workbench-artifacts.cjs')
 const { applyChangeSet, commitChangeSet } = require('./workbench-changeset-apply.cjs')
@@ -146,98 +146,6 @@ function validateDesignSettings(settings) {
 
 const VALID_DESIGN_ARTIFACT_KINDS = ['brief', 'design_system', 'prototype', 'quality_report']
 const MAX_DESIGN_ARTIFACT_CONTENT_LENGTH = 2_000_000
-
-// ---------------------------------------------------------------------------
-// Workflow validators (mirror of validateCreate/UpdateWorkflowRequest in
-// apps/shared/src/workbench/validators.ts). AUTHORING ONLY (Slice M) — these
-// never interpret/evaluate/execute any node's `config`; they only bound its
-// size like any other free-text field. The backend stays PERMISSIVE of all 12
-// declared node kinds — the 3-kind UI restriction lives only in the node
-// palette (workflow-panel.tsx), not here.
-// ---------------------------------------------------------------------------
-
-const VALID_WORKFLOW_NODE_KINDS = [
-  'manual_trigger', 'schedule_trigger', 'webhook_trigger', 'ai_agent',
-  'human_approval', 'condition', 'http_request', 'code', 'delay', 'loop',
-  'subworkflow', 'output'
-]
-
-// 500 nodes is a generous ceiling for a hand-authored graph (no execution
-// engine exists yet to make a bigger graph useful) — it exists to reject
-// pathological/malicious payloads, not to constrain real usage. Edges are
-// naturally denser than nodes in a real graph, so their cap is proportionally
-// larger.
-const MAX_WORKFLOW_NODES = 500
-const MAX_WORKFLOW_EDGES = 2000
-const MAX_NODE_NAME_LENGTH = 200
-const MAX_NODE_CONFIG_JSON_LENGTH = 50_000
-
-function validateWorkflowNodes(nodes) {
-  if (!Array.isArray(nodes)) {
-    return { ok: false, message: 'nodes must be an array', code: 'INVALID_NODES' }
-  }
-
-  if (nodes.length > MAX_WORKFLOW_NODES) {
-    return { ok: false, message: 'too many nodes', code: 'TOO_MANY_NODES' }
-  }
-
-  for (const node of nodes) {
-    if (!node || typeof node !== 'object') {
-      return { ok: false, message: 'each node must be an object', code: 'INVALID_NODE' }
-    }
-    if (!node.id || typeof node.id !== 'string') {
-      return { ok: false, message: 'node.id is required', code: 'MISSING_NODE_ID' }
-    }
-    if (!node.type || !VALID_WORKFLOW_NODE_KINDS.includes(node.type)) {
-      return { ok: false, message: 'invalid node type', code: 'INVALID_NODE_TYPE' }
-    }
-    if (!node.name || typeof node.name !== 'string' || node.name.length > MAX_NODE_NAME_LENGTH) {
-      return { ok: false, message: 'node.name is required and must be a reasonable length', code: 'INVALID_NODE_NAME' }
-    }
-    if (!node.position || typeof node.position.x !== 'number' || typeof node.position.y !== 'number') {
-      return { ok: false, message: 'node.position must have numeric x/y', code: 'INVALID_NODE_POSITION' }
-    }
-    if (node.config !== undefined) {
-      if (typeof node.config !== 'object' || node.config === null) {
-        return { ok: false, message: 'node.config must be an object', code: 'INVALID_NODE_CONFIG' }
-      }
-      if (JSON.stringify(node.config).length > MAX_NODE_CONFIG_JSON_LENGTH) {
-        return { ok: false, message: 'node.config exceeds size limit', code: 'NODE_CONFIG_TOO_LARGE' }
-      }
-    }
-  }
-
-  return { ok: true }
-}
-
-function validateWorkflowEdges(edges, nodes) {
-  if (!Array.isArray(edges)) {
-    return { ok: false, message: 'edges must be an array', code: 'INVALID_EDGES' }
-  }
-
-  if (edges.length > MAX_WORKFLOW_EDGES) {
-    return { ok: false, message: 'too many edges', code: 'TOO_MANY_EDGES' }
-  }
-
-  const nodeIds = new Set((nodes || []).map((n) => n.id))
-
-  for (const edge of edges) {
-    if (!edge || typeof edge !== 'object') {
-      return { ok: false, message: 'each edge must be an object', code: 'INVALID_EDGE' }
-    }
-    if (!edge.id || typeof edge.id !== 'string') {
-      return { ok: false, message: 'edge.id is required', code: 'MISSING_EDGE_ID' }
-    }
-    if (!edge.source || typeof edge.source !== 'string' || !edge.target || typeof edge.target !== 'string') {
-      return { ok: false, message: 'edge.source and edge.target are required', code: 'INVALID_EDGE_ENDPOINTS' }
-    }
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
-      return { ok: false, message: 'edge references an unknown node', code: 'EDGE_UNKNOWN_NODE' }
-    }
-  }
-
-  return { ok: true }
-}
 
 // ---------------------------------------------------------------------------
 // Response normalization (locked decision §3.5)
@@ -725,107 +633,6 @@ function registerWorkbenchIpc(options = {}) {
       return normalize(store.readDesignArtifact(payload.workspaceRoot, payload.artifactId))
     } catch (err) {
       return { ok: false, message: 'Failed to read design artifact: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  // -- Workflow Designer — AUTHORING ONLY (Slice M) --------------------------
-  //
-  // A WorkbenchWorkflow is a graph (nodes + edges) that is created, saved,
-  // loaded, and edited — NEVER RUN. No node-execution logic, "run workflow"
-  // handler, or interpreter of any kind exists here or anywhere in this
-  // slice. These four handlers are pure JSON document CRUD, exactly like
-  // Requirements/Plans/ChangeSets/Write projects above.
-
-  ipcMain.handle('hermes:workbench:workflows:list', (_event, payload) => {
-    const rootCheck = validateWorkspaceRoot(payload?.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    try {
-      return normalize(store.listWorkflows(payload.workspaceRoot))
-    } catch (err) {
-      return { ok: false, message: 'Failed to list workflows: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:workflows:create', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    const titleCheck = validateTitle(payload.title)
-    if (!isOk(titleCheck)) return fail(titleCheck)
-
-    const nodes = payload.nodes ?? []
-    const nodesCheck = validateWorkflowNodes(nodes)
-    if (!isOk(nodesCheck)) return fail(nodesCheck)
-
-    const edgesCheck = validateWorkflowEdges(payload.edges ?? [], nodes)
-    if (!isOk(edgesCheck)) return fail(edgesCheck)
-
-    if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
-      return { ok: false, message: 'enabled must be a boolean', code: 'INVALID_ENABLED' }
-    }
-
-    try {
-      return normalize(store.createWorkflow(payload.workspaceRoot, payload))
-    } catch (err) {
-      return { ok: false, message: 'Failed to create workflow: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:workflows:read', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    if (!payload.workflowId || !payload.workflowId.trim()) {
-      return { ok: false, message: 'workflowId is required', code: 'MISSING_WORKFLOW_ID' }
-    }
-
-    try {
-      return normalize(store.readWorkflow(payload.workspaceRoot, payload.workflowId))
-    } catch (err) {
-      return { ok: false, message: 'Failed to read workflow: ' + err.message, code: 'INTERNAL_ERROR' }
-    }
-  })
-
-  ipcMain.handle('hermes:workbench:workflows:update', (_event, payload) => {
-    if (!payload || typeof payload !== 'object') {
-      return { ok: false, message: 'Invalid payload', code: 'INVALID_PAYLOAD' }
-    }
-
-    const rootCheck = validateWorkspaceRoot(payload.workspaceRoot)
-    if (!isOk(rootCheck)) return fail(rootCheck)
-
-    if (!payload.workflowId || !payload.workflowId.trim()) {
-      return { ok: false, message: 'workflowId is required', code: 'MISSING_WORKFLOW_ID' }
-    }
-
-    if (payload.title) {
-      const titleCheck = validateTitle(payload.title)
-      if (!isOk(titleCheck)) return fail(titleCheck)
-    }
-
-    const nodesCheck = validateWorkflowNodes(payload.nodes)
-    if (!isOk(nodesCheck)) return fail(nodesCheck)
-
-    const edgesCheck = validateWorkflowEdges(payload.edges, payload.nodes)
-    if (!isOk(edgesCheck)) return fail(edgesCheck)
-
-    if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
-      return { ok: false, message: 'enabled must be a boolean', code: 'INVALID_ENABLED' }
-    }
-
-    try {
-      return normalize(store.updateWorkflow(payload.workspaceRoot, payload.workflowId, payload))
-    } catch (err) {
-      return { ok: false, message: 'Failed to update workflow: ' + err.message, code: 'INTERNAL_ERROR' }
     }
   })
 

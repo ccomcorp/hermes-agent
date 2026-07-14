@@ -28,7 +28,7 @@ const fakeIpcMain = {
 }
 
 const originalLoad = Module._load
-Module._load = function (request, parent, isMain) {
+Module._load = function (request) {
   if (request === 'electron') return { ipcMain: fakeIpcMain }
   return originalLoad.apply(this, arguments)
 }
@@ -65,10 +65,6 @@ const CH = {
   designArtifactsCreate: 'hermes:workbench:design:artifacts:create',
   designArtifactsList: 'hermes:workbench:design:artifacts:list',
   designArtifactsRead: 'hermes:workbench:design:artifacts:read',
-  wfList: 'hermes:workbench:workflows:list',
-  wfCreate: 'hermes:workbench:workflows:create',
-  wfRead: 'hermes:workbench:workflows:read',
-  wfUpdate: 'hermes:workbench:workflows:update',
   // Plugin Tester
   ptExecute: 'hermes:workbench:plugin-tester:execute',
   ptColList: 'hermes:workbench:plugin-tester:collections:list',
@@ -472,148 +468,6 @@ test('changesets:apply end-to-end through the IPC handler', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// (a) Workflow Designer — AUTHORING ONLY (Slice M)
-// ---------------------------------------------------------------------------
-
-test('workflows create/read/list/update return normalized shape', () => {
-  const ws = createTempWorkspace()
-  try {
-    const created = invoke(CH.wfCreate, {
-      workspaceRoot: ws,
-      title: 'My Workflow',
-      nodes: [{ id: 'n1', type: 'manual_trigger', name: 'Trigger', position: { x: 0, y: 0 }, config: {} }],
-      edges: []
-    })
-    assertNormalized(created)
-    assert.strictEqual(created.ok, true)
-    assert.ok(created.value.workflow.id)
-    assert.strictEqual(created.value.workflow.nodes.length, 1)
-
-    const id = created.value.workflow.id
-
-    const read = invoke(CH.wfRead, { workspaceRoot: ws, workflowId: id })
-    assertNormalized(read)
-    assert.strictEqual(read.ok, true)
-    assert.strictEqual(read.value.title, 'My Workflow')
-
-    const list = invoke(CH.wfList, { workspaceRoot: ws })
-    assertNormalized(list)
-    assert.strictEqual(list.ok, true)
-    assert.strictEqual(list.value.length, 1)
-
-    const nodes = [
-      { id: 'n1', type: 'manual_trigger', name: 'Trigger', position: { x: 0, y: 0 }, config: {} },
-      { id: 'n2', type: 'condition', name: 'Condition', position: { x: 200, y: 0 }, config: { expression: 'x == 1' } },
-      { id: 'n3', type: 'output', name: 'Output', position: { x: 400, y: 0 }, config: {} }
-    ]
-    const edges = [
-      { id: 'e1', source: 'n1', target: 'n2' },
-      { id: 'e2', source: 'n2', target: 'n3' }
-    ]
-
-    const updated = invoke(CH.wfUpdate, { workspaceRoot: ws, workflowId: id, title: 'Renamed', nodes, edges })
-    assertNormalized(updated)
-    assert.strictEqual(updated.ok, true)
-    assert.strictEqual(updated.value.title, 'Renamed')
-
-    const reread = invoke(CH.wfRead, { workspaceRoot: ws, workflowId: id })
-    assert.strictEqual(reread.ok, true)
-    assert.strictEqual(reread.value.nodes.length, 3)
-    assert.strictEqual(reread.value.edges.length, 2)
-  } finally {
-    cleanup(ws)
-  }
-})
-
-test('workflow handlers accept all 12 declared node kinds (backend stays permissive)', () => {
-  const ws = createTempWorkspace()
-  try {
-    const kinds = [
-      'manual_trigger', 'schedule_trigger', 'webhook_trigger', 'ai_agent',
-      'human_approval', 'condition', 'http_request', 'code', 'delay', 'loop',
-      'subworkflow', 'output'
-    ]
-    const nodes = kinds.map((kind, i) => ({
-      id: `n${i}`,
-      type: kind,
-      name: kind,
-      position: { x: i * 10, y: 0 },
-      config: {}
-    }))
-
-    const created = invoke(CH.wfCreate, { workspaceRoot: ws, title: 'All Kinds', nodes, edges: [] })
-    assertNormalized(created)
-    assert.strictEqual(created.ok, true)
-    assert.strictEqual(created.value.workflow.nodes.length, kinds.length)
-  } finally {
-    cleanup(ws)
-  }
-})
-
-test('workflow handlers are rejected with structured errors on invalid payloads', () => {
-  const ws = createTempWorkspace()
-  try {
-    const nullPayload = invoke(CH.wfCreate, null)
-    assertNormalized(nullPayload)
-    assert.strictEqual(nullPayload.ok, false)
-    assert.strictEqual(nullPayload.code, 'INVALID_PAYLOAD')
-
-    const noTitle = invoke(CH.wfCreate, { workspaceRoot: ws })
-    assert.strictEqual(noTitle.ok, false)
-    assert.strictEqual(noTitle.code, 'MISSING_TITLE')
-
-    const badNodeType = invoke(CH.wfCreate, {
-      workspaceRoot: ws,
-      title: 'x',
-      nodes: [{ id: 'n1', type: 'not_a_real_kind', name: 'x', position: { x: 0, y: 0 }, config: {} }]
-    })
-    assert.strictEqual(badNodeType.ok, false)
-    assert.strictEqual(badNodeType.code, 'INVALID_NODE_TYPE')
-
-    const badPosition = invoke(CH.wfCreate, {
-      workspaceRoot: ws,
-      title: 'x',
-      nodes: [{ id: 'n1', type: 'output', name: 'x', position: { x: 'nope', y: 0 }, config: {} }]
-    })
-    assert.strictEqual(badPosition.ok, false)
-    assert.strictEqual(badPosition.code, 'INVALID_NODE_POSITION')
-
-    const edgeToUnknownNode = invoke(CH.wfCreate, {
-      workspaceRoot: ws,
-      title: 'x',
-      nodes: [{ id: 'n1', type: 'output', name: 'x', position: { x: 0, y: 0 }, config: {} }],
-      edges: [{ id: 'e1', source: 'n1', target: 'ghost' }]
-    })
-    assert.strictEqual(edgeToUnknownNode.ok, false)
-    assert.strictEqual(edgeToUnknownNode.code, 'EDGE_UNKNOWN_NODE')
-
-    const tooManyNodes = invoke(CH.wfCreate, {
-      workspaceRoot: ws,
-      title: 'x',
-      nodes: Array.from({ length: 501 }, (_, i) => ({
-        id: `n${i}`,
-        type: 'output',
-        name: 'x',
-        position: { x: 0, y: 0 },
-        config: {}
-      }))
-    })
-    assert.strictEqual(tooManyNodes.ok, false)
-    assert.strictEqual(tooManyNodes.code, 'TOO_MANY_NODES')
-
-    const noWorkflowId = invoke(CH.wfUpdate, { workspaceRoot: ws, nodes: [], edges: [] })
-    assert.strictEqual(noWorkflowId.ok, false)
-    assert.strictEqual(noWorkflowId.code, 'MISSING_WORKFLOW_ID')
-
-    const missingRead = invoke(CH.wfRead, { workspaceRoot: ws, workflowId: 'nonexistent' })
-    assert.strictEqual(missingRead.ok, false)
-    assert.strictEqual(missingRead.code, 'NOT_FOUND')
-  } finally {
-    cleanup(ws)
-  }
-})
-
-// ---------------------------------------------------------------------------
 // (a) Versioned refine keeps the prior version
 // ---------------------------------------------------------------------------
 
@@ -746,8 +600,7 @@ test('invalid payloads return structured errors, not throws', () => {
 test('missing workspace root fails closed on every entry point', () => {
   for (const channel of [
     CH.reqList, CH.reqCreate, CH.planList, CH.planCreate, CH.csList, CH.csCreate, CH.planUpdate,
-    CH.designRead, CH.designWrite,
-    CH.wfList, CH.wfCreate, CH.wfRead, CH.wfUpdate
+    CH.designRead, CH.designWrite
   ]) {
     const res = invoke(channel, {})
     assertNormalized(res)

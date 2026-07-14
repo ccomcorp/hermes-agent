@@ -306,15 +306,6 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
         read: payload => ipcRenderer.invoke('hermes:workbench:design:artifacts:read', payload)
       }
     },
-    workflow: {
-      // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
-      // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN —
-      // no run/execute channel exists here or anywhere else in this slice.
-      list: payload => ipcRenderer.invoke('hermes:workbench:workflows:list', payload),
-      create: payload => ipcRenderer.invoke('hermes:workbench:workflows:create', payload),
-      read: payload => ipcRenderer.invoke('hermes:workbench:workflows:read', payload),
-      update: payload => ipcRenderer.invoke('hermes:workbench:workflows:update', payload)
-    },
     pluginTester: {
       // Plugin Tester — HTTP request executor + persistence (Slice N).
       // Executes real HTTP requests via the main process (renderer never speaks

@@ -4,19 +4,14 @@ import {
   validateUpdateRequirementRequest,
   validateCreatePlanRequest,
   validateCreateChangeSetRequest,
-  validateWriteDesignSettingsRequest,
-  validateCreateWorkflowRequest,
-  validateUpdateWorkflowRequest
+  validateWriteDesignSettingsRequest
 } from './validators'
 import type {
   CreateWorkbenchRequirementRequest,
   UpdateWorkbenchRequirementRequest,
   CreateWorkbenchPlanRequest,
   CreateWorkbenchChangeSetRequest,
-  WriteWorkbenchDesignSettingsRequest,
-  CreateWorkbenchWorkflowRequest,
-  UpdateWorkbenchWorkflowRequest,
-  WorkbenchWorkflowNode
+  WriteWorkbenchDesignSettingsRequest
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -342,167 +337,4 @@ describe('validateWriteDesignSettingsRequest', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Workflow Designer validators (Slice M — AUTHORING ONLY)
-//
-// These validators must stay PERMISSIVE of all 12 declared
-// WorkbenchWorkflowNodeKind values (the UI-side restriction to 3 creatable
-// kinds is enforced only in the node palette, not here) while still failing
-// closed on malformed nodes/edges and absurdly large graphs.
-// ---------------------------------------------------------------------------
-
-const ALL_NODE_KINDS: WorkbenchWorkflowNode['type'][] = [
-  'manual_trigger', 'schedule_trigger', 'webhook_trigger', 'ai_agent',
-  'human_approval', 'condition', 'http_request', 'code', 'delay', 'loop',
-  'subworkflow', 'output'
-]
-
-function makeNode(overrides: Partial<WorkbenchWorkflowNode> = {}): WorkbenchWorkflowNode {
-  return {
-    id: 'n1',
-    type: 'manual_trigger',
-    name: 'Trigger',
-    position: { x: 0, y: 0 },
-    config: {},
-    ...overrides
-  }
-}
-
-describe('validateCreateWorkflowRequest', () => {
-  const valid: CreateWorkbenchWorkflowRequest = {
-    workspaceRoot: 'C:/proj',
-    title: 'My Workflow'
-  }
-
-  it('accepts a valid request with no nodes/edges', () => {
-    expect(validateCreateWorkflowRequest(valid)).toEqual({ ok: true })
-  })
-
-  it('accepts every declared node kind (backend stays permissive)', () => {
-    for (const kind of ALL_NODE_KINDS) {
-      const result = validateCreateWorkflowRequest({
-        ...valid,
-        nodes: [makeNode({ type: kind })]
-      })
-      expect(result.ok, `kind ${kind} should be accepted`).toBe(true)
-    }
-  })
-
-  it('rejects missing workspaceRoot', () => {
-    const result = validateCreateWorkflowRequest({ ...valid, workspaceRoot: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
-  })
-
-  it('rejects missing title', () => {
-    const result = validateCreateWorkflowRequest({ ...valid, title: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_TITLE')
-  })
-
-  it('rejects an invalid node type', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ type: 'not_a_real_kind' as never })]
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_NODE_TYPE')
-  })
-
-  it('rejects a node missing a name', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ name: '' })]
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_NODE_NAME')
-  })
-
-  it('rejects a node with a non-numeric position', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ position: { x: 'nope', y: 0 } as never })]
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_NODE_POSITION')
-  })
-
-  it('rejects oversized node.config', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ config: { blob: 'a'.repeat(50_001) } })]
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('NODE_CONFIG_TOO_LARGE')
-  })
-
-  it('rejects more than 500 nodes', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: Array.from({ length: 501 }, (_, i) => makeNode({ id: `n${i}` }))
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TOO_MANY_NODES')
-  })
-
-  it('rejects an edge referencing an unknown node', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ id: 'n1' })],
-      edges: [{ id: 'e1', source: 'n1', target: 'ghost' }]
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('EDGE_UNKNOWN_NODE')
-  })
-
-  it('accepts a valid edge between two declared nodes', () => {
-    const result = validateCreateWorkflowRequest({
-      ...valid,
-      nodes: [makeNode({ id: 'n1' }), makeNode({ id: 'n2', type: 'output' })],
-      edges: [{ id: 'e1', source: 'n1', target: 'n2' }]
-    })
-    expect(result.ok).toBe(true)
-  })
-
-  it('rejects a non-boolean enabled flag', () => {
-    const result = validateCreateWorkflowRequest({ ...valid, enabled: 'yes' as never })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_ENABLED')
-  })
-})
-
-describe('validateUpdateWorkflowRequest', () => {
-  const valid: UpdateWorkbenchWorkflowRequest = {
-    workspaceRoot: 'C:/proj',
-    workflowId: 'wf-001',
-    nodes: [makeNode()],
-    edges: []
-  }
-
-  it('accepts a valid request', () => {
-    expect(validateUpdateWorkflowRequest(valid)).toEqual({ ok: true })
-  })
-
-  it('rejects missing workflowId', () => {
-    const result = validateUpdateWorkflowRequest({ ...valid, workflowId: '' })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKFLOW_ID')
-  })
-
-  it('rejects nodes that are not an array', () => {
-    const result = validateUpdateWorkflowRequest({ ...valid, nodes: undefined as never })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_NODES')
-  })
-
-  it('rejects too many edges', () => {
-    const nodes = [makeNode({ id: 'n1' }), makeNode({ id: 'n2', type: 'output' })]
-    const result = validateUpdateWorkflowRequest({
-      ...valid,
-      nodes,
-      edges: Array.from({ length: 2001 }, (_, i) => ({ id: `e${i}`, source: 'n1', target: 'n2' }))
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TOO_MANY_EDGES')
-  })
-})
+// Workflow Designer validators were removed with the Workflow feature.

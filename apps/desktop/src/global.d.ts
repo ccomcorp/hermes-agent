@@ -10,10 +10,7 @@ import type {
   WorkbenchPlan,
   WorkbenchRequirement,
   WorkbenchRequirementStatus,
-  WorkbenchRequirementTrace,
-  WorkbenchWorkflow,
-  WorkbenchWorkflowEdge,
-  WorkbenchWorkflowNode
+  WorkbenchRequirementTrace
 } from '@hermes/shared'
 
 import type {
@@ -389,37 +386,6 @@ declare global {
               artifactId: string
             }) => Promise<WorkbenchIpcResult<WorkbenchDesignArtifact & { content: string }>>
           }
-        }
-        // Workflow Designer — AUTHORING ONLY (Slice M). A workflow is a graph
-        // (nodes + edges) that is created/saved/loaded/edited and NEVER RUN.
-        // No run/execute channel exists here.
-        workflow: {
-          list: (payload: { workspaceRoot: string }) => Promise<WorkbenchIpcResult<any[]>>
-          create: (payload: {
-            workspaceRoot: string
-            title: string
-            nodes?: WorkbenchWorkflowNode[]
-            edges?: WorkbenchWorkflowEdge[]
-            enabled?: boolean
-          }) => Promise<WorkbenchIpcResult<{ workflow: WorkbenchWorkflow }>>
-          read: (payload: {
-            workspaceRoot: string
-            workflowId: string
-          }) => Promise<WorkbenchIpcResult<WorkbenchWorkflow>>
-          update: (payload: {
-            workspaceRoot: string
-            workflowId: string
-            nodes: WorkbenchWorkflowNode[]
-            edges: WorkbenchWorkflowEdge[]
-            title?: string
-            enabled?: boolean
-          }) => Promise<WorkbenchIpcResult<{
-            id: string
-            title: string
-            enabled: boolean
-            contentHash: string
-            updatedAt: string
-          }>>
         }
         // Plugin Tester — HTTP request executor + persistence (Slice N).
         // Executes real HTTP requests via the main process and persists
