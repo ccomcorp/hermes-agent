@@ -190,6 +190,8 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         self._lesson_obs_lock = threading.Lock()
         self._LESSON_OBS_MAX = 256
         self._review_observe_count: int = 0  # falsifiability: authored lessons observed into brain
+        # MEMORY.md / USER.md mirror observes (on_memory_write) — separate from fork review.
+        self._memory_md_observe_count: int = 0
         # Background worker for the paired reward — kept OFF the turn thread (R4). Lazy-built.
         self._reward_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._reward_futures: List["concurrent.futures.Future"] = []
@@ -536,6 +538,162 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         }
         return self._store.append(record)
 
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mirror built-in MEMORY.md / USER.md writes into the composite store + brain.
+
+        Chassis path (already live):
+          memory tool commit → MemoryManager.notify_memory_tool_write
+            → provider.on_memory_write(...)
+
+        Policy (additive, no parallel loop):
+          * add/replace with content → experience.db lesson + brain.observe (stage ≥ 1)
+          * remove → brain.observe a tombstone using metadata.old_text (no store spam)
+          * NEVER reward here — standing-note writes are not RPE outcomes
+
+        Best-effort: never raises; store/brain faults are logged and skipped.
+        """
+        action = str(action or "")
+        target = str(target or "memory")
+        meta = dict(metadata or {})
+        body = (content or "").strip()
+
+        if action == "remove":
+            body = str(meta.get("old_text") or "").strip()
+            if not body:
+                return
+            payload = f"[MEMORY.md remove target={target}] {body}"
+        elif action in ("add", "replace"):
+            if not body:
+                return
+            payload = f"[MEMORY.md {action} target={target}] {body}"
+        else:
+            return
+
+        payload = payload[:_LESSON_MAX_CHARS]
+
+        # Store leg — so prefetch / recall_for can surface standing notes too.
+        # Skip remove (tombstone observe is enough; avoid growing dead lessons).
+        if action in ("add", "replace") and self._store is not None:
+            try:
+                self.record_fork_lesson(
+                    payload,
+                    provenance=f"memory_tool:{action}:{target}",
+                    task_type="workflow",
+                    tags=["memory_md", target, action],
+                    source="reviewed",
+                )
+            except Exception as exc:
+                logger.debug("on_memory_write store append failed: %s", exc)
+
+        # Brain leg — Hebbian encode only (same policy as D3 Event 1).
+        if self._brain is not None and self._brain_stage >= 1:
+            try:
+                self._brain.observe({"type": "text", "content": payload})
+                with self._lesson_obs_lock:
+                    self._review_observe_count += 1
+                    self._memory_md_observe_count += 1
+            except Exception as exc:
+                logger.debug("on_memory_write brain observe failed: %s", exc)
+
+    def signal_outcome(
+        self,
+        *,
+        valence: float,
+        derivation: str,
+        session_id: str = "",
+        note: str = "",
+    ) -> Dict[str, Any]:
+        """Apply an outcome-derived valence to stashed lessons (or a synthetic one).
+
+        Used by engineering_loop (and other harnesses) so real gates/tests strengthen
+        learning without requiring the model to remember experience_signal.
+
+        Policy:
+          * valence==0 → no-op
+          * prefer refs currently in ``_lesson_observation`` (recalled this session)
+          * if empty and ``note`` set → append ``auto_outcome`` lesson then signal it
+          * if empty and no note → skip (never invent constant reward)
+          * routes through :meth:`handle_tool_call` so brain pairing rules stay single-source
+          * best-effort; never raises
+        """
+        try:
+            v = float(valence)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_valence"}
+        if v == 0.0:
+            return {"ok": True, "signaled": 0, "skipped": "neutral"}
+        if derivation not in ("task_completed", "user_correction", "explicit_feedback", "test_result"):
+            return {"ok": False, "error": "invalid_derivation"}
+
+        sid = session_id or self._session_id or ""
+        with self._lesson_obs_lock:
+            refs = list(self._lesson_observation.keys())
+
+        created_ref = None
+        if not refs:
+            note_s = (note or "").strip()
+            if not note_s or self._store is None:
+                return {"ok": True, "signaled": 0, "skipped": "no_lesson_context"}
+            try:
+                created_ref = self.record_fork_lesson(
+                    f"[auto_outcome {derivation}] {note_s}"[:_LESSON_MAX_CHARS],
+                    provenance=f"auto_outcome:{derivation}",
+                    task_type="workflow",
+                    tags=["auto_outcome", derivation],
+                    source="reviewed",
+                )
+                refs = [created_ref]
+                # Prime stash so brain reward can pair to this lesson if stage≥1.
+                if self._brain is not None and self._brain_stage >= 1:
+                    try:
+                        obs_id = self._brain.observe(
+                            {"type": "text", "content": note_s[:_LESSON_MAX_CHARS]}
+                        )
+                        if obs_id:
+                            with self._lesson_obs_lock:
+                                self._lesson_observation[created_ref] = str(obs_id)
+                                self._review_observe_count += 1
+                    except Exception as exc:
+                        logger.debug("signal_outcome reobserve failed: %s", exc)
+            except Exception as exc:
+                logger.debug("signal_outcome auto lesson failed: %s", exc)
+                return {"ok": False, "error": f"auto_lesson:{exc}"}
+
+        results = []
+        for ref in refs[:5]:
+            try:
+                out = self.handle_tool_call(
+                    "experience_signal",
+                    {"ref": ref, "valence": v, "derivation": derivation},
+                    session_id=sid,
+                )
+                try:
+                    parsed = json.loads(out) if isinstance(out, str) else out
+                except (TypeError, ValueError):
+                    parsed = {"raw": out}
+                results.append({"ref": ref, "result": parsed})
+            except Exception as exc:
+                logger.debug("signal_outcome handle_tool_call failed for %s: %s", ref, exc)
+                results.append({"ref": ref, "error": str(exc)})
+
+        try:
+            self._flush_rewards()
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "signaled": sum(1 for r in results if "error" not in r),
+            "created_ref": created_ref,
+            "results": results,
+        }
+
     # ----- D4-A: consumed-at-injection -----
     #
     # ``prefetch`` and ``confirm_prefetch_consumed`` are now SERVED BY THE BASE
@@ -666,6 +824,11 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             "write_only_alarm": self._loop_writeonly_alarm,
             "write_only_k": self._loop_writeonly_k,
             "write_only_floor": self._loop_writeonly_floor,
+            # D3 falsifiability: authored/re-recalled lessons observed into the brain.
+            # Moves on Event 1 (on_background_review) and Event 2 (recall re-observe).
+            "review_observe_count": self._review_observe_count,
+            "memory_md_observe_count": self._memory_md_observe_count,
+            "lesson_observation_stash": len(self._lesson_observation),
         }
 
     # ----- G1 / AC5: background drain off the hot path -----
@@ -913,6 +1076,11 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             "reward_count": self._reward_count,
             "reward_dW_total": self._reward_dW_total,
             "brain_dW_total": brain_dW_total,
+            # D3 loop counters (same process). review_observe_count proves Event 1/2 fired;
+            # reward_count proves Event 3 completed at least once this process.
+            "review_observe_count": self._review_observe_count,
+            "memory_md_observe_count": self._memory_md_observe_count,
+            "lesson_observation_stash": len(self._lesson_observation),
         }
 
     def _submit_reobserve(self, ref_text_pairs) -> None:

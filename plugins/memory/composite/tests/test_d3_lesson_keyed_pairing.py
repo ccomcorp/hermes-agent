@@ -238,3 +238,66 @@ def test_recall_does_not_block_on_slow_brain():
     assert p._lesson_observation == {}          # worker still blocked -> not yet stashed
     gate.set()
     p._flush_observes()                          # now let it finish
+    assert p._lesson_observation  # worker completed; lesson stashed
+
+
+def test_full_d3_path_moves_health_counters():
+    """Falsifiability surface: authoring + recall + outcome updates health counters.
+
+    Proves operators can detect Event 1/2/3 without reading private attrs:
+      review_observe_count moves on authoring (+1) and recall re-observe (+1)
+      reward_count moves after experience_signal with non-zero valence
+      stash is empty after one-shot reward consume
+    """
+    brain = SeqBrain()
+    p = _provider(brain, stage=2)
+    assert p.loop_health()["review_observe_count"] == 0
+    assert p.brain_health()["reward_count"] == 0
+
+    # Capture the store ref produced inside on_background_review → record_fork_lesson.
+    refs: list[str] = []
+    orig_record = p.record_fork_lesson
+
+    def _capture_record(lesson, **kwargs):
+        ref = orig_record(lesson, **kwargs)
+        refs.append(ref)
+        return ref
+
+    p.record_fork_lesson = _capture_record  # type: ignore[method-assign]
+
+    # Event 1
+    n = p.on_background_review(
+        [{
+            "lesson": "health counter lesson body for D3 path",
+            "provenance": "fork:health",
+            "task_type": "workflow",
+            "tags": ["fork", "background_review"],
+        }],
+        session_id="S1",
+    )
+    assert n == 1
+    assert len(refs) == 1
+    ref = refs[0]
+    assert p.loop_health()["review_observe_count"] == 1
+    assert brain.reward_calls == []
+
+    # Event 2
+    _recall(p, "health counter lesson")
+    h2 = p.loop_health()
+    assert h2["review_observe_count"] >= 2  # authoring + reobserve
+    assert h2["lesson_observation_stash"] >= 1
+    assert ref in p._lesson_observation
+    recall_obs = p._lesson_observation[ref]
+
+    # Event 3
+    before_rewards = p.brain_health()["reward_count"]
+    _signal(p, ref, 1.0, derivation="test_result")
+    p._flush_rewards()
+    bh = p.brain_health()
+    assert bh["reward_count"] == before_rewards + 1
+    assert bh["status"] == "live"
+    assert len(brain.reward_calls) == 1
+    assert brain.reward_calls[0]["observation_id"] == recall_obs
+    assert brain.reward_calls[0]["valence"] == 1.0
+    assert p.loop_health()["lesson_observation_stash"] == 0  # one-shot consume
+    assert ref not in p._lesson_observation
