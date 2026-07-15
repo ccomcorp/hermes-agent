@@ -55,7 +55,15 @@ export const FILES_STRINGS = {
   failedDelete: 'Delete failed',
   pathRequired: 'Path required',
   folderNameRequired: 'Folder name required',
-  directoryUnavailable: 'Directory unavailable'
+  directoryUnavailable: 'Directory unavailable',
+  // Default project directory controls on the Files page (same store as
+  // Settings → Sessions → Default project directory).
+  browse: 'Browse',
+  setAsDefault: 'Set as default',
+  defaultRootSet: 'Default project directory updated',
+  failedSetRoot: 'Could not update default project directory',
+  browseTitle: 'Choose a folder to browse (also becomes the default project directory)',
+  setAsDefaultTitle: 'Remember this folder as the default project directory for Files and new sessions'
 } as const
 
 export type FilesStrings = typeof FILES_STRINGS
