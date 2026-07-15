@@ -517,7 +517,13 @@ export function PreviewPane({
     webview.className = 'flex h-full w-full flex-1 bg-transparent'
     webview.setAttribute('partition', 'persist:hermes-preview')
     webview.setAttribute('src', target.url)
-    webview.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,sandbox=yes')
+    // Guest isolation: no node, sandboxed, no popups. webviewTag remains required
+    // for preview, but guests must not open windows or gain host privileges (H3).
+    webview.setAttribute(
+      'webpreferences',
+      'contextIsolation=yes,nodeIntegration=no,sandbox=yes,javascript=yes,webSecurity=yes,allowRunningInsecureContent=no'
+    )
+    webview.setAttribute('allowpopups', 'false')
 
     const onConsole = (event: Event) => {
       const detail = event as Event & {

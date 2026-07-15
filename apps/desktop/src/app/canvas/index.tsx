@@ -16,6 +16,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
+import { assertCanExecuteGatewayPluginScript } from '@/lib/gateway-plugin-security'
 import { cn } from '@/lib/utils'
 import { $connection } from '@/store/session'
 
@@ -160,6 +161,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
         }
         const resp = await fetch(canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/index.js?v=12'))
         const code = await resp.text()
+        assertCanExecuteGatewayPluginScript(connection?.baseUrl)
         new Function(code)()
       } catch (err) {
         console.error('[canvas] Plugin script failed:', err)

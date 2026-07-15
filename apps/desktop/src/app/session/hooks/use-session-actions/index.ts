@@ -10,7 +10,7 @@ import { clearQueuedPrompts } from '@/store/composer-queue'
 import { $pinnedSessionIds } from '@/store/layout'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
-import { resolveNewSessionCwd, tombstoneSessions, untombstoneSessions } from '@/store/projects'
+import { pickCwdUnderProjectScope, resolveNewSessionCwd, tombstoneSessions, untombstoneSessions } from '@/store/projects'
 import {
   $currentCwd,
   $currentFastMode,
@@ -194,8 +194,8 @@ export function useSessionActions({
         const newChatProfile = $newChatProfile.get() ?? normalizeProfileKey($activeGatewayProfile.get())
         await ensureGatewayProfile(newChatProfile)
         // An explicit one-shot workspace target (null → detached, string → that
-        // folder) wins; otherwise fall through to the live cwd, then the
-        // project-aware default (resolveNewSessionCwd).
+        // folder) wins; otherwise prefer entered-project root over a live cwd
+        // that still points at a *previous* project (stale after create/enter).
         const workspaceTarget = $newChatWorkspaceTarget.get()
 
         const cwd =
@@ -203,7 +203,7 @@ export function useSessionActions({
             ? ''
             : typeof workspaceTarget === 'string'
               ? workspaceTarget.trim()
-              : $currentCwd.get().trim() || resolveNewSessionCwd()
+              : pickCwdUnderProjectScope($currentCwd.get(), resolveNewSessionCwd())
 
         // The composer's model/effort/fast is sticky UI state ($currentModel,
         // $currentProvider, $currentReasoningEffort, $currentFastMode). Ship it
