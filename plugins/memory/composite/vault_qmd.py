@@ -53,6 +53,32 @@ _DEFAULT_QMD_JS = (
 )
 # Default QMD sqlite index (env INDEX_PATH the CLI reads). Overridable via HERMES_VAULT_INDEX.
 _DEFAULT_INDEX_PATH = "I:/QMD/index.sqlite"
+# Default Node for QMD better-sqlite3 (ABI 137 = Node 24). Do NOT fall back to bare
+# "node": launch-dev-hermes.ps1 pins Hermes managed Node 22 first on PATH for the
+# Electron rebuild, and node22 dlopen-fails QMD's better-sqlite3 (silent empty vault).
+# Overridable via HERMES_VAULT_NODE. (Pin verified 2026-07-15.)
+_DEFAULT_NODE_BIN = "C:/Program Files/nodejs/node.exe"
+
+
+def _resolve_node_bin(node_bin: Optional[str] = None) -> str:
+    """Prefer explicit arg / HERMES_VAULT_NODE / Node 24 default; last resort PATH ``node``."""
+    candidates = [
+        node_bin,
+        os.environ.get("HERMES_VAULT_NODE"),
+        _DEFAULT_NODE_BIN,
+        "node",
+    ]
+    for c in candidates:
+        if not c:
+            continue
+        if os.path.sep in c or "/" in c:
+            if Path(c).is_file():
+                return c
+            continue
+        # bare name
+        if shutil.which(c):
+            return c
+    return node_bin or os.environ.get("HERMES_VAULT_NODE") or _DEFAULT_NODE_BIN or "node"
 
 
 class QmdVaultCache:
@@ -74,7 +100,7 @@ class QmdVaultCache:
         self._index_path = (
             index_path or os.environ.get("HERMES_VAULT_INDEX") or _DEFAULT_INDEX_PATH
         )
-        self._node_bin = node_bin or os.environ.get("HERMES_VAULT_NODE") or "node"
+        self._node_bin = _resolve_node_bin(node_bin)
         self._collection = collection or os.environ.get("HERMES_VAULT_COLLECTION") or ""
         self._timeout = float(timeout)
         self._recall_limit = int(recall_limit)
