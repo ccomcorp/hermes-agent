@@ -17,6 +17,7 @@ import {
   $sessions,
   setCurrentBranch,
   setCurrentCwd,
+  setNewChatWorkspaceTarget,
   workspaceCwdForNewSession
 } from '@/store/session'
 import type { ProjectInfo, ProjectsPayload } from '@/types/hermes'
@@ -121,7 +122,8 @@ export const $projectScope = persistentAtom<string>(PROJECT_SCOPE_KEY, ALL_PROJE
 
 // Enter a project: scope the sidebar to it and make it the active project
 // (best-effort — the durable pointer is nice-to-have, the view scope is the
-// point). Never opens a session.
+// point). Never opens a session. Re-homes the blank-chat draft cwd so the next
+// session.create does not inherit the previous project's folder.
 export function enterProject(id: string): void {
   $projectScope.set(id)
 
@@ -131,31 +133,98 @@ export function enterProject(id: string): void {
   if (id.startsWith('p_')) {
     void setActiveProject(id).catch(() => undefined)
   }
+
+  // Path may already be in the list/tree (createProject seeds both before
+  // enter). If not yet, resolveNewSessionCwd falls back safely.
+  rehomeBlankChatDraftToEnteredProject()
 }
 
 export function exitProjectScope(): void {
   $projectScope.set(ALL_PROJECTS)
 }
 
-// The cwd a NEW chat should start in. The "active project" is just an atom
-// ($projectScope) — so when you're inside a project, a new session (cmd-n, the
-// trunk "+") starts at that project's root (its primary repo = the default-branch
-// checkout) instead of inheriting whatever unrelated worktree the live cwd
-// drifted into. Outside a project it falls back to the plain default (detached),
-// so a bare new chat shows no branch.
+// The cwd a NEW chat should start in. When the sidebar has *entered* a project
+// ($projectScope), start at that project's primary folder so cmd-n / New Session
+// do not inherit an unrelated worktree. Outside a project (ALL_PROJECTS) fall
+// back to the plain default (detached / configured default-project-dir).
+//
+// createProject({ use: true }) MUST call enterProject so scope follows the new
+// project — setting only $activeProjectId leaves new sessions on the previous
+// project's folder (or detached).
 export function resolveNewSessionCwd(): string {
   const scope = $projectScope.get()
 
-  if (scope !== ALL_PROJECTS) {
-    const project = $projectTree.get().find(node => node.id === scope)
-    const cwd = (project?.path || project?.repos.find(repo => repo.path)?.path || '').trim()
+  if (scope !== ALL_PROJECTS && scope) {
+    const treeNode = $projectTree.get().find(node => node.id === scope)
+    const fromTree = (treeNode?.path || treeNode?.repos.find(repo => repo.path)?.path || '').trim()
 
-    if (cwd) {
-      return cwd
+    if (fromTree) {
+      return fromTree
+    }
+
+    const listed = $projects.get().find(proj => proj.id === scope)
+
+    if (listed) {
+      const fromList = projectWorkspacePath(listed)
+
+      if (fromList) {
+        return fromList
+      }
     }
   }
 
   return workspaceCwdForNewSession()
+}
+
+/**
+ * When a project is entered (or created with use:true), re-anchor the *blank*
+ * new-chat draft to that project's workspace. Live sessions keep their own cwd.
+ *
+ * Without this, $currentCwd / sticky workspace state still points at the previous
+ * project (e.g. Hermes Agent) and session.create inherits it — so the first
+ * message after "New project" lands under the wrong project (2026-07-14).
+ */
+export function rehomeBlankChatDraftToEnteredProject(): void {
+  if ($activeSessionId.get()) {
+    return
+  }
+
+  const path = resolveNewSessionCwd().trim()
+
+  if (!path) {
+    return
+  }
+
+  setCurrentCwd(path)
+  setNewChatWorkspaceTarget(path)
+}
+
+/**
+ * Pick cwd for session.create when no explicit one-shot workspace target is set.
+ * Prefer the entered project's root over a live $currentCwd that still points at
+ * a *different* project (stale after create/enter without New Session).
+ */
+export function pickCwdUnderProjectScope(liveCwd: string, scopedDefault: string): string {
+  const live = (liveCwd || '').trim()
+  const scoped = (scopedDefault || '').trim()
+
+  if (!live) {
+    return scoped
+  }
+
+  if (!scoped) {
+    return live
+  }
+
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const L = norm(live)
+  const S = norm(scoped)
+
+  if (L === S || L.startsWith(`${S}/`)) {
+    return live
+  }
+
+  return scoped
 }
 
 const underPath = (parent: string, child: string): boolean =>
@@ -569,10 +638,11 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectI
   let res: { project: ProjectInfo | null }
 
   try {
+    const primaryPath = input.primaryPath ?? input.folders?.[0]
     res = await gatewayRequest<{ project: ProjectInfo | null }>('projects.create', {
       name: input.name,
       folders: input.folders ?? [],
-      primary_path: input.primaryPath,
+      primary_path: primaryPath,
       slug: input.slug,
       description: input.description,
       icon: input.icon,
@@ -610,11 +680,21 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectI
       $projectTree.set([projectInfoToTreeNode(created), ...$projectTree.get()])
     }
 
+    setSidebarAgentsGrouped(true)
+
+    // use:true means "this is my workspace now" — enter scope so New Session
+    // resolves cwd from this project's primary folder (resolveNewSessionCwd),
+    // not the previous project or a detached default. enterProject also pins
+    // the durable active project for p_* ids (async); set the atom immediately
+    // so UI + tests see the pin before the RPC round-trip.
+    //
+    // enterProject re-homes the blank-chat draft cwd. We also open a fresh
+    // draft so the user is not still typing into a previous project's chat.
     if (input.use) {
       $activeProjectId.set(created.id)
+      enterProject(created.id)
+      requestFreshSession()
     }
-
-    setSidebarAgentsGrouped(true)
   }
 
   reconcileProjects()

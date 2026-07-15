@@ -4,6 +4,11 @@
  * FilesPage, rebuilt in the desktop design system: flat rows, tokens over
  * literals, shared primitives (Button, SearchField, Dialog, Input, Codicon,
  * PageLoader, ErrorState). Distinct from the chat right-rail file viewer.
+ *
+ * Initial path seeds from the desktop Default project directory
+ * (`project-dir.json` / Settings → Sessions), so Files lands on the same root
+ * as new sessions rather than the backend home-dir default. Browse / Set as
+ * default on this page write that same setting.
  */
 import type * as React from 'react'
 import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -23,6 +28,7 @@ import { ErrorState } from '@/components/ui/error-state'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
+import { applyConfiguredDefaultProjectDir } from '@/store/session'
 
 import { PAGE_INSET_X } from '../layout-constants'
 import { PageSearchShell } from '../page-search-shell'
@@ -140,6 +146,8 @@ export function FilesView({ setStatusbarItemGroup, ...props }: FilesViewProps) {
   const [folderName, setFolderName] = useState('')
   const [pendingDelete, setPendingDelete] = useState<ManagedFileEntry | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Gates the list load until we've seeded from Default project directory.
+  const [ready, setReady] = useState(false)
 
   const activePath = listing?.path ?? currentPath ?? ''
   const canChangePath = listing?.can_change_path ?? false
@@ -162,9 +170,51 @@ export function FilesView({ setStatusbarItemGroup, ...props }: FilesViewProps) {
     }
   }, [])
 
+  // Bootstrap once from the desktop Default project directory so Files opens
+  // on the same root as new sessions (not Path.home() from /api/files).
   useEffect(() => {
+    let alive = true
+
+    void (async () => {
+      try {
+        const settings = window.hermesDesktop?.settings
+
+        if (settings) {
+          const result = await settings.getDefaultProjectDir()
+
+          if (!alive) {
+            return
+          }
+
+          applyConfiguredDefaultProjectDir(result.dir)
+          const start = (result.dir || result.resolvedCwd || '').trim()
+
+          if (start) {
+            setCurrentPath(start)
+            setPathInput(start)
+          }
+        }
+      } catch {
+        // Fall through — load(undefined) uses the backend default path.
+      } finally {
+        if (alive) {
+          setReady(true)
+        }
+      }
+    })()
+
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!ready) {
+      return
+    }
+
     void load(currentPath)
-  }, [currentPath, load])
+  }, [currentPath, load, ready])
 
   // Surface the active path + a refresh affordance in the statusbar so the
   // header row stays clean. Cleared on unmount.
@@ -216,6 +266,47 @@ export function FilesView({ setStatusbarItemGroup, ...props }: FilesViewProps) {
 
     await load(nextPath)
   }, [load, pathInput])
+
+  const browseRoot = useCallback(async () => {
+    const settings = window.hermesDesktop?.settings
+
+    if (!settings) {
+      return
+    }
+
+    try {
+      const picked = await settings.pickDefaultProjectDir()
+
+      if (picked.canceled || !picked.dir) {
+        return
+      }
+
+      const result = await settings.setDefaultProjectDir(picked.dir)
+      applyConfiguredDefaultProjectDir(result.dir)
+      setCurrentPath(picked.dir)
+      setPathInput(picked.dir)
+      notify({ kind: 'success', title: S.defaultRootSet, message: picked.dir })
+    } catch (err) {
+      notifyError(err, S.failedSetRoot)
+    }
+  }, [])
+
+  const setCurrentAsDefault = useCallback(async () => {
+    const settings = window.hermesDesktop?.settings
+    const next = (activePath || pathInput).trim()
+
+    if (!settings || !next) {
+      return
+    }
+
+    try {
+      const result = await settings.setDefaultProjectDir(next)
+      applyConfiguredDefaultProjectDir(result.dir)
+      notify({ kind: 'success', title: S.defaultRootSet, message: next })
+    } catch (err) {
+      notifyError(err, S.failedSetRoot)
+    }
+  }, [activePath, pathInput])
 
   const handleCreateDirectory = useCallback(async () => {
     const name = folderName.trim()
@@ -408,10 +499,33 @@ export function FilesView({ setStatusbarItemGroup, ...props }: FilesViewProps) {
               <Button size="sm" type="submit" variant="outline">
                 {S.go}
               </Button>
+              <Button
+                onClick={() => void browseRoot()}
+                size="sm"
+                title={S.browseTitle}
+                type="button"
+                variant="outline"
+              >
+                <Codicon name="folder-opened" size="0.875rem" />
+                {S.browse}
+              </Button>
+              <Button
+                disabled={!(activePath || pathInput).trim()}
+                onClick={() => void setCurrentAsDefault()}
+                size="sm"
+                title={S.setAsDefaultTitle}
+                type="button"
+                variant="outline"
+              >
+                <Codicon name="bookmark" size="0.875rem" />
+                {S.setAsDefault}
+              </Button>
             </form>
           ) : (
-            <div className="min-w-0 truncate font-mono text-xs text-(--ui-text-secondary)" title={activePath}>
-              {activePath || S.loading}
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="min-w-0 truncate font-mono text-xs text-(--ui-text-secondary)" title={activePath}>
+                {activePath || S.loading}
+              </div>
             </div>
           )}
 

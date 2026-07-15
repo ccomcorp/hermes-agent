@@ -47,6 +47,7 @@ def _make_config(
     max_body_bytes=1_048_576,
     host="0.0.0.0",
     port=0,  # let OS pick a free port in tests
+    allow_v1_signatures=False,
 ):
     """Build a PlatformConfig suitable for WebhookAdapter."""
     extra = {
@@ -55,6 +56,7 @@ def _make_config(
         "routes": routes or {},
         "rate_limit": rate_limit,
         "max_body_bytes": max_body_bytes,
+        "allow_v1_signatures": allow_v1_signatures,
     }
     if secret:
         extra["secret"] = secret
@@ -183,13 +185,22 @@ class TestValidateSignature:
         assert not route_secret  # empty → validation is skipped in handler
 
     def test_validate_generic_signature_valid(self):
-        """Valid X-Webhook-Signature (generic HMAC-SHA256 hex) is accepted."""
-        adapter = _make_adapter()
+        """Valid X-Webhook-Signature (generic HMAC-SHA256 hex) is accepted when V1 is opted in."""
+        adapter = _make_adapter(allow_v1_signatures=True)
         body = b'{"event": "push"}'
         secret = "generic-secret"
         sig = _generic_signature(body, secret)
         req = _mock_request(headers={"X-Webhook-Signature": sig})
         assert adapter._validate_signature(req, body, secret) is True
+
+    def test_validate_generic_v1_rejected_by_default(self):
+        """Legacy body-only V1 signatures are rejected unless allow_v1_signatures is true."""
+        adapter = _make_adapter()
+        body = b'{"event": "push"}'
+        secret = "generic-secret"
+        sig = _generic_signature(body, secret)
+        req = _mock_request(headers={"X-Webhook-Signature": sig})
+        assert adapter._validate_signature(req, body, secret) is False
 
     def test_validate_generic_v2_signature_valid(self):
         """Valid X-Webhook-Signature-V2 (timestamp-bound) is accepted."""
@@ -251,10 +262,8 @@ class TestValidateSignature:
         assert adapter._validate_signature(req, body, secret) is False
 
     def test_validate_generic_v1_still_works_without_timestamp(self):
-        """Legacy V1 (body-only) senders that never send X-Webhook-Timestamp
-        must keep working — this is the backward-compatibility guarantee for
-        existing integrations that predate the V2 scheme."""
-        adapter = _make_adapter()
+        """Legacy V1 (body-only) senders still work when allow_v1_signatures is true."""
+        adapter = _make_adapter(allow_v1_signatures=True)
         body = b'{"event": "push"}'
         secret = "generic-secret"
         sig = _generic_signature(body, secret)
@@ -306,14 +315,12 @@ class TestValidateSignature:
         assert adapter._validate_signature(req, body, secret) is False
 
     def test_v1_replay_attack_succeeds_demonstrating_the_hole_v2_closes(self):
-        """Regression/documentation test: a captured (body, signature) V1
-        pair replays successfully no matter how much time has passed,
-        because the V1 signature has no timestamp binding at all. This is
-        the exact vulnerability V2 fixes — it is not asserting desired
-        behavior, it is pinning the known, accepted-with-warning legacy
-        gap so a future change to V1's semantics doesn't silently alter it
-        without a deliberate decision."""
-        adapter = _make_adapter()
+        """Regression/documentation test: when allow_v1_signatures is true,
+        a captured (body, signature) V1 pair replays successfully no matter
+        how much time has passed, because the V1 signature has no timestamp
+        binding at all. This is the exact vulnerability V2 fixes — and why
+        V1 is disabled by default."""
+        adapter = _make_adapter(allow_v1_signatures=True)
         body = b'{"event": "push"}'
         secret = "generic-secret"
         sig = _generic_signature(body, secret)

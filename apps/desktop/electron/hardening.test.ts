@@ -7,11 +7,19 @@ import { pathToFileURL } from 'node:url'
 
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
+  assertSafeOutboundUrl,
+  assertTerminalOwner,
+  buildDesktopContentSecurityPolicy,
+  canExecuteGatewayPluginScript,
   encryptDesktopSecret,
+  isPackagedDevToolsAllowed,
+  isPrivateOrReservedIp,
   resolveDirectoryForIpc,
+  resolveExistingPathForIpc,
   resolveReadableFileForIpc,
   resolveRequestedPathForIpc,
   resolveTimeoutMs,
+  resolveWritableFileForIpc,
   sensitiveFileBlockReason
 } from './hardening'
 
@@ -289,4 +297,109 @@ test('resolveDirectoryForIpc accepts directory symlinks or junctions', async t =
   const resolved = await resolveDirectoryForIpc(linkPath)
   assert.equal(resolved.resolvedPath, linkPath)
   assert.equal(resolved.stat.isDirectory(), true)
+})
+
+test('resolveWritableFileForIpc blocks sensitive basenames and allows normal writes', async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-desktop-write-'))
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }))
+
+  const okPath = path.join(tempDir, 'notes.md')
+  const resolved = await resolveWritableFileForIpc(okPath, { contentLength: 12 })
+  assert.equal(resolved.resolvedPath, okPath)
+
+  await rejectsWithCode(resolveWritableFileForIpc(path.join(tempDir, '.env'), { contentLength: 1 }), 'sensitive-file')
+  await rejectsWithCode(
+    resolveWritableFileForIpc(path.join(tempDir, 'id_ed25519'), { contentLength: 1 }),
+    'sensitive-file'
+  )
+  await rejectsWithCode(resolveWritableFileForIpc(okPath, { contentLength: 2_000_000, maxBytes: 1000 }), 'EFBIG')
+})
+
+test('resolveExistingPathForIpc blocks sensitive paths for trash/reveal', async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-desktop-exist-'))
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }))
+
+  const filePath = path.join(tempDir, 'safe.txt')
+  fs.writeFileSync(filePath, 'ok', 'utf8')
+
+  const resolved = await resolveExistingPathForIpc(filePath)
+  assert.equal(resolved.resolvedPath, filePath)
+
+  const envPath = path.join(tempDir, '.env')
+  fs.writeFileSync(envPath, 'SECRET=1', 'utf8')
+  await rejectsWithCode(resolveExistingPathForIpc(envPath), 'sensitive-file')
+})
+
+test('assertTerminalOwner binds PTY ops to owning webContents id', () => {
+  assert.equal(assertTerminalOwner({ webContentsId: 7 }, 7), true)
+  assert.equal(assertTerminalOwner({ webContentsId: 7 }, 8), false)
+  assert.equal(assertTerminalOwner(null, 1), false)
+  assert.equal(assertTerminalOwner({}, 1), false)
+})
+
+test('isPrivateOrReservedIp covers loopback metadata and RFC1918', () => {
+  assert.equal(isPrivateOrReservedIp('127.0.0.1'), true)
+  assert.equal(isPrivateOrReservedIp('169.254.169.254'), true)
+  assert.equal(isPrivateOrReservedIp('10.0.0.5'), true)
+  assert.equal(isPrivateOrReservedIp('192.168.1.1'), true)
+  assert.equal(isPrivateOrReservedIp('8.8.8.8'), false)
+  assert.equal(isPrivateOrReservedIp('::1'), true)
+})
+
+test('assertSafeOutboundUrl rejects private hosts and non-https by default', async () => {
+  await assert.rejects(
+    () => assertSafeOutboundUrl('http://example.com/x', { lookup: async () => [{ address: '93.184.216.34', family: 4 }] }),
+    (error: any) => error?.code === 'insecure-url'
+  )
+  await assert.rejects(
+    () =>
+      assertSafeOutboundUrl('https://metadata.example/', {
+        lookup: async () => [{ address: '169.254.169.254', family: 4 }]
+      }),
+    (error: any) => error?.code === 'private-url'
+  )
+  await assert.rejects(
+    () =>
+      assertSafeOutboundUrl('https://evil.example/', {
+        lookup: async () => [{ address: '127.0.0.1', family: 4 }]
+      }),
+    (error: any) => error?.code === 'private-url'
+  )
+
+  const ok = await assertSafeOutboundUrl('https://example.com/a', {
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }]
+  })
+  assert.equal(ok.hostname, 'example.com')
+})
+
+test('buildDesktopContentSecurityPolicy includes script-src self and blocks object', () => {
+  const csp = buildDesktopContentSecurityPolicy({ devServer: 'http://127.0.0.1:5174' })
+  assert.match(csp, /script-src 'self'/)
+  assert.match(csp, /object-src 'none'/)
+  assert.match(csp, /127\.0\.0\.1:5174/)
+})
+
+test('buildDesktopContentSecurityPolicy permits guarded plugin eval and loopback styles', () => {
+  const csp = buildDesktopContentSecurityPolicy()
+  // Canvas/Kanban load plugin bundles via new Function() (gated to loopback by
+  // assertCanExecuteGatewayPluginScript); without 'unsafe-eval' they fail to load.
+  assert.match(csp, /script-src [^;]*'unsafe-eval'/)
+  // Plugin stylesheets are served from the loopback gateway on an ephemeral port.
+  assert.match(csp, /style-src [^;]*http:\/\/127\.0\.0\.1:\*/)
+})
+
+test('isPackagedDevToolsAllowed requires explicit env in packaged builds', () => {
+  assert.equal(isPackagedDevToolsAllowed({}, false), true)
+  assert.equal(isPackagedDevToolsAllowed({}, true), false)
+  assert.equal(isPackagedDevToolsAllowed({ HERMES_DESKTOP_DEVTOOLS: '1' }, true), true)
+  assert.equal(isPackagedDevToolsAllowed({ HERMES_DESKTOP_ALLOW_DEVTOOLS: 'true' }, true), true)
+})
+
+test('canExecuteGatewayPluginScript allows loopback only', () => {
+  assert.equal(canExecuteGatewayPluginScript('http://127.0.0.1:9119'), true)
+  assert.equal(canExecuteGatewayPluginScript('http://localhost:9119'), true)
+  assert.equal(canExecuteGatewayPluginScript('https://gateway.example.com'), false)
+  assert.equal(canExecuteGatewayPluginScript('not-a-url'), false)
+  // Default local backend leaves baseUrl empty -> loopback 127.0.0.1 fallback.
+  assert.equal(canExecuteGatewayPluginScript(''), true)
 })

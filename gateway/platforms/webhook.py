@@ -123,10 +123,15 @@ class WebhookAdapter(BasePlatformAdapter):
         self._dynamic_routes: Dict[str, dict] = {}
         self._dynamic_routes_mtime: float = 0.0
         self._routes: Dict[str, dict] = dict(self._static_routes)
-        self._runner = None
         # Routes already warned about legacy V1 body-only signatures
         # (once-per-route so a busy sender doesn't spam the log).
         self._v1_signature_warned: set[str] = set()
+        # Legacy body-only HMAC (X-Webhook-Signature without timestamp) is
+        # replayable. Default OFF after security audit M5; opt in with
+        # platforms.webhook.extra.allow_v1_signatures: true for migration.
+        self._allow_v1_signatures: bool = bool(
+            config.extra.get("allow_v1_signatures", False)
+        )
 
         # Delivery info keyed by session chat_id.
         #
@@ -982,9 +987,19 @@ class WebhookAdapter(BasePlatformAdapter):
         # covers the body: a captured (body, signature) pair replays
         # indefinitely with no timestamp binding it to a specific delivery.)
         # Only reachable when X-Webhook-Signature-V2 was not sent at all —
-        # see the guard above.
+        # see the guard above. Disabled by default (allow_v1_signatures).
         generic_sig = request.headers.get("X-Webhook-Signature", "")
         if generic_sig:
+            if not self._allow_v1_signatures:
+                route_name = request.match_info.get("route_name", "")
+                logger.warning(
+                    "[webhook] Route '%s' sent legacy X-Webhook-Signature but "
+                    "allow_v1_signatures is false — rejecting. Migrate to "
+                    "X-Webhook-Signature-V2 + X-Webhook-Timestamp, or set "
+                    "platforms.webhook.extra.allow_v1_signatures: true.",
+                    route_name,
+                )
+                return False
             expected = hmac.new(
                 secret.encode(), body, hashlib.sha256
             ).hexdigest()

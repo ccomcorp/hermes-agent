@@ -20,7 +20,10 @@ from typing import Any, List
 import pytest
 
 from plugins.memory.composite.provider import HermesCompositeProvider
-from plugins.memory.composite.vault_qmd import QmdVaultCache
+from plugins.memory.composite.vault_qmd import (
+    QmdVaultCache,
+    _resolve_node_bin,
+)
 from store import ExperienceStore
 
 
@@ -215,3 +218,42 @@ def test_qmd_adapter_normalizes_and_squashes_score():
     ]
     # Squashed score never reaches the store's authoritative 1.0 band.
     assert all(it["score"] < 1.0 for it in items)
+
+
+def test_resolve_node_bin_prefers_node24_default_over_bare_node(monkeypatch, tmp_path):
+    """With no HERMES_VAULT_NODE and a real Node 24 default path, do NOT use bare PATH ``node``.
+
+    launch-dev-hermes.ps1 puts Hermes Node 22 first on PATH for Electron; bare ``node``
+    would silent-empty QMD (better-sqlite3 ABI). Default must be the absolute Node 24 path
+    when that file exists.
+    """
+    monkeypatch.delenv("HERMES_VAULT_NODE", raising=False)
+    # If the real default exists on this machine, resolve must pick it (or any absolute
+    # candidate we inject). Inject a fake absolute Node 24 path that exists.
+    fake_node24 = tmp_path / "node24" / "node.exe"
+    fake_node24.parent.mkdir(parents=True)
+    fake_node24.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "plugins.memory.composite.vault_qmd._DEFAULT_NODE_BIN",
+        str(fake_node24),
+    )
+    resolved = _resolve_node_bin(None)
+    assert resolved == str(fake_node24)
+    # Explicit arg still wins.
+    other = tmp_path / "other-node.exe"
+    other.write_text("", encoding="utf-8")
+    assert _resolve_node_bin(str(other)) == str(other)
+
+
+def test_qmd_adapter_constructor_uses_resolve_node_bin(monkeypatch, tmp_path):
+    """QmdVaultCache must not fall back to bare ``node`` when Node 24 default exists."""
+    monkeypatch.delenv("HERMES_VAULT_NODE", raising=False)
+    fake = tmp_path / "node.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "plugins.memory.composite.vault_qmd._DEFAULT_NODE_BIN",
+        str(fake),
+    )
+    # Bogus qmd path is fine — we only assert node resolution.
+    v = QmdVaultCache(qmd_js=str(tmp_path / "missing-qmd.js"))
+    assert v._node_bin == str(fake)

@@ -62,6 +62,57 @@ logger = logging.getLogger(__name__)
 _app_monitor: Optional[AppMonitor] = None
 
 
+def _outcome_signal_enabled() -> bool:
+    """Kill switch: HERMES_OUTCOME_SIGNAL=0 disables auto experience signaling."""
+    return os.environ.get("HERMES_OUTCOME_SIGNAL", "1").strip() not in (
+        "0", "false", "False", "no", "NO",
+    )
+
+
+def _derivation_for_command(command: str) -> str:
+    c = (command or "").lower()
+    if any(k in c for k in ("pytest", "npm test", "jest", "vitest", "go test", "cargo test", "gate")):
+        return "test_result"
+    return "task_completed"
+
+
+def _emit_outcome_signal(
+    *,
+    valence: float,
+    derivation: str,
+    note: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Best-effort bridge to composite experience_signal via active agent.
+
+    Never raises; never blocks engineering_loop correctness.
+    """
+    if not _outcome_signal_enabled():
+        return {"ok": True, "skipped": "disabled"}
+    if float(valence) == 0.0:
+        return {"ok": True, "skipped": "neutral"}
+    try:
+        agent = None
+        try:
+            import cli as _cli  # type: ignore
+
+            agent = getattr(_cli, "_active_agent_ref", None)
+        except Exception:
+            agent = None
+        mm = getattr(agent, "_memory_manager", None) if agent is not None else None
+        if mm is None or not hasattr(mm, "signal_outcome"):
+            return {"ok": True, "skipped": "no_memory_manager"}
+        sid = getattr(agent, "session_id", "") or ""
+        return mm.signal_outcome(
+            valence=float(valence),
+            derivation=derivation,
+            session_id=str(sid),
+            note=note[:500],
+        )
+    except Exception as exc:
+        logger.debug("engineering_loop outcome signal failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 def _plugin_module() -> Any:
     """Return the plugin package module that owns session state.
 
@@ -311,6 +362,14 @@ def _handle_record_feedback(
     }
     if stuck_signal:
         result["warning"] = stuck_signal
+
+    # Outcome-gated learning: strengthen/punish stashed lessons (or auto_outcome).
+    valence = -0.8 if (exit_code != 0 or timeout) else 0.8
+    result["experience_signal"] = _emit_outcome_signal(
+        valence=valence,
+        derivation=_derivation_for_command(command),
+        note=f"feedback exit={exit_code} timeout={timeout} cmd={command[:200]}",
+    )
     return result
 
 
@@ -391,11 +450,23 @@ def _handle_run_gate(
     _save_state()
 
     passed = sum(1 for r in results if r.passed)
-    return {
+    failed = len(results) - passed
+    # Skip empty / optional "no gates discovered" noise for learning.
+    real_results = [r for r in results if getattr(r, "gate_name", "") != "gate-discovery"]
+    exp = None
+    if real_results:
+        valence = 1.0 if failed == 0 else -1.0
+        names = ",".join(getattr(r, "gate_name", "?") for r in real_results[:5])
+        exp = _emit_outcome_signal(
+            valence=valence,
+            derivation="test_result",
+            note=f"gates passed={passed} failed={failed} names={names}",
+        )
+    out = {
         "ok": True,
         "total": len(results),
         "passed": passed,
-        "failed": len(results) - passed,
+        "failed": failed,
         "results": [
             {
                 "name": r.gate_name,
@@ -407,6 +478,9 @@ def _handle_run_gate(
             for r in results
         ],
     }
+    if exp is not None:
+        out["experience_signal"] = exp
+    return out
 
 
 # ── Tool: engineering_loop_monitor_app ─────────────────────────────────────

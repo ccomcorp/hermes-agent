@@ -337,6 +337,25 @@ function MarkdownPreview({ text }: { text: string }) {
   )
 }
 
+/**
+ * Browser-like HTML preview for on-disk .html files (e.g. research reports).
+ * Sandboxed iframe + srcDoc — same isolation model as Design Studio prototypes:
+ * allow-scripts only, never allow-same-origin, never a bare file:// navigation.
+ * Self-contained documents (inlined CSS/JS) render fully; relative external
+ * assets may not resolve (use SOURCE to inspect those).
+ */
+function HtmlDocumentPreview({ text }: { text: string }) {
+  return (
+    <iframe
+      className="h-full w-full border-0 bg-white dark:bg-neutral-950"
+      // Opaque origin: scripts run, but cannot touch desktop cookies/storage.
+      sandbox="allow-scripts"
+      srcDoc={text}
+      title={translateNow('preview.tab') || 'HTML preview'}
+    />
+  )
+}
+
 function PreviewModeSwitcher({
   active,
   modes,
@@ -564,7 +583,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
   const { t } = useI18n()
   const [state, setState] = useState<LocalPreviewState>({ loading: true })
   const [forcePreview, setForcePreview] = useState(false)
-  // User-picked view; null = auto (diff when changed, else rendered markdown,
+  // User-picked view; null = auto (diff when changed, else rendered markdown/HTML,
   // else source). Reset when the previewed file changes.
   const [userMode, setUserMode] = useState<null | PreviewViewMode>(null)
   // Spot-editor state. The editor owns its buffer (keyed by `editorKey`); the
@@ -905,12 +924,15 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
   }
 
   if (isText && state.text !== undefined) {
-    const isMarkdown = (state.language || target.language) === 'markdown'
+    const language = (state.language || target.language || '').toLowerCase()
+    const isMarkdown = language === 'markdown' || language === 'md'
+    const isHtml =
+      target.previewKind === 'html' || language === 'html' || language === 'htm'
     const hasDiff = Boolean(state.diff && state.diff.trim())
     // Order the toggle reads left→right; default lands on the most useful view.
     const modes: PreviewViewMode[] = []
 
-    if (isMarkdown) {
+    if (isMarkdown || isHtml) {
       modes.push('rendered')
     }
 
@@ -920,7 +942,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
       modes.push('diff')
     }
 
-    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown ? 'rendered' : 'source'
+    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown || isHtml ? 'rendered' : 'source'
     const mode = userMode && modes.includes(userMode) ? userMode : autoMode
 
     return (
@@ -959,7 +981,11 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
         />
         <div className="min-h-0 flex-1 overflow-auto">
           {mode === 'rendered' ? (
-            <MarkdownPreview text={state.text} />
+            isHtml ? (
+              <HtmlDocumentPreview text={state.text} />
+            ) : (
+              <MarkdownPreview text={state.text} />
+            )
           ) : mode === 'diff' ? (
             <FileDiffPanel
               className="mx-0 mb-0 h-full max-h-none"

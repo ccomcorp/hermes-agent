@@ -914,6 +914,40 @@ class MemoryManager:
             )
             return tool_error(f"Memory tool '{tool_name}' failed: {e}")
 
+    def signal_outcome(
+        self,
+        *,
+        valence: float,
+        derivation: str,
+        session_id: str = "",
+        note: str = "",
+    ) -> Dict[str, Any]:
+        """Fan out outcome-derived learning to providers that support it (composite).
+
+        Best-effort: first provider implementing ``signal_outcome`` wins; others skipped.
+        Used by engineering_loop so gates/tests strengthen experience without relying on
+        the model to call experience_signal. Returns a structured result dict.
+        """
+        for provider in self._providers:
+            fn = getattr(provider, "signal_outcome", None)
+            if not callable(fn):
+                continue
+            try:
+                return fn(
+                    valence=valence,
+                    derivation=derivation,
+                    session_id=session_id,
+                    note=note,
+                )
+            except Exception as e:
+                logger.debug(
+                    "Memory provider '%s' signal_outcome failed: %s",
+                    getattr(provider, "name", "?"),
+                    e,
+                )
+                return {"ok": False, "error": str(e)}
+        return {"ok": True, "signaled": 0, "skipped": "no_provider"}
+
     # -- Lifecycle hooks -----------------------------------------------------
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:

@@ -88,10 +88,17 @@ import { addWorktree, listBranches, listWorktrees, removeWorktree, switchBranch 
 import {
   DATA_URL_READ_MAX_BYTES,
   DEFAULT_FETCH_TIMEOUT_MS,
+  assertSafeOutboundUrl,
+  assertTerminalOwner,
+  buildDesktopContentSecurityPolicy,
   encryptDesktopSecret as encryptDesktopSecretStrict,
+  isPackagedDevToolsAllowed,
+  resolveExistingPathForIpc,
   resolveReadableFileForIpc,
   resolveRequestedPathForIpc,
   resolveTimeoutMs,
+  resolveWritableFileForIpc,
+  sensitiveFileBlockReason,
   TEXT_PREVIEW_SOURCE_MAX_BYTES
 } from './hardening'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
@@ -4168,12 +4175,19 @@ function fetchLinkTitle(rawUrl) {
     return titleInflight.get(key)
   }
 
-  const pending = fetchHtmlTitleWithCurl(url)
+  const pending = assertSafeOutboundUrl(url, { purpose: 'Link title' })
+    .then(parsed => {
+      const safeUrl = parsed.toString()
+
+      return fetchHtmlTitleWithCurl(safeUrl)
+        .catch(() => '')
+        .then(value => usableTitle((value || '').slice(0, 240)))
+        .then(
+          async value =>
+            value || usableTitle(((await fetchHtmlTitleWithRenderer(safeUrl).catch(() => '')) || '').slice(0, 240))
+        )
+    })
     .catch(() => '')
-    .then(value => usableTitle((value || '').slice(0, 240)))
-    .then(
-      async value => value || usableTitle(((await fetchHtmlTitleWithRenderer(url).catch(() => '')) || '').slice(0, 240))
-    )
     .then(clean => {
       cacheTitle(key, clean)
       titleInflight.delete(key)
@@ -4211,7 +4225,7 @@ async function resourceBufferFromUrl(rawUrl) {
     return { buffer, mimeType: mimeTypeForPath(resolvedPath) }
   }
 
-  const parsed = new URL(rawUrl)
+  const parsed = await assertSafeOutboundUrl(rawUrl, { purpose: 'Image fetch' })
   const client = parsed.protocol === 'https:' ? https : http
 
   return new Promise((resolve, reject) => {
@@ -4710,10 +4724,15 @@ function buildApplicationMenu() {
 }
 
 function toggleDevTools(window) {
-  // DevTools is enabled in packaged builds so users can diagnose renderer
-  // issues without needing a dev build. Trade-off: tiny attack surface
-  // increase versus a much better support story when WS connection or
-  // CSP issues surface in the field.
+  // DevTools is available in dev builds always. Packaged builds require an
+  // explicit diagnostics opt-in (HERMES_DESKTOP_DEVTOOLS=1) so local attackers
+  // and support sessions don't get a free console on production installs.
+  if (!isPackagedDevToolsAllowed(process.env, IS_PACKAGED)) {
+    rememberLog('[devtools] blocked in packaged build; set HERMES_DESKTOP_DEVTOOLS=1 to enable')
+
+    return
+  }
+
   const { webContents } = window
 
   if (webContents.isDevToolsOpened()) {
@@ -4987,6 +5006,23 @@ function installMediaPermissions() {
 
     return false
   })
+}
+
+function installDesktopContentSecurityPolicy() {
+  // Defense-in-depth for the privileged renderer (H5). Applied on response
+  // headers so file:// and dev-server loads both get a CSP.
+  const policy = buildDesktopContentSecurityPolicy({ devServer: DEV_SERVER || null })
+
+  try {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const responseHeaders = { ...(details.responseHeaders || {}) }
+      // Electron uses array-valued header maps.
+      responseHeaders['Content-Security-Policy'] = [policy]
+      callback({ responseHeaders })
+    })
+  } catch (error) {
+    rememberLog(`[csp] failed to install Content-Security-Policy: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -8430,14 +8466,9 @@ ipcMain.handle('hermes:fs:gitRoot', async (_event, startPath) => gitRootForIpc(s
 
 // Reveal a path in the OS file manager (Finder / Explorer / Files).
 ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
-  const target = String(targetPath || '').trim()
-
-  if (!target) {
-    return false
-  }
-
   try {
-    shell.showItemInFolder(target)
+    const { realPath } = await resolveExistingPathForIpc(targetPath, { purpose: 'Reveal path' })
+    shell.showItemInFolder(realPath)
 
     return true
   } catch {
@@ -8449,14 +8480,21 @@ ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
 // base name; the destination is resolved in the SAME parent dir so a rename can
 // never move the item elsewhere or traverse out. Rejects on a name collision.
 ipcMain.handle('hermes:fs:rename', async (_event, targetPath, newName) => {
-  const src = String(targetPath || '').trim()
   const name = String(newName || '').trim()
 
-  if (!src || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) {
     throw new Error('Invalid rename')
   }
 
+  const { realPath: src } = await resolveExistingPathForIpc(targetPath, { purpose: 'Rename path' })
   const dst = path.join(path.dirname(src), name)
+  const blockReason = sensitiveFileBlockReason(dst)
+
+  if (blockReason) {
+    const error = new Error(`Rename blocked for sensitive path: ${blockReason}`) as Error & { code?: string }
+    error.code = 'sensitive-file'
+    throw error
+  }
 
   if (dst === src) {
     return { path: dst }
@@ -8472,43 +8510,27 @@ ipcMain.handle('hermes:fs:rename', async (_event, targetPath, newName) => {
 })
 
 // Write a small UTF-8 text file (e.g. a project's IDEA.md at creation). The path
-// is hardened (resolveRequestedPathForIpc) and the parent must already exist —
+// is hardened (resolveWritableFileForIpc) and the parent must already exist —
 // this never creates directory trees or escapes the allowed roots, and content
 // is size-capped so it can't be abused as a bulk-write primitive.
 ipcMain.handle('hermes:fs:writeText', async (_event, filePath, content) => {
-  const raw = String(filePath || '').trim()
-
-  if (!raw) {
-    throw new Error('Invalid path')
-  }
-
   const text = String(content ?? '')
+  const { resolvedPath } = await resolveWritableFileForIpc(filePath, {
+    purpose: 'Write text file',
+    contentLength: text.length,
+    maxBytes: 1_000_000
+  })
 
-  if (text.length > 1_000_000) {
-    throw new Error('Content too large')
-  }
+  await fs.promises.writeFile(resolvedPath, text, 'utf8')
 
-  const resolved = resolveRequestedPathForIpc(expandUserPath(raw), { purpose: 'Write text file' })
-
-  if (!directoryExists(path.dirname(resolved))) {
-    throw new Error('Parent directory does not exist')
-  }
-
-  await fs.promises.writeFile(resolved, text, 'utf8')
-
-  return { path: resolved }
+  return { path: resolvedPath }
 })
 
 // Move a file/folder to the OS trash (recoverable) — the VS Code "Delete"
 // default. `shell.trashItem` routes to Finder/Explorer/Files trash per platform.
 ipcMain.handle('hermes:fs:trash', async (_event, targetPath) => {
-  const target = String(targetPath || '').trim()
-
-  if (!target) {
-    throw new Error('Invalid delete')
-  }
-
-  await shell.trashItem(target)
+  const { realPath } = await resolveExistingPathForIpc(targetPath, { purpose: 'Trash path' })
+  await shell.trashItem(realPath)
 
   return true
 })
@@ -8618,10 +8640,10 @@ ipcMain.handle('hermes:terminal:start', async (event, payload = {}) => {
   return { cwd, id, shell: name }
 })
 
-ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
+ipcMain.handle('hermes:terminal:write', (event, id, data) => {
   const sessionInfo = terminalSessions.get(String(id || ''))
 
-  if (!sessionInfo) {
+  if (!assertTerminalOwner(sessionInfo, event.sender.id)) {
     return false
   }
 
@@ -8630,10 +8652,10 @@ ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
   return true
 })
 
-ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
+ipcMain.handle('hermes:terminal:resize', (event, id, size = {}) => {
   const sessionInfo = terminalSessions.get(String(id || ''))
 
-  if (!sessionInfo) {
+  if (!assertTerminalOwner(sessionInfo, event.sender.id)) {
     return false
   }
 
@@ -8644,17 +8666,25 @@ ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
 
   return true
 })
-ipcMain.handle('hermes:terminal:cwd', async (_event, id) => {
+ipcMain.handle('hermes:terminal:cwd', async (event, id) => {
   const sessionInfo = terminalSessions.get(String(id || ''))
 
-  if (!sessionInfo) {
+  if (!assertTerminalOwner(sessionInfo, event.sender.id)) {
     return null
   }
 
   return readProcessCwd(sessionInfo.pty.pid)
 })
 
-ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
+ipcMain.handle('hermes:terminal:dispose', (event, id) => {
+  const sessionInfo = terminalSessions.get(String(id || ''))
+
+  if (!assertTerminalOwner(sessionInfo, event.sender.id)) {
+    return false
+  }
+
+  return disposeTerminalSession(String(id || ''))
+})
 
 ipcMain.handle('hermes:updates:check', async () =>
   checkUpdates().catch(error => ({
@@ -9077,6 +9107,7 @@ app.whenReady().then(() => {
   }
 
   installMediaPermissions()
+  installDesktopContentSecurityPolicy()
   registerMediaProtocol()
   installEmbedReferer()
   registerDeepLinkProtocol()
