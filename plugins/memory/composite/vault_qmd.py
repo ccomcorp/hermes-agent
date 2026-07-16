@@ -59,6 +59,25 @@ _DEFAULT_INDEX_PATH = "I:/QMD/index.sqlite"
 # Overridable via HERMES_VAULT_NODE. (Pin verified 2026-07-15.)
 _DEFAULT_NODE_BIN = "C:/Program Files/nodejs/node.exe"
 
+# Substrings in QMD's stderr that mean the native engine (better-sqlite3) could not LOAD
+# under this Node runtime (wrong ABI / Node 22 vs the required Node 24 / ABI 137) — i.e. a
+# misconfiguration, NOT a normal empty result. When these appear we notify LOUDLY (warn-once)
+# instead of the quiet debug used for genuine misses. See SPEC-hermes-parameterization-failloud.
+_ENGINE_FAIL_MARKERS = (
+    "ERR_DLOPEN_FAILED",
+    "NODE_MODULE_VERSION",
+    "was compiled against a different Node.js version",
+    "could not locate the bindings file",
+    "invalid ELF header",
+    "is not a valid Win32 application",
+)
+
+
+def _is_engine_failure(stderr: str) -> bool:
+    """True if QMD stderr indicates a native-module load failure (ABI/Node mismatch)."""
+    s = stderr or ""
+    return any(m in s for m in _ENGINE_FAIL_MARKERS)
+
 
 def _resolve_node_bin(node_bin: Optional[str] = None) -> str:
     """Prefer explicit arg / HERMES_VAULT_NODE / Node 24 default; last resort PATH ``node``."""
@@ -105,6 +124,9 @@ class QmdVaultCache:
         self._timeout = float(timeout)
         self._recall_limit = int(recall_limit)
         self._max_item_chars = int(max_item_chars)
+        # Warn-once latch: an engine (ABI) load failure is a misconfig, notified LOUDLY the
+        # first time only, so a broken vault never degrades silently (fail-safe + fail-loud).
+        self._engine_warned = False
 
     # ----- availability -----------------------------------------------------------
 
@@ -122,6 +144,35 @@ class QmdVaultCache:
         if os.path.sep in self._node_bin or "/" in self._node_bin:
             return Path(self._node_bin).is_file()
         return shutil.which(self._node_bin) is not None
+
+    def health(self) -> dict[str, Any]:
+        """Actively probe the vault engine so an EXPECTED-but-broken leg is caught at build,
+        not silently at recall. Runs one short ``qmd search`` and classifies the outcome:
+
+          * ``ok``          — engine loaded and ran (recall will work).
+          * ``missing``     — QMD CLI or index file absent (leg intentionally absent).
+          * ``engine_fail`` — native-module/ABI load failure (wrong Node; the silent-empty trap).
+          * ``error``       — other non-zero/transport failure.
+
+        Never raises. Returns ``{ok, reason, detail}``.
+        """
+        if not Path(self._qmd_js).is_file() or not Path(self._index_path).is_file():
+            return {"ok": False, "reason": "missing", "detail": "qmd_js or index not found"}
+        cmd = [self._node_bin, self._qmd_js, "search", "healthcheck", "--json"]
+        env = dict(os.environ)
+        env["INDEX_PATH"] = self._index_path
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=min(self._timeout, 6.0), env=env, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return {"ok": False, "reason": "error", "detail": str(exc)[:200]}
+        if proc.returncode == 0:
+            return {"ok": True, "reason": "ok", "detail": ""}
+        if _is_engine_failure(proc.stderr):
+            return {"ok": False, "reason": "engine_fail", "detail": (proc.stderr or "")[:200]}
+        return {"ok": False, "reason": "error", "detail": (proc.stderr or "")[:200]}
 
     # ----- VaultCache surface -----------------------------------------------------
 
@@ -150,7 +201,16 @@ class QmdVaultCache:
             logger.debug("vault recall (qmd search) failed: %s", exc)
             return []
         if proc.returncode != 0:
-            logger.debug("vault recall (qmd search) exit=%s: %s", proc.returncode, proc.stderr[:200])
+            if _is_engine_failure(proc.stderr) and not self._engine_warned:
+                self._engine_warned = True
+                logger.warning(
+                    "composite vault leg DEGRADED: QMD engine failed to load under node '%s' "
+                    "(native-module/ABI mismatch) -> recall is returning EMPTY. Set HERMES_VAULT_NODE "
+                    "to Node 24 (ABI 137). stderr: %s",
+                    self._node_bin, (proc.stderr or "")[:200],
+                )
+            else:
+                logger.debug("vault recall (qmd search) exit=%s: %s", proc.returncode, proc.stderr[:200])
             return []
         try:
             payload = json.loads(proc.stdout or "[]")
