@@ -1,3 +1,4 @@
+<!-- hermes-dox -->
 # Hermes Agent - Development Guide
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
@@ -8,10 +9,12 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 Hermes is a personal AI agent that runs the same agent core across a CLI, a
 messaging gateway (Telegram, Discord, Slack, and ~20 other platforms), a TUI,
-and an Electron desktop app. It learns across sessions (memory + skills),
-delegates to subagents, runs scheduled jobs, and drives a real terminal and
-browser. It is extended primarily through **plugins and skills**, not by
-growing the core.
+and an Electron desktop app. It learns across sessions (memory + skills +
+experience store + optional NeuroLinked brain stage), **recursively improves
+via a closed self-improvement loop** (author → recall → outcome reward — see
+§ Self-Improvement Loop), delegates to subagents, runs scheduled jobs, and
+drives a real terminal and browser. It is extended primarily through
+**plugins and skills**, not by growing the core.
 
 Two properties shape almost every design decision and are the lens for
 reviewing any change:
@@ -37,6 +40,45 @@ cracked it, the one-line rule for next time), not just the fix. This applies
 to work on hermes-agent itself exactly as it does to AIOS — the rule is
 agent-wide, not project-scoped. Wired as mandatory Phase 5.5 (VERIFY → EXTRACT
 → COMMIT) in the `orchestrating-engineering-work` skill.
+
+## Self-Improvement Loop (core functionality)
+
+**Standing rule:** recursive self-*learning* is a **first-class hermes-agent
+capability**, not an optional bolt-on. The agent is expected to improve future
+behavior from past work via a closed circulation over existing systems.
+
+**What it is (circulation, not unconstrained self-rewrite):**
+
+```
+work → background_review authors lesson
+     → experience.db + NeuroLinked observe (stage ≥ 1; no reward at authoring)
+     → session-start / prefetch recalls lessons
+     → better subsequent action
+     → real outcome (gate/test/user correction)
+     → experience_signal / engineering_loop outcome bridge (stage ≥ 2)
+     → store wins/losses + brain.reward (R-STDP)
+     → stronger/weaker future recall  (recurse)
+```
+
+**What it is not:** mass auto-reward every turn (saturates RPE); a second
+"brain daemon" parallel to this loop; claiming vault/gbrain alone is the
+self-improvement engine. Vault (QMD/gbrain) is retrieval knowledge; the loop
+is experience store + NeuroLinked + skills/MEMORY discipline.
+
+**Source seams (do not bypass with parallel machinery):**
+
+| Stage | Seam |
+|-------|------|
+| Author | `spawn_background_review` → `on_background_review` → `record_fork_lesson` + optional `brain.observe` |
+| Recall | composite `prefetch` / `recall_for` (experience + brain + QMD legs) |
+| Outcome | `experience_signal` tool; `MemoryManager.signal_outcome` from engineering_loop (`HERMES_OUTCOME_SIGNAL`, default on) |
+| Brain bind | stage via `HERMES_BRAIN_STAGE` (dev launch pins **2**); outcome bridges resolve the in-flight agent via task-local active-agent binding (not CLI-only) |
+
+**Operator health signal:** lesson `uses` with rising `wins`/`losses` = loop alive.
+`uses↑` and `wins=losses=0` = recall without reinforcement (broken reward path).
+
+**Enhance existing loop only** — see skill `neurolinked` →
+`references/self-improvement-loop-brain-integration.md` and `extract-approach`.
 
 ## Contribution Rubric — What We Want / What We Don't
 
@@ -1367,3 +1409,41 @@ not the specific names.
 
 Reviewers should reject new change-detector tests; authors should convert
 them into invariants before re-requesting review.
+
+<!-- hermes-dox:index-start glob="*/" -->
+| Path | Description |
+| --- | --- |
+| __pycache__/ | TODO: describe |
+| acp_adapter/ | TODO: describe |
+| acp_registry/ | TODO: describe |
+| agent/ | TODO: describe |
+| apps/ | TODO: describe |
+| assets/ | TODO: describe |
+| cron/ | TODO: describe |
+| data/ | TODO: describe |
+| datagen-config-examples/ | TODO: describe |
+| docker/ | TODO: describe |
+| docs/ | TODO: describe |
+| dox/ | TODO: describe |
+| gateway/ | TODO: describe |
+| hermes_agent.egg-info/ | TODO: describe |
+| hermes_cli/ | TODO: describe |
+| infographic/ | TODO: describe |
+| locales/ | TODO: describe |
+| nix/ | TODO: describe |
+| node_modules/ | TODO: describe |
+| optional-mcps/ | TODO: describe |
+| optional-skills/ | TODO: describe |
+| packaging/ | TODO: describe |
+| plugins/ | TODO: describe |
+| providers/ | TODO: describe |
+| reports/ | TODO: describe |
+| scripts/ | TODO: describe |
+| skills/ | TODO: describe |
+| tests/ | TODO: describe |
+| tools/ | TODO: describe |
+| tui_gateway/ | TODO: describe |
+| ui-tui/ | TODO: describe |
+| web/ | TODO: describe |
+| website/ | TODO: describe |
+<!-- hermes-dox:index-end -->

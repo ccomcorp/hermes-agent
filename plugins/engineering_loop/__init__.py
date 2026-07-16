@@ -195,6 +195,16 @@ def _post_tool_call(
             # (terminal tool returns string, not structured)
             result_str = str(result) if result else ""
 
+            exit_code = None
+            try:
+                import json as _json
+
+                payload = _json.loads(result_str) if result_str.lstrip().startswith("{") else None
+                if isinstance(payload, dict) and "exit_code" in payload:
+                    exit_code = int(payload["exit_code"])
+            except Exception:
+                exit_code = None
+
             # Check for error indicators in output
             is_error = any(
                 marker in result_str[:500].lower()
@@ -203,9 +213,11 @@ def _post_tool_call(
                     "exception", "command not found",
                 ]
             )
+            if exit_code is not None and exit_code != 0:
+                is_error = True
 
             if is_error:
-                failure_class = classify_failure(result_str, "", 1)
+                failure_class = classify_failure(result_str, "", 1 if exit_code is None else exit_code)
                 fp = fingerprint_failure(
                     failure_class, command, result_str[:300],
                 )
@@ -230,6 +242,40 @@ def _post_tool_call(
             # Track command
             if command not in state.commands_run:
                 state.commands_run.append(command)
+
+            # Auto outcome bridge: when a real test/gate command finishes with a
+            # parseable exit_code, strengthen/punish experience without waiting
+            # for the model to call engineering_loop_record_feedback.
+            cmd_l = (command or "").lower()
+            testish = any(
+                k in cmd_l
+                for k in (
+                    "pytest",
+                    "npm test",
+                    "npm run test",
+                    "jest",
+                    "vitest",
+                    "go test",
+                    "cargo test",
+                    "python -m pytest",
+                    "pytest ",
+                )
+            )
+            if testish and exit_code is not None:
+                try:
+                    from .tools import _emit_outcome_signal, _derivation_for_command
+
+                    valence = 0.8 if exit_code == 0 else -0.8
+                    _emit_outcome_signal(
+                        valence=valence,
+                        derivation=_derivation_for_command(command),
+                        note=f"auto_terminal exit={exit_code} cmd={command[:200]}",
+                    )
+                except Exception:
+                    logger.debug(
+                        "engineering_loop auto terminal outcome signal failed",
+                        exc_info=True,
+                    )
 
             _save_state()
 

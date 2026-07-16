@@ -5692,6 +5692,14 @@ class AIAgent:
 
         # Allow _vprint during tool execution even with stream consumers
         self._executing_tools = True
+        # Bind this agent for bridges that need MemoryManager without cli-only
+        # refs (Desktop/gateway). engineering_loop outcome_signal uses it.
+        try:
+            from agent.memory_manager import push_active_agent, reset_active_agent
+            _agent_tok = push_active_agent(self)
+        except Exception:
+            _agent_tok = None
+            reset_active_agent = None  # type: ignore
         try:
             if not _should_parallelize_tool_batch(tool_calls):
                 return self._execute_tool_calls_sequential(
@@ -5702,6 +5710,11 @@ class AIAgent:
                 assistant_message, messages, effective_task_id, api_call_count
             )
         finally:
+            if _agent_tok is not None and reset_active_agent is not None:
+                try:
+                    reset_active_agent(_agent_tok)
+                except Exception:
+                    pass
             self._executing_tools = False
 
     def _dispatch_delegate_task(self, function_args: dict) -> str:

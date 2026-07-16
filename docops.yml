@@ -1,0 +1,23 @@
+version: 1
+mode: hybrid
+layers:
+  contract: true
+  ledger: true
+  publish: true
+contract:
+  root: AGENTS.md
+  index:
+    - dir: .
+      glob: "*/"
+ledger:
+  changelog: dox/CHANGELOG.md
+  adr_dir: dox/adr
+  session_log: dox/session-log.md
+  size_limit_words: 1500
+publish:
+  reports_root: reports
+  live_status: LIVE-STATUS.md
+  checklist: null
+  canvas_dir: reports/_canvas
+  html: derived
+  manifest: MANIFEST.json

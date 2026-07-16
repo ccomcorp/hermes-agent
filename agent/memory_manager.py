@@ -31,6 +31,7 @@ import re
 import inspect
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar, Token
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
@@ -38,6 +39,29 @@ from agent.skill_commands import extract_user_instruction_from_skill_message
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
+
+# Task-local "which AIAgent is currently executing tools?" handle.
+# Engineering-loop outcome signaling (and similar bridge paths) must not rely
+# only on ``cli._active_agent_ref`` — Desktop/gateway sessions never set that.
+_ACTIVE_AGENT: ContextVar[Any] = ContextVar("hermes_active_agent", default=None)
+
+
+def push_active_agent(agent: Any) -> Token:
+    """Bind *agent* as the active agent for this task/context. Returns reset token."""
+    return _ACTIVE_AGENT.set(agent)
+
+
+def reset_active_agent(token: Token) -> None:
+    """Restore prior active-agent binding."""
+    try:
+        _ACTIVE_AGENT.reset(token)
+    except Exception:
+        pass
+
+
+def get_active_agent() -> Any:
+    """Return the agent bound via :func:`push_active_agent`, or None."""
+    return _ACTIVE_AGENT.get()
 
 
 class LoopHookSignatureError(TypeError):
