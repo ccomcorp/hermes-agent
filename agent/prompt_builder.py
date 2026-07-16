@@ -7,6 +7,7 @@ assemble pieces, then combines them with memory and ephemeral prompts.
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import contextvars
@@ -64,6 +65,38 @@ def _scan_context_content(content: str, filename: str) -> str:
         return f"[BLOCKED: {filename} contained potential prompt injection ({', '.join(findings)}). Content not loaded.]"
 
     return content
+
+
+DOX_SKILL_NAME = "devops/hermes-dox"
+_DOX_HEADER_RE = re.compile(
+    r"(?:<!--\s*hermes-dox\s*-->|\bHermes\s+DOX\b|\bDOX\s*:\s*enabled\b)",
+    re.I,
+)
+DOX_PROTOCOL_GUIDANCE = (
+    "## Hermes DOX protocol\n\n"
+    "This AGENTS.md declares Hermes DOX. If you will edit this project or "
+    "files under this directory, load the bundled skill with "
+    f"skill_view(name='{DOX_SKILL_NAME}') and follow it.\n"
+    "- Before editing: read the root-to-target AGENTS.md contracts with read_file.\n"
+    "- After meaningful changes: update the nearest owning AGENTS.md and the "
+    "prompted ledger/publish docs; run `hermes dox status` / "
+    "`hermes dox check --write` with terminal when applicable.\n"
+    "- Closeout: surface the DOX closeout cascade for the detected mode; do "
+    "not fabricate narrative docs automatically."
+)
+
+
+def has_dox_header(content: str) -> bool:
+    """Return True when the first lines of an AGENTS.md opt into Hermes DOX."""
+    head = "\n".join(content.splitlines()[:25])
+    return bool(_DOX_HEADER_RE.search(head))
+
+
+def append_dox_protocol_guidance(content: str) -> str:
+    """Append a compact DOX skill-loading reminder for DOX-headed AGENTS.md."""
+    if "Hermes DOX protocol" in content or not has_dox_header(content):
+        return content
+    return content.rstrip() + "\n\n" + DOX_PROTOCOL_GUIDANCE
 
 
 def _find_git_root(start: Path) -> Optional[Path]:
@@ -1882,6 +1915,7 @@ def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str
                 content = candidate.read_text(encoding="utf-8").strip()
                 if content:
                     content = _scan_context_content(content, name)
+                    content = append_dox_protocol_guidance(content)
                     result = f"## {name}\n\n{content}"
                     return _truncate_content(
                         result, "AGENTS.md", context_length=context_length,

@@ -19,7 +19,7 @@ import shlex
 from pathlib import Path
 from typing import Dict, Any, Optional, Set
 
-from agent.prompt_builder import _scan_context_content
+from agent.prompt_builder import _scan_context_content, append_dox_protocol_guidance
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,10 @@ class SubdirectoryHintTracker:
     def _extract_paths_from_command(self, cmd: str, candidates: Set[Path]):
         """Extract path-like tokens from a shell command string."""
         try:
-            tokens = shlex.split(cmd)
+            # Preserve native Windows paths (``C:\\...``) when tests or
+            # Windows tools hand them to the terminal extractor; POSIX shlex
+            # treats backslashes as escapes and collapses the path.
+            tokens = shlex.split(cmd, posix=os.name != "nt")
         except ValueError:
             tokens = cmd.split()
 
@@ -158,8 +161,8 @@ class SubdirectoryHintTracker:
             # Skip flags
             if token.startswith("-"):
                 continue
-            # Must look like a path (contains / or .)
-            if "/" not in token and "." not in token:
+            # Must look like a path (contains a separator or .)
+            if "/" not in token and "\\" not in token and "." not in token:
                 continue
             # Skip URLs
             if token.startswith(("http://", "https://", "git@")):
@@ -232,6 +235,8 @@ class SubdirectoryHintTracker:
                     continue
                 # Same security scan as startup context loading
                 content = _scan_context_content(content, filename)
+                if filename.lower() == "agents.md":
+                    content = append_dox_protocol_guidance(content)
                 if len(content) > _MAX_HINT_CHARS:
                     content = (
                         content[:_MAX_HINT_CHARS]

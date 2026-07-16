@@ -4312,6 +4312,13 @@ def cmd_kanban(args):
     return kanban_command(args)
 
 
+def cmd_dox(args):
+    """Hermes-native DocOps project checks."""
+    from hermes_cli.dox import dox_command
+
+    return dox_command(args)
+
+
 def cmd_project(args):
     """Manage projects (named, multi-folder workspaces)."""
     from hermes_cli.projects_cmd import projects_command
@@ -13199,6 +13206,13 @@ def main():
 
     kanban_parser = _build_kanban_parser(subparsers)
     kanban_parser.set_defaults(func=cmd_kanban)
+
+    # =========================================================================
+    # dox command — Hermes-native DocOps checks
+    # =========================================================================
+    from hermes_cli.dox import build_parser as _build_dox_parser
+
+    _build_dox_parser(subparsers, cmd_dox=cmd_dox)
 
     # =========================================================================
     # project command — named, multi-folder workspaces

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -245,9 +246,14 @@ class TestRegistryDispatchContract:
             task_id="task-xyz",      # framework-injected; previously crashed
             session_id="sess-1",
         )
-        assert isinstance(result, dict)
-        assert result.get("ok") is True
-        assert "unexpected keyword" not in str(result)
+        # Registry tool-result contract: handlers must return JSON strings
+        # (not raw dicts). _adapt_handler serializes dict returns.
+        assert isinstance(result, str)
+        assert "unexpected keyword" not in result
+        assert "unsupported result type" not in result
+        assert "tool_result_contract" not in result
+        payload = json.loads(result)
+        assert payload.get("ok") is True
 
     def test_dispatch_noarg_handler_with_task_id(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -260,8 +266,11 @@ class TestRegistryDispatchContract:
         register_tools()
         # status takes no declared params; task_id must be silently dropped.
         result = registry.dispatch("engineering_loop_status", {}, task_id="t")
-        assert isinstance(result, dict)
-        assert "unexpected keyword" not in str(result)
+        assert isinstance(result, str)
+        assert "unexpected keyword" not in result
+        assert "unsupported result type" not in result
+        payload = json.loads(result)
+        assert isinstance(payload, dict)
 
     def test_no_discovered_gates_records_optional_evidence_for_termination(
         self,
@@ -279,7 +288,7 @@ class TestRegistryDispatchContract:
         eloop_tools.reset_session_state()
         register_tools()
 
-        started = registry.dispatch(
+        started = json.loads(registry.dispatch(
             "engineering_loop_start",
             {
                 "goal": "diagnostic no-code run",
@@ -287,22 +296,22 @@ class TestRegistryDispatchContract:
                 "loop_type": "deterministic",
                 "task_source": "test",
             },
-        )
+        ))
         assert started.get("ok") is True
 
-        gates = registry.dispatch("engineering_loop_run_gate", {"all_gates": True})
+        gates = json.loads(registry.dispatch("engineering_loop_run_gate", {"all_gates": True}))
         assert gates.get("ok") is True
         assert gates["results"][0]["name"] == "gate-discovery"
         assert gates["results"][0]["required"] is False
 
-        termination = registry.dispatch(
+        termination = json.loads(registry.dispatch(
             "engineering_loop_check_termination",
             {
                 "reviewer_response": '{"verdict":"PASS","feedback":"ok","action_items":[]}',
                 "reviewer_model": "independent-reviewer",
                 "main_model": "main-agent",
             },
-        )
+        ))
 
         assert termination.get("ok") is True
         assert termination.get("can_complete") is True
@@ -333,21 +342,21 @@ class TestRegistryDispatchContract:
             },
         )
 
-        first = registry.dispatch("engineering_loop_run_gate", {"all_gates": True})
-        second = registry.dispatch("engineering_loop_run_gate", {"all_gates": True})
+        first = json.loads(registry.dispatch("engineering_loop_run_gate", {"all_gates": True}))
+        second = json.loads(registry.dispatch("engineering_loop_run_gate", {"all_gates": True}))
 
         assert first.get("results", [{}])[0].get("name") == "gate-discovery"
         assert second.get("results", [{}])[0].get("name") == "gate-discovery"
         assert second.get("results", [{}])[0].get("required") is False
 
-        termination = registry.dispatch(
+        termination = json.loads(registry.dispatch(
             "engineering_loop_check_termination",
             {
                 "reviewer_response": '{"verdict":"PASS","feedback":"ok","action_items":[]}',
                 "reviewer_model": "independent-reviewer",
                 "main_model": "main-agent",
             },
-        )
+        ))
         assert termination.get("can_complete") is True
         assert termination.get("issues") == []
 

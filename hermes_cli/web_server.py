@@ -2456,6 +2456,31 @@ async def git_branch_switch_route(body: GitBranchSwitchBody):
     return await _git_op(_web_git.branch_switch, _git_path(body.path), body.branch)
 
 
+@app.get("/api/dox/status")
+async def dox_status_route(path: str = "."):
+    """Return DOX status for a project directory.
+
+    Mirrors the stable DOX status JSON contract (AC-B7).
+    A bare directory without docops.yml or any structural markers
+    returns ``active: false``.
+    """
+    try:
+        from agent.dox import status_project
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"DOX engine unavailable: {exc}")
+    try:
+        from agent.dox import DoxError
+    except ImportError:
+        DoxError = Exception  # type: ignore[assignment,misc]
+
+    try:
+        return status_project(path)
+    except DoxError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid project path: {exc}")
+
+
 # Host TCP ports each port-binding gateway platform listens on, as
 # ``platform-name -> (config port key, adapter default)``.  Mirrors
 # ``_PORT_BINDING_PLATFORM_VALUES`` in gateway/run.py and each adapter's
@@ -16858,6 +16883,21 @@ async def serve_plugin_asset(plugin_name: str, file_path: str):
         media_type=media_type,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
+
+
+@app.get("/api/dox/check")
+async def dox_check_endpoint(root: Optional[str] = None):
+    """Run a DocOps health check and return the report JSON.
+
+    The report mirrors the D1 ``DoxReport`` contract: a ``status`` object
+    (project markers, files analysed, tiers) plus a ``drift`` list of
+    findings, each with tier / path / kind / message (optional) / escaped
+    (optional).  Consumed by the D3 Desktop DocOps health overlay.
+    """
+    from agent.dox.core import check_project
+    loop = asyncio.get_running_loop()
+    project_root = Path(root).resolve() if root else None
+    return await loop.run_in_executor(None, check_project, project_root)
 
 
 def _mount_plugin_api_routes():

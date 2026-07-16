@@ -22,6 +22,7 @@ export const CONFIG_ROUTE = '/config'
 export const LOGS_ROUTE = '/logs'
 export const MODELS_ROUTE = '/models'
 export const STARMAP_ROUTE = '/starmap'
+export const DOCOPS_ROUTE = '/docops'
 
 export type AppView =
   | 'agents'
@@ -32,6 +33,7 @@ export type AppView =
   | 'command-center'
   | 'config'
   | 'cron'
+  | 'docops'
   | 'files'
   | 'kanban'
   | 'logs'
@@ -55,6 +57,7 @@ export type AppRouteId =
   | 'command-center'
   | 'config'
   | 'cron'
+  | 'docops'
   | 'files'
   | 'kanban'
   | 'logs'
@@ -99,7 +102,8 @@ export const APP_ROUTES = [
   { id: 'config', path: CONFIG_ROUTE, view: 'config' },
   { id: 'logs', path: LOGS_ROUTE, view: 'logs' },
   { id: 'models', path: MODELS_ROUTE, view: 'models' },
-  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' }
+  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' },
+  { id: 'docops', path: DOCOPS_ROUTE, view: 'docops' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))
@@ -112,6 +116,7 @@ export const OVERLAY_VIEWS: ReadonlySet<AppView> = new Set([
   'agents',
   'command-center',
   'cron',
+  'docops',
   'profiles',
   'settings',
   'starmap'

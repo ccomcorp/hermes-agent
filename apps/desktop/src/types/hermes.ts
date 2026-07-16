@@ -1069,3 +1069,51 @@ export interface ModelAssignmentResponse {
   stale_aux?: StaleAuxAssignment[]
   tasks?: string[]
 }
+
+// ── DOX (DocOps) ────────────────────────────────────────────────────────
+
+export interface DoxFinding {
+  tier: string
+  path: string
+  kind: string
+  message?: string | null
+  escaped?: boolean | null
+}
+
+export interface DoxStatus {
+  total_files: number
+  analyzed_files: number
+  tiers_found: string[]
+  ignored_files: number
+  ignored_count: number
+}
+
+export interface DoxReport {
+  status: DoxStatus
+  drift: DoxFinding[]
+  exit_code: number
+}
+
+export interface DoxLastPublish {
+  pack: string
+  at: string
+}
+
+/** Shape returned by GET /api/dox/status?path=<root> (D3.1 AC-B7). */
+export interface DoxProjectStatus {
+  active: boolean
+  mode: string | null
+  layers: {
+    contract: boolean
+    ledger: boolean
+    publish: boolean
+  }
+  markers: {
+    docops_yml: boolean
+    agents_md_header: boolean
+    structural: string[]
+  }
+  drift: DoxFinding[]
+  pending_advisories: number
+  last_publish: DoxLastPublish | null
+}

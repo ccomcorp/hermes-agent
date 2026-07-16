@@ -100,6 +100,7 @@ import {
   ARTIFACTS_ROUTE,
   CHANNELS_ROUTE,
   CONFIG_ROUTE,
+  DOCOPS_ROUTE,
   FILES_ROUTE,
   KANBAN_ROUTE,
   CANVAS_ROUTE,
@@ -171,6 +172,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   { id: 'webhooks', label: 'Webhooks', icon: props => <Codicon name="radio-tower" {...props} />, route: WEBHOOKS_ROUTE },
   { id: 'plugins', label: 'Plugins', icon: props => <Codicon name="extensions" {...props} />, route: PLUGINS_ROUTE },
   { id: 'files', label: 'Files', icon: props => <Codicon name="file-directory" {...props} />, route: FILES_ROUTE },
+  { id: 'docops', label: 'DocOps', icon: props => <Codicon name="pass" {...props} />, route: DOCOPS_ROUTE },
   { id: 'workbench', label: 'Workbench', icon: props => <Codicon name="checklist" {...props} />, route: WORKBENCH_ROUTE }, // AIOS: hermes-workbench
   { id: 'system', label: 'System', icon: props => <Codicon name="pulse" {...props} />, route: SYSTEM_ROUTE },
   { id: 'config', label: 'Config', icon: props => <Codicon name="settings-gear" {...props} />, route: CONFIG_ROUTE },
