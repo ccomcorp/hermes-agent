@@ -1029,6 +1029,12 @@ def _adapt_handler(handler):
     parameter out of ``args`` (falling back to framework kwargs), and silently
     drop any framework kwargs the handler doesn't declare. This keeps the
     handler signatures readable while staying compatible with the registry.
+
+    Handlers return plain dicts for readability; the registry's tool-result
+    contract only accepts strings (or the multimodal envelope). Serialize
+    dict/list results here so dispatch does not rewrite them as
+    ``tool_result_contract`` / \"unsupported result type\" errors (seen on every
+    kanban worker ``engineering_loop_start`` call in DOX logs).
     """
     sig = inspect.signature(handler)
     param_names = set(sig.parameters)
@@ -1037,16 +1043,31 @@ def _adapt_handler(handler):
         for p in sig.parameters.values()
     )
 
+    def _normalize_result(result):
+        if isinstance(result, str):
+            return result
+        if (
+            isinstance(result, dict)
+            and result.get("_multimodal") is True
+            and isinstance(result.get("content"), list)
+        ):
+            return result
+        if isinstance(result, (dict, list)):
+            return json.dumps(result, ensure_ascii=False, default=str)
+        if result is None:
+            return json.dumps({"ok": True}, ensure_ascii=False)
+        return json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str)
+
     def _wrapper(args, **kwargs):
         call_kwargs = {}
         merged = {**(args or {}), **kwargs}
         if accepts_var_kw:
             # Handler can absorb everything; pass the merged mapping through.
-            return handler(**merged)
+            return _normalize_result(handler(**merged))
         for key, value in merged.items():
             if key in param_names:
                 call_kwargs[key] = value
-        return handler(**call_kwargs)
+        return _normalize_result(handler(**call_kwargs))
 
     _wrapper.__name__ = getattr(handler, "__name__", "engineering_loop_handler")
     _wrapper.__doc__ = handler.__doc__

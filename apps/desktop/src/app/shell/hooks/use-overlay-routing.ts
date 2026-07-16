@@ -6,6 +6,7 @@ import {
   AGENTS_ROUTE,
   appViewForPath,
   COMMAND_CENTER_ROUTE,
+  DOCOPS_ROUTE,
   isOverlayView,
   NEW_CHAT_ROUTE,
   STARMAP_ROUTE
@@ -23,6 +24,7 @@ export function useOverlayRouting() {
   const agentsOpen = currentView === 'agents'
   const starmapOpen = currentView === 'starmap'
   const cronOpen = currentView === 'cron'
+  const docopsOpen = currentView === 'docops'
   const profilesOpen = currentView === 'profiles'
   const chatOpen = currentView === 'chat'
   const overlayOpen = isOverlayView(currentView)
@@ -61,6 +63,7 @@ export function useOverlayRouting() {
   }, [closeOverlayToPreviousRoute, commandCenterOpen, navigate])
 
   const openAgents = useCallback(() => navigate(AGENTS_ROUTE), [navigate])
+  const openDocops = useCallback(() => navigate(DOCOPS_ROUTE), [navigate])
   const openStarmap = useCallback(() => navigate(STARMAP_ROUTE), [navigate])
 
   return {
@@ -71,8 +74,10 @@ export function useOverlayRouting() {
     commandCenterOpen,
     cronOpen,
     currentView,
+    docopsOpen,
     openAgents,
     openCommandCenterSection,
+    openDocops,
     openStarmap,
     profilesOpen,
     settingsOpen,

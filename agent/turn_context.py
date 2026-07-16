@@ -535,6 +535,22 @@ def build_turn_context(
     except Exception as exc:
         logger.warning("pre_llm_call hook failed: %s", exc)
 
+    # DOX pending advisories use the same non-cache-breaking transport as
+    # pre_llm_call context: appended to the current user message at API-call
+    # time, never persisted and never added to the system prompt.
+    try:
+        from agent.dox import drain_pending_advisory_context
+
+        _dox_context = drain_pending_advisory_context(
+            session_id=getattr(agent, "session_id", "") or ""
+        )
+        if _dox_context:
+            plugin_user_context = "\n\n".join(
+                part for part in (plugin_user_context, _dox_context) if part
+            )
+    except Exception:
+        logger.debug("DOX pending advisory injection failed", exc_info=True)
+
     # Per-turn file-mutation verifier state.
     agent._turn_failed_file_mutations = {}
     agent._turn_file_mutation_paths = set()

@@ -1276,6 +1276,25 @@ def _resolve_vault(recall_limit: int):
             "(set HERMES_VAULT_QMD_JS / HERMES_VAULT_INDEX, or HERMES_VAULT_ENABLE=0)"
         )
         return None
+    # EXPECTED but broken must NOT degrade silently: actively probe the engine at build so a
+    # Node-ABI mismatch (vault would return empty) is a loud WARNING, not a silent miss.
+    health = vault.health()
+    if health.get("reason") == "engine_fail":
+        logger.warning(
+            "composite vault leg DEGRADED and DISABLED: QMD is installed+indexed but its engine "
+            "failed to load under node '%s' (native-module/ABI mismatch). Recall would be EMPTY, "
+            "so the leg is turned OFF. Fix: set HERMES_VAULT_NODE to Node 24 (ABI 137). detail: %s",
+            vault._node_bin, health.get("detail", ""),
+        )
+        return None
+    if not health.get("ok"):
+        # Non-engine transient (e.g. brief timeout): notify but KEEP the leg (fail-safe); recall's
+        # own warn-once will surface a persistent problem.
+        logger.warning(
+            "composite vault leg ACTIVE but build health-probe was inconclusive (%s): %s",
+            health.get("reason"), health.get("detail", ""),
+        )
+        return vault
     logger.info("composite vault leg ACTIVE: QMD search (BM25), background cache-warmed")
     return vault
 

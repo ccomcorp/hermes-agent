@@ -15,6 +15,9 @@ import type {
   CronJobUpdates,
   CuratorStatusResponse,
   DebugShareResponse,
+  DoxFinding,
+  DoxProjectStatus,
+  DoxReport,
   ElevenLabsVoicesResponse,
   EnvVarInfo,
   HermesConfig,
@@ -1212,5 +1215,23 @@ export function runDebugShare(): Promise<DebugShareResponse> {
     body: {},
     // Synchronous upload of report + logs to the paste service.
     timeoutMs: 120_000
+  })
+}
+
+// ── DOX (DocOps) ──────────────────────────────────────────────────────────
+
+export function runDoxCheck(root?: string): Promise<DoxReport> {
+  const qs = root ? `?root=${encodeURIComponent(root)}` : ''
+  return window.hermesDesktop.api<DoxReport>({
+    ...profileScoped(),
+    path: `/api/dox/check${qs}`
+  })
+}
+
+export function getDoxStatus(projectPath?: string): Promise<DoxProjectStatus> {
+  const qs = projectPath ? `?path=${encodeURIComponent(projectPath)}` : ''
+  return window.hermesDesktop.api<DoxProjectStatus>({
+    ...profileScoped(),
+    path: `/api/dox/status${qs}`
   })
 }

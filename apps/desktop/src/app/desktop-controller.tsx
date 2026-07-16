@@ -130,6 +130,7 @@ const AgentsView = lazy(async () => ({ default: (await import('./agents')).Agent
 const ArtifactsView = lazy(async () => ({ default: (await import('./artifacts')).ArtifactsView }))
 const CommandCenterView = lazy(async () => ({ default: (await import('./command-center')).CommandCenterView }))
 const CronView = lazy(async () => ({ default: (await import('./cron')).CronView }))
+const DocOpsView = lazy(async () => ({ default: (await import('./docops')).DocOpsView }))
 const KanbanView = lazy(async () => ({ default: (await import('./kanban')).KanbanView }))
 const CanvasView = lazy(async () => ({ default: (await import('./canvas')).CanvasView })) // AIOS: hermes-canvas
 const PairingView = lazy(async () => ({ default: (await import('./pairing')).PairingView }))
@@ -232,6 +233,7 @@ export function DesktopController() {
     commandCenterOpen,
     cronOpen,
     currentView,
+    docopsOpen,
     openAgents,
     openCommandCenterSection,
     openStarmap,
@@ -1113,6 +1115,12 @@ export function DesktopController() {
       {starmapOpen && (
         <Suspense fallback={null}>
           <StarmapView onClose={closeOverlayToPreviousRoute} />
+        </Suspense>
+      )}
+
+      {docopsOpen && (
+        <Suspense fallback={null}>
+          <DocOpsView onClose={closeOverlayToPreviousRoute} />
         </Suspense>
       )}
     </>

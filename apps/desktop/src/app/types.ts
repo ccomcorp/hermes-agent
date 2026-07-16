@@ -129,6 +129,7 @@ export type SidebarNavId =
   | 'channels'
   | 'command-center'
   | 'config'
+  | 'docops'
   | 'files'
   | 'kanban'
   | 'logs'

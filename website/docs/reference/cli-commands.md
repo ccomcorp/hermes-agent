@@ -56,6 +56,7 @@ hermes [global-options] <command> [subcommand/options]
 | `hermes status` | Show agent, auth, and platform status. |
 | `hermes cron` | Inspect and tick the cron scheduler. |
 | `hermes kanban` | Multi-profile collaboration board (tasks, links, dispatcher). |
+| `hermes dox` | DocOps project markers and checks: initialize `docops.yml` skeletons, inspect status JSON, reconcile deterministic drift, and dry-run the closeout cascade. |
 | `hermes project` | Manage named, multi-folder workspaces (projects). Anchors desktop session grouping and, when bound to a kanban board, gives tasks a deterministic worktree + branch convention. State is per-profile. |
 | `hermes webhook` | Manage dynamic webhook subscriptions for event-driven activation. |
 | `hermes hooks` | Inspect, approve, or remove shell-script hooks declared in `config.yaml`. |

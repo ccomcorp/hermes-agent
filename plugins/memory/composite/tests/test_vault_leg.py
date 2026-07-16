@@ -257,3 +257,89 @@ def test_qmd_adapter_constructor_uses_resolve_node_bin(monkeypatch, tmp_path):
     # Bogus qmd path is fine — we only assert node resolution.
     v = QmdVaultCache(qmd_js=str(tmp_path / "missing-qmd.js"))
     assert v._node_bin == str(fake)
+
+
+# ----- fail-loud: EXPECTED-but-broken vault notifies, never silently empties ----------
+# (SPEC-hermes-parameterization-failloud): an engine/ABI load failure is a misconfig, not a
+# normal miss — it must produce a LOUD warn-once, while genuine empty hits stay quiet.
+
+
+class _FakeProc:
+    def __init__(self, returncode, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _real_files(tmp_path):
+    """Make qmd_js + index + node all 'exist' so recall/health proceed to spawn (mocked)."""
+    qmd = tmp_path / "qmd.js"; qmd.write_text("", encoding="utf-8")
+    idx = tmp_path / "i.sqlite"; idx.write_text("", encoding="utf-8")
+    node = tmp_path / "node.exe"; node.write_text("", encoding="utf-8")
+    return QmdVaultCache(qmd_js=str(qmd), index_path=str(idx), node_bin=str(node))
+
+
+def test_is_engine_failure_classifies_abi_stderr():
+    from plugins.memory.composite.vault_qmd import _is_engine_failure
+
+    assert _is_engine_failure("Error [ERR_DLOPEN_FAILED]: ... better_sqlite3.node")
+    assert _is_engine_failure("NODE_MODULE_VERSION 127 vs 137 mismatch")
+    assert _is_engine_failure("was compiled against a different Node.js version")
+    assert not _is_engine_failure("no results found")
+    assert not _is_engine_failure("")
+
+
+def test_health_missing_when_files_absent(tmp_path):
+    """health() -> missing (quiet, intentional absence) when qmd_js/index are not present."""
+    v = QmdVaultCache(
+        qmd_js=str(tmp_path / "missing-qmd.js"),
+        index_path=str(tmp_path / "missing.sqlite"),
+        node_bin="node",
+    )
+    h = v.health()
+    assert h["ok"] is False and h["reason"] == "missing"
+
+
+def test_health_engine_fail_on_abi_stderr(monkeypatch, tmp_path):
+    """health() -> engine_fail when the engine returns an ABI/native-load error."""
+    import plugins.memory.composite.vault_qmd as vq
+
+    v = _real_files(tmp_path)
+    monkeypatch.setattr(
+        vq.subprocess, "run",
+        lambda *a, **k: _FakeProc(1, "", "ERR_DLOPEN_FAILED: better_sqlite3.node"),
+    )
+    h = v.health()
+    assert h["ok"] is False and h["reason"] == "engine_fail"
+
+
+def test_recall_engine_failure_warns_once(monkeypatch, tmp_path, caplog):
+    """An engine/ABI failure at recall is a LOUD warn-once (not a silent empty), and only once."""
+    import plugins.memory.composite.vault_qmd as vq
+
+    v = _real_files(tmp_path)
+    monkeypatch.setattr(
+        vq.subprocess, "run",
+        lambda *a, **k: _FakeProc(1, "", "ERR_DLOPEN_FAILED loading bindings"),
+    )
+    with caplog.at_level("WARNING"):
+        assert v.recall("q1") == []
+        assert v.recall("q2") == []  # warn-once: no second warning
+    warns = [
+        r for r in caplog.records
+        if r.levelname == "WARNING" and "DEGRADED" in r.getMessage()
+    ]
+    assert len(warns) == 1, f"expected exactly one warn-once, got {len(warns)}"
+
+
+def test_recall_empty_result_stays_quiet(monkeypatch, tmp_path, caplog):
+    """A genuine empty hit (rc=0, []) must NOT warn — only misconfig is loud."""
+    import plugins.memory.composite.vault_qmd as vq
+
+    v = _real_files(tmp_path)
+    monkeypatch.setattr(vq.subprocess, "run", lambda *a, **k: _FakeProc(0, "[]", ""))
+    with caplog.at_level("WARNING"):
+        assert v.recall("q") == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"], (
+        "an empty vault hit must stay quiet (no WARNING)"
+    )

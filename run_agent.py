@@ -2836,9 +2836,20 @@ class AIAgent:
             return
         landed = file_mutation_result_landed(tool_name, result)
         if landed:
+            landed_paths = _extract_landed_file_mutation_paths(tool_name, args, result)
             changed = getattr(self, "_turn_file_mutation_paths", None)
             if changed is not None:
-                changed.update(_extract_landed_file_mutation_paths(tool_name, args, result))
+                changed.update(landed_paths)
+            try:
+                from agent.dox import record_pending_advisory
+
+                record_pending_advisory(
+                    landed_paths,
+                    session_id=getattr(self, "session_id", "") or "",
+                    require_dox_marker=True,
+                )
+            except Exception:
+                logger.debug("DOX pending advisory record failed", exc_info=True)
         if is_error and not landed:
             preview = _extract_error_preview(result)
             for path in targets:
