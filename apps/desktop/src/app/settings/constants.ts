@@ -300,7 +300,8 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   'tts.elevenlabs.model_id': ['eleven_multilingual_v2', 'eleven_turbo_v2_5', 'eleven_flash_v2_5'],
   // NeuTTS local inference device.
   'tts.neutts.device': ['cpu', 'cuda', 'mps'],
-  'updates.non_interactive_local_changes': ['stash', 'discard']
+  'updates.non_interactive_local_changes': ['stash', 'discard'],
+  'voice.speak_mode': ['full', 'conversational']
 }
 
 export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
@@ -378,7 +379,8 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   voice: {
     recordKey: 'Voice Shortcut',
     maxRecordingSeconds: 'Max Recording Length',
-    autoTts: 'Read Responses Aloud'
+    autoTts: 'Read Responses Aloud',
+    speakMode: 'Speak Mode'
   },
   stt: {
     enabled: 'Speech To Text',
@@ -543,7 +545,8 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
     enabled: 'Summarize older context when conversations get large.'
   },
   voice: {
-    autoTts: 'Automatically speak assistant responses.'
+    autoTts: 'Automatically speak assistant responses.',
+    speakMode: 'Voice response style: "full" reads every response aloud; "conversational" speaks summaries only.'
   },
   tts: {
     xai: {

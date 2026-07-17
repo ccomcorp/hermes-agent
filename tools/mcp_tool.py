@@ -621,6 +621,127 @@ def _resolve_stdio_command(command: str, env: dict) -> tuple[str, dict]:
     return resolved_command, resolved_env
 
 
+def _windows_stdio_bypass_cmd_shim(command: str, args: list) -> tuple[str, list]:
+    """Rewrite npm/npx/codegraph ``.cmd`` shims to ``node.exe`` + JS entry.
+
+    On Windows, ``npx.CMD`` / ``codegraph.CMD`` always execute via ``cmd.exe``,
+    which flashes a console window even when the MCP SDK passes
+    ``CREATE_NO_WINDOW`` (batch re-launch / nested spawns). Invoking the
+    sibling ``node.exe`` with the underlying JS CLI avoids ``cmd.exe`` entirely.
+    No-op on non-Windows or when the node/js pair is missing.
+    """
+    if sys.platform != "win32":
+        return command, args
+    try:
+        path = os.path.normpath(os.path.expanduser(str(command)))
+    except Exception:
+        return command, args
+    if not path:
+        return command, args
+
+    base = os.path.basename(path).lower()
+    # Accept bare names only when which() already expanded them to a path
+    # with a directory; bare ``npx`` without a dir can't locate sibling node.
+    dirname = os.path.dirname(path)
+    if not dirname:
+        return command, args
+
+    node_exe = os.path.join(dirname, "node.exe")
+    if not os.path.isfile(node_exe):
+        return command, args
+
+    if base in ("npx", "npx.cmd", "npx.bat"):
+        npx_cli = os.path.join(dirname, "node_modules", "npm", "bin", "npx-cli.js")
+        if os.path.isfile(npx_cli):
+            return node_exe, [npx_cli, *list(args or [])]
+
+    if base in ("npm", "npm.cmd", "npm.bat"):
+        npm_cli = os.path.join(dirname, "node_modules", "npm", "bin", "npm-cli.js")
+        if os.path.isfile(npm_cli):
+            return node_exe, [npm_cli, *list(args or [])]
+
+    if base in ("codegraph", "codegraph.cmd", "codegraph.bat"):
+        for rel in (
+            ("node_modules", "@colbymchenry", "codegraph", "npm-shim.js"),
+            ("node_modules", "codegraph", "npm-shim.js"),
+        ):
+            shim = os.path.join(dirname, *rel)
+            if os.path.isfile(shim):
+                return node_exe, [shim, *list(args or [])]
+
+    return command, args
+
+
+_mcp_windows_no_console_patched = False
+
+
+def _ensure_mcp_windows_no_console_patch() -> None:
+    """Force MCP stdio Windows spawns to keep CREATE_NO_WINDOW always.
+
+    Upstream ``mcp.os.win32.utilities.create_windows_process`` already tries
+    CREATE_NO_WINDOW, but on *any* Exception (not only NotImplementedError)
+    it retries ``anyio.open_process`` *without* the flag — that path is what
+    produces visible cmd flashes for batch shims. Replace with a Hermes patch
+    that never drops the hide flag. Idempotent.
+    """
+    global _mcp_windows_no_console_patched
+    if _mcp_windows_no_console_patched or sys.platform != "win32":
+        return
+    try:
+        from mcp.os.win32 import utilities as win_util
+    except Exception:
+        return
+
+    import subprocess as _subprocess
+
+    _flags = int(getattr(_subprocess, "CREATE_NO_WINDOW", 0) or 0)
+
+    async def _create_windows_process_no_console(
+        command: str,
+        args: list,
+        env: dict | None = None,
+        errlog=None,
+        cwd=None,
+    ):
+        import anyio as _anyio
+
+        if errlog is None:
+            errlog = sys.stderr
+        job = win_util._create_job_object()
+        process = None
+        try:
+            try:
+                process = await _anyio.open_process(
+                    [command, *args],
+                    env=env,
+                    creationflags=_flags,
+                    stderr=errlog,
+                    cwd=cwd,
+                )
+            except NotImplementedError:
+                process = await win_util._create_windows_fallback_process(
+                    command, args, env, errlog, cwd
+                )
+            except Exception:
+                # Keep CREATE_NO_WINDOW — do not fall back to a visible console.
+                process = await win_util._create_windows_fallback_process(
+                    command, args, env, errlog, cwd
+                )
+            win_util._maybe_assign_process_to_job(process, job)
+            return process
+        except Exception:
+            if job and getattr(win_util, "win32api", None):
+                try:
+                    win_util.win32api.CloseHandle(job)
+                except Exception:
+                    pass
+            raise
+
+    win_util.create_windows_process = _create_windows_process_no_console  # type: ignore[assignment]
+    _mcp_windows_no_console_patched = True
+    logger.debug("Patched mcp create_windows_process for CREATE_NO_WINDOW")
+
+
 def _wrap_command_with_watchdog(command: str, args: list) -> tuple[str, list]:
     """Wrap a stdio MCP server command in the parent-death watchdog supervisor.
 
@@ -2026,6 +2147,9 @@ class MCPServerTask:
 
         safe_env = _build_safe_env(user_env)
         command, safe_env = _resolve_stdio_command(command, safe_env)
+        # Windows: avoid cmd.exe console flash for npx/codegraph .cmd shims
+        command, args = _windows_stdio_bypass_cmd_shim(command, args)
+        _ensure_mcp_windows_no_console_patch()
 
         # Check package against OSV malware database before spawning.
         # Run off the event loop (the urllib HTTPS call is blocking) and bound

@@ -177,7 +177,11 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
         '--hermes-diag-critical': '#DC2626',
         '--hermes-diag-error': '#EF4444',
         '--hermes-diag-warning': '#F59E0B',
-        '--hermes-kanban-drawer-width': '420px',
+        // Task-detail drawer max width. Plugin CSS uses
+        // min(var(--hermes-kanban-drawer-width, 1200px), 92vw). Host used to
+        // pin 420px (too narrow for long descriptions); double that to 840px
+        // so the panel can extend ~2× without eating the full board. (2026-07-16)
+        '--hermes-kanban-drawer-width': '840px',
         '--radius': '0.5rem',
         '--radius-sm': 'calc(0.5rem * 0.667)',
       } as React.CSSProperties}

@@ -1784,6 +1784,113 @@ class TestDelegationCapUnificationMigration:
         assert "max_async_children" not in DEFAULT_CONFIG["delegation"]
 
 
+class TestVoiceSpeakModeConfig:
+    """Config defaults and migration behavior for dual-path voice."""
+
+    def _write(self, tmp_path, body):
+        (tmp_path / "config.yaml").write_text(body, encoding="utf-8")
+
+    def test_default_config_has_dual_path_voice_keys(self):
+        voice = DEFAULT_CONFIG["voice"]
+        assert voice["speak_mode"] == "full"
+        assert voice["spoken_max_chars"] == 600
+        assert voice["spoken_max_words"] == 100
+        assert voice["spoken_summary_timeout_ms"] == 3000
+
+    def test_default_config_has_spoken_summary_auxiliary_slot(self):
+        spoken_summary = DEFAULT_CONFIG["auxiliary"]["spoken_summary"]
+        assert spoken_summary["provider"] == "auto"
+        assert spoken_summary["model"] == ""
+        assert spoken_summary["base_url"] == ""
+        assert spoken_summary["api_key"] == ""
+        assert spoken_summary["timeout"] == 5
+        assert spoken_summary["extra_body"] == {}
+
+    def test_unset_speak_mode_loads_as_full_for_existing_configs(self, tmp_path):
+        self._write(
+            tmp_path,
+            "_config_version: 33\n"
+            "voice:\n"
+            "  auto_tts: true\n",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            loaded = load_config()
+
+        assert loaded["voice"]["auto_tts"] is True
+        assert loaded["voice"]["speak_mode"] == "full"
+
+    def test_migrate_unset_speak_mode_preserves_lean_config(self, tmp_path):
+        latest = DEFAULT_CONFIG["_config_version"]
+        self._write(
+            tmp_path,
+            "_config_version: 33\n"
+            "model:\n"
+            "  provider: openrouter\n"
+            "voice:\n"
+            "  auto_tts: true\n",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            loaded = load_config()
+
+        assert raw["_config_version"] == latest
+        # Unset speak_mode remains unset on disk to avoid defaults-dump bloat,
+        # but the effective runtime value preserves the old full-speech path.
+        assert "speak_mode" not in raw["voice"]
+        assert loaded["voice"]["speak_mode"] == "full"
+
+    def test_explicit_conversational_speak_mode_survives_migration(self, tmp_path):
+        self._write(
+            tmp_path,
+            "_config_version: 33\n"
+            "voice:\n"
+            "  speak_mode: conversational\n",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            loaded = load_config()
+
+        assert raw["voice"]["speak_mode"] == "conversational"
+        assert loaded["voice"]["speak_mode"] == "conversational"
+
+    def test_config_validation_rejects_unknown_speak_mode(self):
+        from hermes_cli.config import validate_config_structure
+
+        issues = validate_config_structure({"voice": {"speak_mode": "verbose"}})
+
+        assert any("voice.speak_mode" in issue.message for issue in issues)
+
+    def test_config_validation_accepts_conversational_speak_mode(self):
+        from hermes_cli.config import validate_config_structure
+
+        issues = validate_config_structure({"voice": {"speak_mode": "conversational"}})
+
+        assert not [issue for issue in issues if "voice.speak_mode" in issue.message]
+
+    def test_config_set_persists_voice_speak_mode(self, tmp_path):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            set_config_value("voice.speak_mode", "conversational")
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            loaded = load_config()
+
+        assert raw["voice"]["speak_mode"] == "conversational"
+        assert loaded["voice"]["speak_mode"] == "conversational"
+
+    def test_config_set_persists_spoken_summary_aux_model(self, tmp_path):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            set_config_value("auxiliary.spoken_summary.model", "test-spoken-model")
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            loaded = load_config()
+
+        assert raw["auxiliary"]["spoken_summary"]["model"] == "test-spoken-model"
+        assert loaded["auxiliary"]["spoken_summary"]["model"] == "test-spoken-model"
+
+
 class TestConfigNormalizationDoesNotOverwriteUserValues:
     """Regression tests for #27354."""
 

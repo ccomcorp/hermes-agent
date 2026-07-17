@@ -2,14 +2,23 @@ import { atom } from 'nanostores'
 
 import { getHermesConfigRecord, saveHermesConfig } from '@/hermes'
 
+export type SpeakMode = 'full' | 'conversational'
+
 // "Read replies aloud" — mirrors the canonical `voice.auto_tts` config key (also
 // in Settings → Voice, honored by the messaging gateway) so the composer toggle
 // and the Settings switch are one source of truth, not two that can disagree.
 export const $autoSpeakReplies = atom<boolean>(false)
 
-/** Seed the atom from a loaded config payload (mount / refresh). */
-export function applyAutoSpeakFromConfig(config: { voice?: { auto_tts?: unknown } | null } | null | undefined) {
+/** Voice response style: "full" reads every response aloud; "conversational" speaks summaries. */
+export const $speakMode = atom<SpeakMode>('full')
+
+/** Seed the atoms from a loaded config payload (mount / refresh). */
+export function applyAutoSpeakFromConfig(config: { voice?: { auto_tts?: unknown; speak_mode?: unknown } | null } | null | undefined) {
   $autoSpeakReplies.set(Boolean(config?.voice?.auto_tts))
+
+  const mode = config?.voice?.speak_mode
+
+  $speakMode.set(mode === 'conversational' ? 'conversational' : 'full')
 }
 
 /**

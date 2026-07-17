@@ -4,6 +4,10 @@ Keep entries short. Shard or archive if approaching the ledger word budget in `d
 
 ## Unreleased
 
+### Desktop / voice
+
+- **2026-07-16** — P2a Voice conversation hardening: fixed cancel-during-speak race in `use-voice-conversation.ts` (`cancelledRef` guards re-arm after `end()`). Added 14 Vitest unit tests across `use-voice-conversation.test.tsx` (4 race-condition tests: cancel-end during speak, status transitions, re-arm after cancel) and `use-auto-speak-replies.test.tsx` (10 tests: spoken_reply fallback, hold-until-idle, conversation-inactive guard, empty/null reply, dedupe). EVAL-VDP-006 (package audit): confirmed zero HuggingFace/transformers/S2S dependencies in desktop.
+
 ### Operator / layout
 
 - **2026-07-16** — Chassis relocation investigation: GitHub origin already independent (`ccomcorp/hermes-agent`). Prefer clone/move existing fork to NEW_PATH + rewire path pins (`launch-dev-hermes`, update-guard, kanban workdir, `AIOS_PACKAGES_DIR` for composite). Do **not** create a second GitHub repo. Plan: `H:/WSpace-Hermes/hermes-projects/docs/hermes-agent/plans/chassis-relocation-investigation-2026-07-16.md`. Cutover pending user NEW_PATH + WIP commit.
@@ -11,6 +15,7 @@ Keep entries short. Shard or archive if approaching the ledger word budget in `d
 ### DocOps
 
 - **2026-07-16** — `hermes dox init --mode hybrid` on chassis root. Layers: contract + ledger + publish. Markers: `docops.yml`, `dox/`, LIVE-STATUS, `docs/standards/DOCUMENT-MANAGEMENT.md`, `<!-- hermes-dox -->` on `AGENTS.md`. **Rule:** all development/changes must maintain DocOps (contract walk, ledger, LIVE-STATUS when status moves).
+- **2026-07-16** — Desktop DocOps panel: wrap in `Panel`/`OverlayView` (stop full-window takeover), switch to theme tokens/`PanelPill` (Editorial/Slate-safe), restore dismiss (Esc/X/backdrop) + Refresh/Run Check. Files: `apps/desktop/src/app/docops/index.tsx`, `index.test.tsx`. Gate: typecheck + 18 docops UI tests.
 
 ### Core product rules (docs)
 

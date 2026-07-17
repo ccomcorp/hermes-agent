@@ -373,6 +373,7 @@ export interface SessionMessage {
   reasoning_content?: null | string
   reasoning_details?: unknown
   role: 'assistant' | 'system' | 'tool' | 'user'
+  spoken_reply?: string | null
   text?: unknown
   timestamp?: number
   tool_call_id?: null | string

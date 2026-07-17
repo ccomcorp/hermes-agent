@@ -12,6 +12,7 @@ export type ChatMessage = {
   id: string
   role: SessionMessage['role']
   parts: ChatMessagePart[]
+  spoken_reply?: string
   timestamp?: number
   pending?: boolean
   error?: string
@@ -839,6 +840,7 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
       id: `${message.timestamp || Date.now()}-${index}-${message.role}`,
       role: message.role,
       parts,
+      ...(message.spoken_reply ? { spoken_reply: message.spoken_reply } : {}),
       timestamp: message.timestamp
     })
 

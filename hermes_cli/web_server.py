@@ -737,6 +737,11 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "not writable."
         ),
     },
+    "voice.speak_mode": {
+        "type": "select",
+        "description": "Voice response mode: full reads every response; conversational uses summaries",
+        "options": ["full", "conversational"],
+    },
 }
 
 # Categories with fewer fields get merged into "general" to avoid tab sprawl.

@@ -58,6 +58,12 @@ def test_aux_tasks_keys_all_exist_in_default_config():
     )
 
 
+def test_spoken_summary_aux_task_is_configurable():
+    """Dual-path voice spoken summaries should be routable via aux config."""
+    assert "spoken_summary" in DEFAULT_CONFIG["auxiliary"]
+    assert "spoken_summary" in {key for key, _name, _desc in _AUX_TASKS}
+
+
 # ── _format_aux_current ─────────────────────────────────────────────────────
 
 

@@ -617,7 +617,11 @@ function buildDesktopContentSecurityPolicy(options: { devServer?: string | null 
     `img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*`,
     `font-src 'self' data:`,
     `connect-src ${[...connect].join(' ')}`,
-    `media-src 'self' blob: https:`,
+    // Voice playback uses HTMLAudioElement with TTS data: URLs and the
+    // hermes-media://stream custom protocol for cached mp3 files. Without
+    // those schemes, Edge/xAI TTS synthesizes fine but the renderer CSP
+    // blocks every play attempt (silent "can't hear you" in Desktop).
+    `media-src 'self' data: blob: https: hermes-media:`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `frame-src 'self' https: http://127.0.0.1:* http://localhost:*`,

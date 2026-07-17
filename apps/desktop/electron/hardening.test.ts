@@ -377,6 +377,9 @@ test('buildDesktopContentSecurityPolicy includes script-src self and blocks obje
   assert.match(csp, /script-src 'self'/)
   assert.match(csp, /object-src 'none'/)
   assert.match(csp, /127\.0\.0\.1:5174/)
+  // TTS playback uses data: URLs + hermes-media://stream for cached mp3s.
+  assert.match(csp, /media-src [^;]*\bdata:/)
+  assert.match(csp, /media-src [^;]*\bhermes-media:/)
 })
 
 test('buildDesktopContentSecurityPolicy permits guarded plugin eval and loopback styles', () => {

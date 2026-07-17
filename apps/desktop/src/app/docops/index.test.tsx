@@ -48,11 +48,15 @@ function activeStatus(overrides: Partial<DoxProjectStatus> = {}): DoxProjectStat
 
 async function renderDocOps(client?: QueryClient) {
   const { DocOpsView } = await import('./index')
-  return render(
-    <QueryClientProvider client={client ?? new QueryClient()}>
-      <DocOpsView />
-    </QueryClientProvider>
-  )
+  const onClose = vi.fn()
+  return {
+    onClose,
+    ...render(
+      <QueryClientProvider client={client ?? new QueryClient()}>
+        <DocOpsView onClose={onClose} />
+      </QueryClientProvider>
+    )
+  }
 }
 
 // ── Setup / teardown ──────────────────────────────────────────────────────
@@ -70,7 +74,18 @@ afterEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('DocOpsView', () => {
-  it('renders the project path in the header', async () => {
+  it('hosts content in OverlayView/Panel chrome (not a full-window surface)', async () => {
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByText('DocOps')).toBeDefined()
+    })
+
+    // OverlayView paints a fixed inset host; Panel wires onClose into it.
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+  })
+
+  it('renders the project path in the header subtitle', async () => {
     await renderDocOps()
 
     await waitFor(() => {
@@ -91,9 +106,9 @@ describe('DocOpsView', () => {
     await renderDocOps()
 
     await waitFor(() => {
-      expect(screen.getByText('Contract')).toBeDefined()
-      expect(screen.getByText('Ledger')).toBeDefined()
-      expect(screen.getByText('Publish')).toBeDefined()
+      expect(screen.getByText(/Contract/)).toBeDefined()
+      expect(screen.getByText(/Ledger/)).toBeDefined()
+      expect(screen.getByText(/Publish/)).toBeDefined()
     })
   })
 
@@ -140,8 +155,23 @@ describe('DocOpsView', () => {
 
     await waitFor(() => {
       expect(screen.getByText('DocOps not configured')).toBeDefined()
-      expect(screen.getByText(/No docops.yml found/)).toBeDefined()
+      expect(screen.getByText(/docops\.yml/)).toBeDefined()
     })
+
+    // Still dismissible via Panel chrome when inactive
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+  })
+
+  it('shows empty project state with Panel chrome', async () => {
+    mockCwdAtom.set('')
+    await renderDocOps()
+
+    await waitFor(() => {
+      // Title (PanelEmpty) + subtitle (PanelHeader) both carry this copy.
+      expect(screen.getAllByText('No project selected').length).toBeGreaterThanOrEqual(1)
+    })
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+    expect(screen.getByText(/Open a working directory/)).toBeDefined()
   })
 
   it('shows drift items when present', async () => {
@@ -167,12 +197,13 @@ describe('DocOpsView', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/No drift detected/)).toBeDefined()
+      expect(screen.getByText(/hermes dox check/)).toBeDefined()
     })
   })
 
   // ── Run Check action ──────────────────────────────────────────────────
 
-  it('shows a "Run Check" button in the header', async () => {
+  it('shows a "Run Check" control', async () => {
     await renderDocOps()
 
     await waitFor(() => {
@@ -192,8 +223,7 @@ describe('DocOpsView', () => {
       expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
     })
 
-    const btn = screen.getByRole('button', { name: 'Run DocOps check' })
-    fireEvent.click(btn)
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
 
     await waitFor(() => {
       expect(runDoxCheck).toHaveBeenCalledWith('/test-project')
@@ -241,7 +271,6 @@ describe('DocOpsView', () => {
   })
 
   it('shows "Checking…" text while the check is running', async () => {
-    // Deferred promise so the button stays in loading state
     let resolveCheck: (value: DoxReport) => void
     const checkPromise = new Promise<DoxReport>(resolve => {
       resolveCheck = resolve
@@ -257,15 +286,25 @@ describe('DocOpsView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Checking…')).toBeDefined()
+      expect(screen.getAllByText('Checking…').length).toBeGreaterThanOrEqual(1)
     })
 
-    // Resolve the check and verify the button returns to normal
     resolveCheck!({ status: {} as DoxReport['status'], drift: [], exit_code: 0 })
 
     await waitFor(() => {
       expect(screen.queryByText('Checking…')).toBeNull()
-      expect(screen.getByText('Run Check')).toBeDefined()
+      expect(screen.getAllByText('Run Check').length).toBeGreaterThanOrEqual(1)
     })
+  })
+
+  it('invokes onClose when Close DocOps is clicked', async () => {
+    const { onClose } = await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close DocOps' }))
+    expect(onClose).toHaveBeenCalled()
   })
 })

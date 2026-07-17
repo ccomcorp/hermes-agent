@@ -72,6 +72,7 @@ export function useComposerVoice({
     return {
       id: last.id,
       pending: Boolean(last.pending),
+      spoken_reply: last.spoken_reply || null,
       text
     }
   }

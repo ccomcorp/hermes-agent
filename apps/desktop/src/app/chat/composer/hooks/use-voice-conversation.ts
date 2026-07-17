@@ -1,8 +1,11 @@
+import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
+import { hasCompleteSentence, resolveSpeakText } from '@/lib/speech-text'
 import { playSpeechText, stopVoicePlayback } from '@/lib/voice-playback'
 import { notify, notifyError } from '@/store/notifications'
+import { $speakMode } from '@/store/voice-prefs'
 
 import { useMicRecorder } from './use-mic-recorder'
 
@@ -11,6 +14,7 @@ export type ConversationStatus = 'idle' | 'listening' | 'transcribing' | 'thinki
 interface PendingVoiceResponse {
   id: string
   pending: boolean
+  spoken_reply?: string | null
   text: string
 }
 
@@ -50,6 +54,11 @@ export function useVoiceConversation({
   const busyRef = useRef(busy)
   const statusRef = useRef<ConversationStatus>('idle')
   const wasEnabledRef = useRef(enabled)
+  /** Set by end() to prevent in-flight speak() from re-arming the mic. */
+  const cancelledRef = useRef(false)
+  /** Already started progressive speak for this response id (conversational). */
+  const earlySpokeRef = useRef(false)
+  const speakMode = useStore($speakMode)
 
   useEffect(() => {
     enabledRef.current = enabled
@@ -78,6 +87,7 @@ export function useVoiceConversation({
     responseIdRef.current = null
     spokenSourceLengthRef.current = 0
     speechBufferRef.current = ''
+    earlySpokeRef.current = false
   }
 
   const appendSpeechText = (text: string) => {
@@ -187,6 +197,7 @@ export function useVoiceConversation({
   )
 
   const startListening = useCallback(async () => {
+    cancelledRef.current = false
     pendingStartRef.current = false
 
     if (!enabledRef.current || mutedRef.current || busyRef.current) {
@@ -229,7 +240,7 @@ export function useVoiceConversation({
       } catch (error) {
         notifyError(error, voiceCopy.playbackFailed)
       } finally {
-        if (enabledRef.current) {
+        if (enabledRef.current && !cancelledRef.current) {
           pendingStartRef.current = true
           setStatus('idle')
         } else {
@@ -268,6 +279,7 @@ export function useVoiceConversation({
   ])
 
   const end = useCallback(async () => {
+    cancelledRef.current = true
     pendingStartRef.current = false
     clearTurnTimeout()
     stopVoicePlayback()
@@ -325,8 +337,9 @@ export function useVoiceConversation({
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [enabled, stopTurn])
 
-  // Drive the loop: after a voice-submitted turn, speak stable chunks as the
-  // assistant stream grows. Otherwise start listening when idle between turns.
+  // Conversational: start speaking as soon as the first complete sentence
+  // lands (while still streaming). Never fall back to reading the whole essay.
+  // Full mode: wait for turn complete, then speak the full sanitized reply.
   useEffect(() => {
     if (!enabled || muted) {
       return
@@ -341,26 +354,55 @@ export function useVoiceConversation({
           responseIdRef.current = response.id
         }
 
-        if (response.text.length > spokenSourceLengthRef.current) {
-          appendSpeechText(response.text.slice(spokenSourceLengthRef.current))
-          spokenSourceLengthRef.current = response.text.length
-        }
-
-        const chunk = takeSpeechChunk(!response.pending && !busy)
-
-        if (chunk) {
-          void speak(chunk)
-
-          return
+        // Progressive start: first complete sentence while still writing
+        if (
+          speakMode === 'conversational' &&
+          response.pending &&
+          !earlySpokeRef.current &&
+          hasCompleteSentence(response.text)
+        ) {
+          const early = resolveSpeakText({
+            mode: 'conversational',
+            spokenReply: response.spoken_reply,
+            displayText: response.text
+          })
+          if (early) {
+            earlySpokeRef.current = true
+            void speak(early)
+            return
+          }
         }
 
         if (!response.pending && !busy) {
+          // If we already spoke a progressive take, don't re-read the essay.
+          // Prefer a better spoken_reply only when we never started early.
+          if (earlySpokeRef.current) {
+            awaitingSpokenResponseRef.current = false
+            consumePendingResponse()
+            resetSpeechBuffer()
+            pendingStartRef.current = true
+            setStatus('idle')
+            return
+          }
+
+          const replyText = resolveSpeakText({
+            mode: speakMode,
+            spokenReply: response.spoken_reply,
+            displayText: response.text
+          })
+
+          if (replyText) {
+            awaitingSpokenResponseRef.current = false
+            consumePendingResponse()
+            void speak(replyText)
+            return
+          }
+
           awaitingSpokenResponseRef.current = false
           consumePendingResponse()
           resetSpeechBuffer()
           pendingStartRef.current = true
           setStatus('idle')
-
           return
         }
       }
@@ -370,7 +412,6 @@ export function useVoiceConversation({
         resetSpeechBuffer()
         pendingStartRef.current = true
         setStatus('idle')
-
         return
       }
     }
@@ -382,7 +423,17 @@ export function useVoiceConversation({
     if (pendingStartRef.current) {
       void startListening()
     }
-  }, [busy, consumePendingResponse, enabled, muted, pendingResponse, speak, startListening, status])
+  }, [
+    busy,
+    consumePendingResponse,
+    enabled,
+    muted,
+    pendingResponse,
+    speak,
+    speakMode,
+    startListening,
+    status
+  ])
 
   useEffect(() => {
     if (enabled && !wasEnabledRef.current) {

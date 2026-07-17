@@ -1599,6 +1599,14 @@ DEFAULT_CONFIG = {
             "timeout": 120,        # seconds — compression summarises large contexts; increase for local models
             "extra_body": {},
         },
+        "spoken_summary": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 5,
+            "extra_body": {},
+        },
         # Note: session_search no longer uses an auxiliary LLM (PR #27590 —
         # single-shape tool returns DB content directly). The old
         # ``auxiliary.session_search.*`` block was removed here. Existing
@@ -2151,6 +2159,10 @@ DEFAULT_CONFIG = {
         "record_key": "ctrl+b",
         "max_recording_seconds": 120,
         "auto_tts": False,
+        "speak_mode": "full",       # full | conversational; unset in old configs => full
+        "spoken_max_chars": 5000,   # conversational spoken budget (long take, not full essay)
+        "spoken_max_words": 900,
+        "spoken_summary_timeout_ms": 3000,
         "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
         "silence_threshold": 200,     # RMS below this = silence (0-32767)
         "silence_duration": 3.0,      # Seconds of silence before auto-stop
@@ -3304,7 +3316,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 33,
+    "_config_version": 34,
 }
 
 # =============================================================================
@@ -5371,6 +5383,17 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
             "    default: your-model-name\n"
             "    base_url: https://...",
         ))
+
+    # ── voice.speak_mode enum ───────────────────────────────────────────
+    voice_cfg = config.get("voice")
+    if isinstance(voice_cfg, dict) and "speak_mode" in voice_cfg:
+        speak_mode = str(voice_cfg.get("speak_mode") or "").strip()
+        if speak_mode and speak_mode not in {"full", "conversational"}:
+            issues.append(ConfigIssue(
+                "error",
+                f"voice.speak_mode must be 'full' or 'conversational', got {speak_mode!r}",
+                "Set voice.speak_mode to full to preserve existing full-text TTS, or conversational for short spoken replies",
+            ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:

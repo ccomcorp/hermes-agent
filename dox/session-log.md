@@ -16,3 +16,24 @@
 - **Status after:** `active: true`, layers contract/ledger/publish all true, `dox check` drift none
 - **Also this session stream:** memory stack verification; MEMORY consolidation; gbrain skill reconcile; QMD MCP on; dream script fix; recursive self-improvement documented as core; chassis outcome-signal Desktop bind
 - **Closeout expectation:** keep LIVE-STATUS/CHANGELOG updated on further hermes-agent edits; commit DocOps + AGENTS self-improvement section when packaging a release commit
+
+## 2026-07-16 — Cutover to D:\HeicH
+
+- Chassis at D:\HeicH\hermes-agent @ e19a76010
+- hermes-home copied to D:\HeicH\hermes-home
+- launch + update-guard rewired; AIOS_PACKAGES_DIR set
+- Desktop cutover still requires user stop/repack/relaunch
+
+## 2026-07-16 — Full system diagnostics post-HeicH cutover
+
+- Desktop confirmed on D:\HeicH paths (Hermes.exe + hermes-real).
+- All critical systems PASS (see reports/system-diagnostics-HeicH-2026-07-16.md).
+- CodeGraph re-indexed on new path (123,667 nodes).
+- Legacy I:\PROJECTS\AIOS\hermes-* retained as backup only.
+
+## 2026-07-16 — DocOps side panel full-window + theme fix
+
+- **Symptom:** Selecting DocOps from left nav took over the entire Desktop window (no shell/sidebar respect); not Editorial theme; looked non-functional; required app restart to recover.
+- **Root cause:** `DocOpsView` registered as overlay route (`OVERLAY_VIEWS` includes `docops`) but did **not** wrap in shared `Panel`/`OverlayView` chrome (unlike Agents/Cron/Profiles/Starmap). Bare `h-full` content rendered without fixed inset card → full-window paint. Palette used frozen dark-theme greens/reds (`text-green-300`, `bg-green-900/*`) instead of semantic/`PanelPill` tokens.
+- **Fix:** Rewrite `apps/desktop/src/app/docops/index.tsx` to host in `Panel` (Esc/backdrop/close), `PanelHeader`/`PanelEmpty`/`PanelPill`/`PanelMeta`/`PanelAction`, theme-safe tokens, Refresh + Run Check actions. Tests 18/18 green; typecheck clean.
+- **Ship:** Desktop rebuild+restart required for the running app to show the fix.
