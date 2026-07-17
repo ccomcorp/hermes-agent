@@ -1104,6 +1104,8 @@ export interface DoxLastPublish {
 export interface DoxProjectStatus {
   active: boolean
   mode: string | null
+  /** Resolved project root the status was computed for (parent-walk aware). */
+  root?: string
   layers: {
     contract: boolean
     ledger: boolean

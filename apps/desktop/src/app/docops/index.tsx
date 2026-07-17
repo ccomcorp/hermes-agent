@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { getDoxStatus, runDoxCheck } from '@/hermes'
 import { cn } from '@/lib/utils'
+import { $activeProjectId, $projects, projectWorkspacePath } from '@/store/projects'
 import { $currentCwd } from '@/store/session'
 import type { DoxProjectStatus } from '@/types/hermes.ts'
 
@@ -201,7 +202,16 @@ function ActiveDocOpsBody({
 
 export function DocOpsView({ onClose }: { onClose: () => void }) {
   const currentCwd = useStore($currentCwd)
-  const projectPath = currentCwd?.trim() || ''
+  const activeProjectId = useStore($activeProjectId)
+  const projects = useStore($projects)
+  // Resolve the DocOps target: prefer the selected project's primary workspace
+  // path (so a session sitting in a subfolder — or with no cwd yet — still
+  // reports the project that was `dox init`-ed), falling back to the live cwd.
+  // The backend walks parents to the nearest docops.yml, so a subfolder cwd
+  // still resolves correctly even when no project is active.
+  const activeProject = projects.find(p => p.id === activeProjectId)
+  const projectPath =
+    (activeProject ? projectWorkspacePath(activeProject)?.trim() : '') || currentCwd?.trim() || ''
   const queryClient = useQueryClient()
   const [checkRunning, setCheckRunning] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)

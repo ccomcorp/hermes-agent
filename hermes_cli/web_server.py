@@ -2479,7 +2479,7 @@ async def dox_status_route(path: str = "."):
         DoxError = Exception  # type: ignore[assignment,misc]
 
     try:
-        return status_project(path)
+        return status_project(path, search_parents=True)
     except DoxError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except (OSError, ValueError) as exc:
@@ -16902,7 +16902,9 @@ async def dox_check_endpoint(root: Optional[str] = None):
     from agent.dox.core import check_project
     loop = asyncio.get_running_loop()
     project_root = Path(root).resolve() if root else None
-    return await loop.run_in_executor(None, check_project, project_root)
+    return await loop.run_in_executor(
+        None, lambda: check_project(project_root, search_parents=True)
+    )
 
 
 def _mount_plugin_api_routes():

@@ -198,8 +198,30 @@ def _last_publish() -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-def status_project(root: str | Path = ".") -> dict[str, Any]:
-    project_root = _root(root)
+def _resolve_marker_root(start: Path, *, search_parents: bool) -> Path:
+    """Resolve the DOX project root for *start*.
+
+    When ``search_parents`` is False (the default) the caller's directory is
+    used verbatim — this preserves the exact-directory semantics that
+    ``init``/``check`` and every existing test rely on.
+
+    When True, walk upward from *start* to the filesystem root and return the
+    nearest ancestor that carries the explicit ``docops.yml`` marker. This is
+    what lets a session whose cwd is a *subfolder* of an initialized project
+    (e.g. ``…/project/plans/workstream``) still resolve to the project that was
+    actually ``dox init``-ed. When no ancestor is initialized, *start* is
+    returned unchanged so status simply reports ``active: false``.
+    """
+    if not search_parents:
+        return start
+    for candidate in (start, *start.parents):
+        if (candidate / "docops.yml").exists():
+            return candidate
+    return start
+
+
+def status_project(root: str | Path = ".", *, search_parents: bool = False) -> dict[str, Any]:
+    project_root = _resolve_marker_root(_root(root), search_parents=search_parents)
     config = _load_docops(project_root)
     docops_marker = (project_root / "docops.yml").exists()
     agents_header = _has_agents_header(project_root)
@@ -214,6 +236,7 @@ def status_project(root: str | Path = ".") -> dict[str, Any]:
     return {
         "active": active,
         "mode": mode,
+        "root": str(project_root),
         "layers": _layers_for(mode, config),
         "markers": {
             "docops_yml": docops_marker,
@@ -395,8 +418,8 @@ def _exit_code(findings: list[DoxFinding]) -> int:
     return 0
 
 
-def check_project(root: str | Path = ".", *, write: bool = False) -> DoxReport:
-    project_root = _root(root)
+def check_project(root: str | Path = ".", *, write: bool = False, search_parents: bool = False) -> DoxReport:
+    project_root = _resolve_marker_root(_root(root), search_parents=search_parents)
     status = status_project(project_root)
     if not status["active"]:
         return DoxReport(status=status, findings=[], exit_code=0)

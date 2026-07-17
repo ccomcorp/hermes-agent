@@ -14,7 +14,7 @@ const runDoxCheck = vi.fn()
 
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<typeof HermesApi>()),
-  getDoxStatus: () => getDoxStatus(),
+  getDoxStatus: (...args: unknown[]) => getDoxStatus(...args),
   runDoxCheck: (...args: unknown[]) => runDoxCheck(...args)
 }))
 
@@ -24,6 +24,17 @@ vi.mock('@/store/session', async importOriginal => {
   return {
     ...actual,
     $currentCwd: mockCwdAtom
+  }
+})
+
+const mockActiveProjectId = atom<null | string>(null)
+const mockProjects = atom<Array<{ id: string; name: string; primary_path?: string; folders?: unknown[] }>>([])
+vi.mock('@/store/projects', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/store/projects')>()
+  return {
+    ...actual,
+    $activeProjectId: mockActiveProjectId,
+    $projects: mockProjects
   }
 })
 
@@ -64,6 +75,8 @@ async function renderDocOps(client?: QueryClient) {
 beforeEach(() => {
   getDoxStatus.mockResolvedValue(activeStatus())
   mockCwdAtom.set('/test-project')
+  mockActiveProjectId.set(null)
+  mockProjects.set([])
 })
 
 afterEach(() => {
@@ -306,5 +319,36 @@ describe('DocOpsView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close DocOps' }))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // ── Target resolution: active project primary path vs cwd ─────────────
+  // Regression guard for the fix that made DocOps resolve the SELECTED
+  // project's workspace, not just the raw session cwd — so a session sitting
+  // in a subfolder still reports the dox-initialized project root.
+
+  it('prefers the active project primary path over the session cwd', async () => {
+    mockCwdAtom.set('/ws/Azure/plans/azure-alpha-remediation')
+    mockActiveProjectId.set('p_azure')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+    })
+  })
+
+  it('falls back to the session cwd when no project is active', async () => {
+    mockCwdAtom.set('/ws/loose-session')
+    mockActiveProjectId.set(null)
+    mockProjects.set([])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/loose-session')
+    })
   })
 })
