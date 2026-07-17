@@ -80,6 +80,21 @@ beforeEach(() => {
   mockScopeAtom.set('__all_projects__')
   mockProjects.set([])
   mockProjectTree.set([])
+  // jsdom does not implement scrollIntoView; Radix Select calls it when the
+  // listbox opens. Stub it so picker-interaction tests don't throw.
+  if (!(Element.prototype as { scrollIntoView?: unknown }).scrollIntoView) {
+    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+  }
+  // Radix also probes pointer-capture APIs jsdom lacks.
+  if (!(Element.prototype as { hasPointerCapture?: unknown }).hasPointerCapture) {
+    ;(Element.prototype as unknown as { hasPointerCapture: () => boolean }).hasPointerCapture = () => false
+  }
+  if (!(Element.prototype as { setPointerCapture?: unknown }).setPointerCapture) {
+    ;(Element.prototype as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {}
+  }
+  if (!(Element.prototype as { releasePointerCapture?: unknown }).releasePointerCapture) {
+    ;(Element.prototype as unknown as { releasePointerCapture: () => void }).releasePointerCapture = () => {}
+  }
 })
 
 afterEach(() => {
@@ -374,9 +389,9 @@ describe('DocOpsView', () => {
 
   // ── Explicit project picker ───────────────────────────────────────────
 
-  it('renders a project picker listing projects with resolvable paths', async () => {
+  it('renders a project picker trigger listing the scoped project', async () => {
     mockCwdAtom.set('/ws')
-    mockScopeAtom.set('__all_projects__')
+    mockScopeAtom.set('p_azure')
     mockProjects.set([
       { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never,
       { id: 'p_teams', name: 'Teams', primary_path: '/ws/Teams', folders: [] } as never
@@ -384,12 +399,27 @@ describe('DocOpsView', () => {
 
     await renderDocOps()
 
+    // Radix Select renders a button trigger (aria-label), not a native combobox.
     await waitFor(() => {
       expect(screen.getByRole('combobox', { name: 'DocOps project' })).toBeDefined()
     })
-    expect(screen.getByRole('option', { name: 'Azure' })).toBeDefined()
-    expect(screen.getByRole('option', { name: 'Teams' })).toBeDefined()
-    expect(screen.getByRole('option', { name: 'Current directory' })).toBeDefined()
+    // Default reflects the scoped project label.
+    expect(screen.getByText('Azure')).toBeDefined()
+    expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+  })
+
+  it('defaults to Current directory when no project is scoped', async () => {
+    mockCwdAtom.set('/ws/loose')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/loose')
+    })
   })
 
   it('queries the picked project path when the user selects one', async () => {
@@ -401,27 +431,14 @@ describe('DocOpsView', () => {
 
     await renderDocOps()
 
-    const select = (await screen.findByRole('combobox', { name: 'DocOps project' })) as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'p_azure' } })
+    const trigger = await screen.findByRole('combobox', { name: 'DocOps project' })
+    fireEvent.click(trigger)
+
+    const option = await screen.findByRole('option', { name: 'Azure' })
+    fireEvent.click(option)
 
     await waitFor(() => {
       expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
     })
-  })
-
-  it('defaults the picker to the scoped project', async () => {
-    mockCwdAtom.set('/ws')
-    mockScopeAtom.set('p_azure')
-    mockProjects.set([
-      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
-    ])
-
-    await renderDocOps()
-
-    const select = (await screen.findByRole('combobox', { name: 'DocOps project' })) as HTMLSelectElement
-    await waitFor(() => {
-      expect(select.value).toBe('p_azure')
-    })
-    expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
   })
 })

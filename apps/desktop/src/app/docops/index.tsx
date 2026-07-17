@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getDoxStatus, runDoxCheck } from '@/hermes'
 import { cn } from '@/lib/utils'
 import {
@@ -301,22 +302,26 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   const pickerValue = selectedId ?? scopedId
   const projectPicker =
     projectOptions.length > 0 ? (
-      <label className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
-        <Codicon name="folder" size="0.875rem" />
-        <select
+      <Select onValueChange={setSelectedId} value={pickerValue}>
+        <SelectTrigger
           aria-label="DocOps project"
-          className="max-w-[16rem] truncate rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground/90 outline-none focus:border-border"
-          onChange={e => setSelectedId(e.target.value)}
-          value={pickerValue}
+          className="h-7 max-w-[16rem] text-xs"
+          size="sm"
         >
-          {cwd ? <option value="__cwd__">Current directory</option> : null}
+          <span className="flex items-center gap-1.5 truncate">
+            <Codicon name="folder" size="0.875rem" />
+            <SelectValue placeholder="Select project" />
+          </span>
+        </SelectTrigger>
+        <SelectContent>
+          {cwd ? <SelectItem value="__cwd__">Current directory</SelectItem> : null}
           {projectOptions.map(opt => (
-            <option key={opt.id} value={opt.id}>
+            <SelectItem key={opt.id} value={opt.id}>
               {opt.label}
-            </option>
+            </SelectItem>
           ))}
-        </select>
-      </label>
+        </SelectContent>
+      </Select>
     ) : null
 
   const headerActions = (
