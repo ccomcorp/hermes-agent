@@ -371,4 +371,57 @@ describe('DocOpsView', () => {
       expect(getDoxStatus).toHaveBeenCalledWith('/ws/loose-session')
     })
   })
+
+  // ── Explicit project picker ───────────────────────────────────────────
+
+  it('renders a project picker listing projects with resolvable paths', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never,
+      { id: 'p_teams', name: 'Teams', primary_path: '/ws/Teams', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: 'DocOps project' })).toBeDefined()
+    })
+    expect(screen.getByRole('option', { name: 'Azure' })).toBeDefined()
+    expect(screen.getByRole('option', { name: 'Teams' })).toBeDefined()
+    expect(screen.getByRole('option', { name: 'Current directory' })).toBeDefined()
+  })
+
+  it('queries the picked project path when the user selects one', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    const select = (await screen.findByRole('combobox', { name: 'DocOps project' })) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'p_azure' } })
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+    })
+  })
+
+  it('defaults the picker to the scoped project', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    const select = (await screen.findByRole('combobox', { name: 'DocOps project' })) as HTMLSelectElement
+    await waitFor(() => {
+      expect(select.value).toBe('p_azure')
+    })
+    expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+  })
 })

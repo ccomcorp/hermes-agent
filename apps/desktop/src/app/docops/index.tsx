@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
@@ -211,22 +211,48 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   const projectScope = useStore($projectScope)
   const projects = useStore($projects)
   const projectTree = useStore($projectTree)
-  // Resolve the DocOps target from the SIDEBAR-SCOPED project ($projectScope,
-  // what `enterProject` sets), mirroring resolveNewSessionCwd: tree path first,
-  // then the project list's primary workspace path. This makes a session sitting
-  // in a subfolder still report the project that was `dox init`-ed. Fall back to
-  // the live cwd when no project is scoped ("All projects"). The backend walks
-  // parents to the nearest docops.yml, so a subfolder cwd still resolves too.
-  let scopedPath = ''
-  if (projectScope && projectScope !== ALL_PROJECTS) {
-    const treeNode = projectTree.find(node => node.id === projectScope)
-    scopedPath = (treeNode?.path || treeNode?.repos.find(repo => repo.path)?.path || '').trim()
-    if (!scopedPath) {
-      const listed = projects.find(proj => proj.id === projectScope)
-      scopedPath = (listed ? projectWorkspacePath(listed)?.trim() : '') || ''
+
+  // Build the explicit project picker options: every project with a resolvable
+  // workspace path (tree path first, then the list's primary path), plus a
+  // "Current directory" fallback for loose / cwd-only sessions. DocOps no longer
+  // *guesses* which project you mean from ambient nav state — you pick it. The
+  // default selection still mirrors the scoped project (or cwd) so it "just
+  // works" when the ambient guess is right, but you can override.
+  const cwd = currentCwd?.trim() || ''
+  const projectOptions = useMemo(() => {
+    const opts: Array<{ id: string; label: string; path: string }> = []
+    const seen = new Set<string>()
+    for (const proj of projects) {
+      const treeNode = projectTree.find(node => node.id === proj.id)
+      const path = (
+        treeNode?.path
+        || treeNode?.repos.find(repo => repo.path)?.path
+        || projectWorkspacePath(proj)
+        || ''
+      ).trim()
+      if (path && !seen.has(proj.id)) {
+        seen.add(proj.id)
+        opts.push({ id: proj.id, label: proj.name || path, path })
+      }
     }
-  }
-  const projectPath = scopedPath || currentCwd?.trim() || ''
+    opts.sort((a, b) => a.label.localeCompare(b.label))
+    return opts
+  }, [projects, projectTree])
+
+  // Default target from the sidebar-scoped project, else cwd.
+  const scopedPath = useMemo(() => {
+    if (projectScope && projectScope !== ALL_PROJECTS) {
+      const match = projectOptions.find(o => o.id === projectScope)
+      if (match) return match.path
+    }
+    return cwd
+  }, [projectScope, projectOptions, cwd])
+
+  // Explicit user override (via the picker). null = follow the default above.
+  const [selectedId, setSelectedId] = useState<null | string>(null)
+  const selectedOption = selectedId ? projectOptions.find(o => o.id === selectedId) : undefined
+  const projectPath = selectedOption?.path || (selectedId === '__cwd__' ? cwd : scopedPath)
+
   const queryClient = useQueryClient()
   const [checkRunning, setCheckRunning] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
@@ -266,8 +292,36 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   }
 
   const subtitle = projectPath ? shortPath(projectPath) : 'No project selected'
+  // Current value for the picker: explicit override, else the scoped project id
+  // (so the dropdown reflects the ambient default), else the cwd sentinel.
+  const scopedId =
+    projectScope && projectScope !== ALL_PROJECTS && projectOptions.some(o => o.id === projectScope)
+      ? projectScope
+      : '__cwd__'
+  const pickerValue = selectedId ?? scopedId
+  const projectPicker =
+    projectOptions.length > 0 ? (
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
+        <Codicon name="folder" size="0.875rem" />
+        <select
+          aria-label="DocOps project"
+          className="max-w-[16rem] truncate rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground/90 outline-none focus:border-border"
+          onChange={e => setSelectedId(e.target.value)}
+          value={pickerValue}
+        >
+          {cwd ? <option value="__cwd__">Current directory</option> : null}
+          {projectOptions.map(opt => (
+            <option key={opt.id} value={opt.id}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null
+
   const headerActions = (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-2">
+      {projectPicker}
       {projectPath ? (
         <>
           <PanelAction disabled={isFetching || checkRunning} icon="refresh" onClick={handleRefresh}>
