@@ -29,3 +29,4 @@ Keep entries short. Shard or archive if approaching the ledger word budget in `d
 ### Operator home (hermes-home, not this git tree)
 
 - MEMORY/USER consolidated; QMD MCP re-enabled; gbrain skill narrative reconciled; dream cycle script import+`--dir` (see hermes-home cron `dbb156f78f80`).
+- **2026-07-17** — cli: fix spurious `Unknown toolsets: mcp-<server>` init warning — pre-discovery validation now accepts the canonical `mcp-<server>` toolset form for configured `mcp_servers` (`_unknown_toolsets_pre_discovery`, cli.py; 7 regression tests in tests/hermes_cli/test_toolset_init_warning.py).

@@ -37,3 +37,11 @@
 - **Root cause:** `DocOpsView` registered as overlay route (`OVERLAY_VIEWS` includes `docops`) but did **not** wrap in shared `Panel`/`OverlayView` chrome (unlike Agents/Cron/Profiles/Starmap). Bare `h-full` content rendered without fixed inset card → full-window paint. Palette used frozen dark-theme greens/reds (`text-green-300`, `bg-green-900/*`) instead of semantic/`PanelPill` tokens.
 - **Fix:** Rewrite `apps/desktop/src/app/docops/index.tsx` to host in `Panel` (Esc/backdrop/close), `PanelHeader`/`PanelEmpty`/`PanelPill`/`PanelMeta`/`PanelAction`, theme-safe tokens, Refresh + Run Check actions. Tests 18/18 green; typecheck clean.
 - **Ship:** Desktop rebuild+restart required for the running app to show the fix.
+
+## 2026-07-17 — Fix: spurious "Unknown toolsets: mcp-*" warning at agent init
+
+- **Symptom:** Every spawned agent (kanban workers, CLI sessions) with `mcp-codegraph` in `platform_toolsets` printed `Warning: Unknown toolsets: mcp-codegraph` despite a correctly configured `mcp_servers.codegraph`.
+- **Root cause:** `HermesCLI.__init__` pre-discovery validation whitelisted only *bare* `mcp_servers` key names, but `discover_mcp_tools` registers MCP toolsets under the canonical `mcp-<server>` form (tools/mcp_tool.py `toolset_name = f"mcp-{name}"`). The canonical form therefore always failed pre-discovery validation.
+- **Fix:** Extracted `_unknown_toolsets_pre_discovery()` in cli.py — accepts bare server names AND the `mcp-`-prefixed canonical form when `<server>` is configured. Regression tests in `tests/hermes_cli/test_toolset_init_warning.py` (7/7 green).
+- **Verified:** new tests 7/7; `test_toolsets.py` + `test_mcp_dynamic_discovery.py` — 3 failures in TestMessageHandler confirmed PRE-EXISTING (identical on pristine tree via git stash); diff LF-clean (21+/2-).
+- **Ship:** New spawns load fixed code from disk; running gateway/Desktop keep old image until process restart.

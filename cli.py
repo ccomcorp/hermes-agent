@@ -3674,6 +3674,25 @@ def save_config_value(key_path: str, value: any) -> bool:
 # HermesCLI Class
 # ============================================================================
 
+def _unknown_toolsets_pre_discovery(toolsets, mcp_server_names):
+    """Return toolset names that fail validation before MCP discovery runs.
+
+    MCP servers attach later (``discover_mcp_tools``) under the canonical
+    toolset name ``mcp-<server>`` (see tools/mcp_tool.py). Accept both the
+    bare server name and its ``mcp-``-prefixed canonical form so a properly
+    configured server doesn't warn at agent init.
+    """
+    mcp_names = set(mcp_server_names)
+    unknown = []
+    for name in toolsets or []:
+        if validate_toolset(name) or name in mcp_names:
+            continue
+        if name.startswith("mcp-") and name[len("mcp-"):] in mcp_names:
+            continue
+        unknown.append(name)
+    return unknown
+
+
 class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
     """
     Interactive CLI for the Hermes Agent.
@@ -3884,8 +3903,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
             # Validate each toolset — MCP server names are resolved via
             # live registry aliases (registered during discover_mcp_tools),
             # but discovery hasn't run yet at this point, so exclude them.
-            mcp_names = set((CLI_CONFIG.get("mcp_servers") or {}).keys())
-            invalid = [t for t in toolsets if not validate_toolset(t) and t not in mcp_names]
+            invalid = _unknown_toolsets_pre_discovery(
+                toolsets, (CLI_CONFIG.get("mcp_servers") or {}).keys())
             if invalid:
                 self._console_print(f"[bold red]Warning: Unknown toolsets: {', '.join(invalid)}[/]")
         
