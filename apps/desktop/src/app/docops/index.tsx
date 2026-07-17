@@ -59,11 +59,13 @@ function shortPath(path: string, max = 64): string {
 
 function ActiveDocOpsBody({
   checkError,
+  checkResult,
   checkRunning,
   onRunCheck,
   status
 }: {
   checkError: string | null
+  checkResult: null | { driftCount: number; exitCode: number; at: string }
   checkRunning: boolean
   onRunCheck: () => void
   status: DoxProjectStatus
@@ -83,6 +85,29 @@ function ActiveDocOpsBody({
         >
           <Codicon className="mt-0.5 shrink-0" name="error" size="0.875rem" />
           <span className="min-w-0 break-words">{checkError}</span>
+        </div>
+      ) : null}
+
+      {checkResult && !checkError ? (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-lg border px-3 py-2 text-xs',
+            checkResult.driftCount === 0
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+          )}
+          role="status"
+        >
+          <Codicon
+            className="mt-0.5 shrink-0"
+            name={checkResult.driftCount === 0 ? 'pass-filled' : 'warning'}
+            size="0.875rem"
+          />
+          <span className="min-w-0 break-words">
+            {checkResult.driftCount === 0
+              ? `Check complete — no drift found. Documentation is in sync. (${checkResult.at})`
+              : `Check complete — ${checkResult.driftCount} item${checkResult.driftCount === 1 ? '' : 's'} need attention (see Drift below). (${checkResult.at})`}
+          </span>
         </div>
       ) : null}
 
@@ -130,11 +155,13 @@ function ActiveDocOpsBody({
       <section className="space-y-2">
         <PanelSectionLabel>Drift</PanelSectionLabel>
         {status.drift.length === 0 ? (
-          <p className="text-xs text-muted-foreground/80">
-            No drift detected. Use <span className="font-medium text-foreground/80">Run Check</span> or{' '}
-            <code className="rounded bg-foreground/5 px-1 py-0.5 text-[0.68rem]">hermes dox check</code> for a full
-            analysis.
-          </p>
+          <div className="flex items-start gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2 text-xs text-emerald-400/90">
+            <Codicon className="mt-0.5 shrink-0" name="pass-filled" size="0.875rem" />
+            <span>
+              <span className="font-medium">No drift — documentation is in sync.</span> Every contract index,
+              ledger, and report pack matches its rules. Nothing to do here.
+            </span>
+          </div>
         ) : (
           <ul className="space-y-1.5">
             {status.drift.map((item, i) => (
@@ -164,6 +191,18 @@ function ActiveDocOpsBody({
           </PanelPill>
           <span className="text-xs text-muted-foreground/80">pending</span>
         </div>
+        <p className="text-xs leading-relaxed text-muted-foreground/70">
+          {status.pending_advisories > 0 ? (
+            <>
+              Reminders that files were edited in a DOX-aware project and their docs may need updating. This counter
+              is <span className="font-medium text-foreground/75">profile-wide</span> — it can include edits from
+              other projects/sessions, so it is not necessarily about this project. They clear automatically on the
+              next agent turn, or via <code className="rounded bg-foreground/5 px-1">hermes dox status</code>.
+            </>
+          ) : (
+            'No pending advisories. Edits in DOX-aware projects would appear here as reminders to update docs.'
+          )}
+        </p>
       </section>
 
       <section className="space-y-2">
@@ -257,6 +296,8 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient()
   const [checkRunning, setCheckRunning] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
+  // Result banner after a Run Check so the action is never silent.
+  const [checkResult, setCheckResult] = useState<null | { driftCount: number; exitCode: number; at: string }>(null)
 
   const {
     data: status,
@@ -277,8 +318,12 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
     if (!projectPath) return
     setCheckRunning(true)
     setCheckError(null)
+    setCheckResult(null)
     try {
-      await runDoxCheck(projectPath)
+      const report = await runDoxCheck(projectPath)
+      const driftCount = Array.isArray(report?.drift) ? report.drift.length : 0
+      const exitCode = typeof report?.exit_code === 'number' ? report.exit_code : 0
+      setCheckResult({ driftCount, exitCode, at: new Date().toLocaleTimeString() })
       await queryClient.invalidateQueries({ queryKey: ['dox', 'status', projectPath] })
     } catch (err) {
       setCheckError(err instanceof Error ? err.message : 'Check failed')
@@ -289,6 +334,7 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
 
   const handleRefresh = () => {
     setCheckError(null)
+    setCheckResult(null)
     void refetch()
   }
 
@@ -386,6 +432,7 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
       ) : (
         <ActiveDocOpsBody
           checkError={checkError}
+          checkResult={checkResult}
           checkRunning={checkRunning}
           onRunCheck={() => void handleRunCheck()}
           status={status}

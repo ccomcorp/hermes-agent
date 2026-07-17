@@ -222,13 +222,12 @@ describe('DocOpsView', () => {
     })
   })
 
-  it('shows empty drift message when no drift', async () => {
+  it('shows an all-clear drift message when no drift', async () => {
     getDoxStatus.mockResolvedValue(activeStatus({ drift: [] }))
     await renderDocOps()
 
     await waitFor(() => {
-      expect(screen.getByText(/No drift detected/)).toBeDefined()
-      expect(screen.getByText(/hermes dox check/)).toBeDefined()
+      expect(screen.getByText(/documentation is in sync/i)).toBeDefined()
     })
   })
 
@@ -439,6 +438,52 @@ describe('DocOpsView', () => {
 
     await waitFor(() => {
       expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+    })
+  })
+
+  // ── Run Check feedback (no longer silent) ─────────────────────────────
+
+  it('shows an all-clear banner after a clean check', async () => {
+    runDoxCheck.mockResolvedValue({ status: {} as DoxReport['status'], drift: [], exit_code: 0 })
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Check complete — no drift found/)).toBeDefined()
+    })
+  })
+
+  it('shows a findings banner after a check with drift', async () => {
+    runDoxCheck.mockResolvedValue({
+      status: {} as DoxReport['status'],
+      drift: [
+        { tier: 'A', path: 'reports/x/report.html', kind: 'report_html_missing' },
+        { tier: 'A', path: 'reports/x/MANIFEST.json', kind: 'manifest_missing' }
+      ],
+      exit_code: 0
+    })
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Check complete — 2 items need attention/)).toBeDefined()
+    })
+  })
+
+  it('explains the advisories counter is profile-wide', async () => {
+    getDoxStatus.mockResolvedValue(activeStatus({ pending_advisories: 3 }))
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByText(/profile-wide/)).toBeDefined()
     })
   })
 })
