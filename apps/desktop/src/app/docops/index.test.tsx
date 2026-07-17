@@ -27,14 +27,16 @@ vi.mock('@/store/session', async importOriginal => {
   }
 })
 
-const mockActiveProjectId = atom<null | string>(null)
+const mockScopeAtom = atom<string>('__all_projects__')
 const mockProjects = atom<Array<{ id: string; name: string; primary_path?: string; folders?: unknown[] }>>([])
+const mockProjectTree = atom<Array<{ id: string; path?: string; repos: Array<{ path?: string }> }>>([])
 vi.mock('@/store/projects', async importOriginal => {
   const actual = await importOriginal<typeof import('@/store/projects')>()
   return {
     ...actual,
-    $activeProjectId: mockActiveProjectId,
-    $projects: mockProjects
+    $projectScope: mockScopeAtom,
+    $projects: mockProjects,
+    $projectTree: mockProjectTree
   }
 })
 
@@ -75,8 +77,9 @@ async function renderDocOps(client?: QueryClient) {
 beforeEach(() => {
   getDoxStatus.mockResolvedValue(activeStatus())
   mockCwdAtom.set('/test-project')
-  mockActiveProjectId.set(null)
+  mockScopeAtom.set('__all_projects__')
   mockProjects.set([])
+  mockProjectTree.set([])
 })
 
 afterEach(() => {
@@ -326,9 +329,10 @@ describe('DocOpsView', () => {
   // project's workspace, not just the raw session cwd — so a session sitting
   // in a subfolder still reports the dox-initialized project root.
 
-  it('prefers the active project primary path over the session cwd', async () => {
-    mockCwdAtom.set('/ws/Azure/plans/azure-alpha-remediation')
-    mockActiveProjectId.set('p_azure')
+  it('prefers the scoped project path over the session cwd', async () => {
+    // cwd is a subfolder / parent root; the panel must target the scoped project.
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
     mockProjects.set([
       { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
     ])
@@ -340,10 +344,26 @@ describe('DocOpsView', () => {
     })
   })
 
-  it('falls back to the session cwd when no project is active', async () => {
+  it('prefers the project tree path when present', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
+    mockProjectTree.set([{ id: 'p_azure', path: '/ws/Azure-tree', repos: [] }])
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure-list', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure-tree')
+    })
+  })
+
+  it('falls back to the session cwd when no project is scoped', async () => {
     mockCwdAtom.set('/ws/loose-session')
-    mockActiveProjectId.set(null)
+    mockScopeAtom.set('__all_projects__')
     mockProjects.set([])
+    mockProjectTree.set([])
 
     await renderDocOps()
 

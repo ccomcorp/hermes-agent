@@ -7,7 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { getDoxStatus, runDoxCheck } from '@/hermes'
 import { cn } from '@/lib/utils'
-import { $activeProjectId, $projects, projectWorkspacePath } from '@/store/projects'
+import {
+  $projects,
+  $projectScope,
+  $projectTree,
+  ALL_PROJECTS,
+  projectWorkspacePath
+} from '@/store/projects'
 import { $currentCwd } from '@/store/session'
 import type { DoxProjectStatus } from '@/types/hermes.ts'
 
@@ -202,16 +208,25 @@ function ActiveDocOpsBody({
 
 export function DocOpsView({ onClose }: { onClose: () => void }) {
   const currentCwd = useStore($currentCwd)
-  const activeProjectId = useStore($activeProjectId)
+  const projectScope = useStore($projectScope)
   const projects = useStore($projects)
-  // Resolve the DocOps target: prefer the selected project's primary workspace
-  // path (so a session sitting in a subfolder — or with no cwd yet — still
-  // reports the project that was `dox init`-ed), falling back to the live cwd.
-  // The backend walks parents to the nearest docops.yml, so a subfolder cwd
-  // still resolves correctly even when no project is active.
-  const activeProject = projects.find(p => p.id === activeProjectId)
-  const projectPath =
-    (activeProject ? projectWorkspacePath(activeProject)?.trim() : '') || currentCwd?.trim() || ''
+  const projectTree = useStore($projectTree)
+  // Resolve the DocOps target from the SIDEBAR-SCOPED project ($projectScope,
+  // what `enterProject` sets), mirroring resolveNewSessionCwd: tree path first,
+  // then the project list's primary workspace path. This makes a session sitting
+  // in a subfolder still report the project that was `dox init`-ed. Fall back to
+  // the live cwd when no project is scoped ("All projects"). The backend walks
+  // parents to the nearest docops.yml, so a subfolder cwd still resolves too.
+  let scopedPath = ''
+  if (projectScope && projectScope !== ALL_PROJECTS) {
+    const treeNode = projectTree.find(node => node.id === projectScope)
+    scopedPath = (treeNode?.path || treeNode?.repos.find(repo => repo.path)?.path || '').trim()
+    if (!scopedPath) {
+      const listed = projects.find(proj => proj.id === projectScope)
+      scopedPath = (listed ? projectWorkspacePath(listed)?.trim() : '') || ''
+    }
+  }
+  const projectPath = scopedPath || currentCwd?.trim() || ''
   const queryClient = useQueryClient()
   const [checkRunning, setCheckRunning] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
