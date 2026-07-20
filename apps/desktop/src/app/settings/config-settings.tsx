@@ -20,12 +20,14 @@ import { PanelEmpty } from '../overlays/panel'
 
 import { CONTROL_TEXT, EMPTY_SELECT_VALUE, ENUM_OPTIONS, FIELD_DESCRIPTIONS, FIELD_LABELS, SECTIONS } from './constants'
 import { FallbackModelsField } from './fallback-models-field'
+import { DelegationRoutesField } from './delegation-routes-field'
 import { fieldCopyForSchemaKey } from './field-copy'
 import { enumOptionsFor, getNested, prettyName, setNested } from './helpers'
 import { MemoryConnect } from './memory/connect'
 import { ModelSettings, ModelSettingsSkeleton } from './model-settings'
 import { EmptyState, ListRow, LoadingState, SettingsContent } from './primitives'
 import { ProviderConfigPanel } from './provider-config-panel'
+import { RouteAdvisorControls } from './route-advisor-controls'
 
 // On the Voice page, only surface the sub-fields of the *selected* TTS/STT
 // provider — otherwise every provider's options render at once (the "totally
@@ -54,7 +56,8 @@ function ConfigField({
   enumOptions,
   optionLabels,
   onChange,
-  descriptionExtra
+  descriptionExtra,
+  config
 }: {
   schemaKey: string
   schema: ConfigFieldSchema
@@ -63,6 +66,7 @@ function ConfigField({
   optionLabels?: Record<string, string>
   onChange: (value: unknown) => void
   descriptionExtra?: ReactNode
+  config: HermesConfigRecord
 }) {
   const { t } = useI18n()
   const c = t.settings.config
@@ -106,6 +110,13 @@ function ConfigField({
   // dedicated structured editor instead.
   if (schemaKey === 'fallback_providers') {
     return row(<FallbackModelsField onChange={onChange} value={value} />, true)
+  }
+
+  // `delegation.routes` is a map of named-route objects; the generic
+  // `list` branch below would stringify them to "[object Object]". Render the
+  // dedicated structured editor instead.
+  if (schemaKey === 'delegation.routes') {
+    return row(<DelegationRoutesField onChange={onChange} value={value} config={config} />, true)
   }
 
   if (schema.type === 'boolean') {
@@ -516,6 +527,14 @@ export function ConfigSettings({
           <ModelSettings onMainModelChanged={onMainModelChanged} />
         </div>
       )}
+      {activeSectionId === 'delegation' && (
+        <div className="mb-6">
+          <RouteAdvisorControls
+            config={config}
+            onConfigChange={updateConfig}
+          />
+        </div>
+      )}
       {visibleFields.length === 0 ? (
         <EmptyState description={c.emptyDesc} title={c.emptyTitle} />
       ) : (
@@ -523,6 +542,7 @@ export function ConfigSettings({
           {visibleFields.map(([key, field]) => (
             <div className="scroll-mt-6 rounded-lg" id={`setting-field-${key}`} key={key}>
               <ConfigField
+                config={config}
                 descriptionExtra={
                   key === 'memory.provider' && Boolean(getNested(config, key)) ? (
                     <MemoryConnect provider={String(getNested(config, key))} />

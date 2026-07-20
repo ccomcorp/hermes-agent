@@ -53,6 +53,15 @@ fi
 
 PYTHON="$VENV/bin/python"
 
+# Collection-time imports run before tests/conftest.py can install its
+# per-test HERMES_HOME fixture. Seed a safe runner-scoped home so modules that
+# call get_hermes_home() at import time never touch the developer's real
+# profile (and don't fall through to Path.home(), which is unreliable for
+# Windows Python under MSYS env -i without USERPROFILE). The autouse fixture
+# still replaces HERMES_HOME with a per-test tempdir after collection.
+COLLECTION_HERMES_HOME="${TMPDIR:-/tmp}/hermes-agent-test-home-$$"
+mkdir -p "$COLLECTION_HERMES_HOME"
+
 
 # ── Live-gateway plugin (computed before we drop env) ───────────────────────
 EXTRA_PYTHONPATH=""
@@ -74,6 +83,12 @@ cd "$REPO_ROOT"
 exec env -i \
   PATH="$PATH" \
   HOME="$HOME" \
+  HERMES_HOME="$COLLECTION_HERMES_HOME" \
+  USERPROFILE="${USERPROFILE-}" \
+  HOMEDRIVE="${HOMEDRIVE-}" \
+  HOMEPATH="${HOMEPATH-}" \
+  LOCALAPPDATA="${LOCALAPPDATA-}" \
+  APPDATA="${APPDATA-}" \
   TZ=UTC \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \

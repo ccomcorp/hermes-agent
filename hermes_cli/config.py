@@ -2223,6 +2223,13 @@ DEFAULT_CONFIG = {
                            # "codex_responses", or "anthropic_messages". Empty = auto-detect
                            # from URL (e.g. /anthropic suffix → anthropic_messages). Set this
                            # explicitly for non-standard endpoints the heuristic can't detect.
+        # Optional named route presets for delegate_task(route=...). Each route
+        # is a sparse override over the base delegation block and may set:
+        # provider, model, base_url, api_key, api_mode, reasoning_effort, and
+        # description. Route names are model-visible when configured; keep them
+        # short and task-oriented (e.g. coding, review, research). Reserved:
+        # default, none, auto, all, any, parent.
+        "routes": {},
         # When a child's toolsets are narrowed relative to the parent (by role
         # or config -- subagents inherit the parent's toolsets; the model has no
         # delegate_task toolsets arg), preserve any MCP toolsets the parent
@@ -2274,6 +2281,17 @@ DEFAULT_CONFIG = {
         # Flip to true only if you trust delegated work to run dangerous cmds
         # without human review (cron pipelines, batch automation, etc.).
         "subagent_auto_approve": False,
+    },
+
+    # Deterministic delegation-route advisor. Off by default; when enabled it
+    # may append a short pre_llm_call nudge to implementation-heavy user turns
+    # if delegation.routes.coding is configured. It never dispatches or swaps
+    # the main session model.
+    "route_advisor": {
+        "mode": "off",  # off | log | nudge
+        "min_level": "complex",  # moderate | complex | expert
+        "cooldown_turns": 5,
+        "log_signals": True,
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts
@@ -2729,6 +2747,10 @@ DEFAULT_CONFIG = {
         # same task/profile (spawn_failed, timed_out, or crashed). Reassignment
         # resets the streak for the new profile.
         "failure_limit": 2,
+        # Worker self-blocks for orchestrator decomposition after this many
+        # context compressions in one run. 0 disables the auto-block and keeps
+        # the normal repeated-compression warning only.
+        "compaction_block_limit": 3,
         # Worker stdout/stderr logs rotate at spawn time. Defaults preserve
         # the historical 2 MiB + one-backup behavior; long-running workers can
         # raise these to keep more early failure evidence.
@@ -5227,7 +5249,7 @@ _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "providers", "fallback_model",
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
-    "auxiliary", "moa", "custom_providers", "context", "memory", "gateway",
+    "route_advisor", "auxiliary", "moa", "custom_providers", "context", "memory", "gateway",
     "sessions", "streaming", "updates", "mcp_servers",
 }
 
@@ -5394,6 +5416,47 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                 f"voice.speak_mode must be 'full' or 'conversational', got {speak_mode!r}",
                 "Set voice.speak_mode to full to preserve existing full-text TTS, or conversational for short spoken replies",
             ))
+
+    # ── delegation.routes named route presets ───────────────────────────
+    delegation_cfg = config.get("delegation")
+    if isinstance(delegation_cfg, dict) and "routes" in delegation_cfg:
+        routes_cfg = delegation_cfg.get("routes")
+        if routes_cfg is not None and not isinstance(routes_cfg, dict):
+            issues.append(ConfigIssue(
+                "error",
+                f"delegation.routes should be a dict of named route presets, got {type(routes_cfg).__name__}",
+                "Change to:\n"
+                "  delegation:\n"
+                "    routes:\n"
+                "      coding:\n"
+                "        provider: openrouter\n"
+                "        model: anthropic/claude-sonnet-4",
+            ))
+        elif isinstance(routes_cfg, dict):
+            import re
+
+            route_name_re = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+            reserved_route_names = {"default", "none", "auto", "all", "any", "parent"}
+            for raw_name, route_block in routes_cfg.items():
+                route_name = str(raw_name).strip()
+                if not route_name_re.fullmatch(route_name):
+                    issues.append(ConfigIssue(
+                        "error",
+                        f"delegation.routes.{route_name or raw_name} has an invalid route name",
+                        "Route names must match ^[a-z][a-z0-9_-]{0,31}$, e.g. coding, review, research",
+                    ))
+                if route_name.lower() in reserved_route_names:
+                    issues.append(ConfigIssue(
+                        "error",
+                        f"delegation.routes.{route_name} uses a reserved route name",
+                        "Choose a task-specific route name such as coding, review, research, or advisor",
+                    ))
+                if not isinstance(route_block, dict):
+                    issues.append(ConfigIssue(
+                        "error",
+                        f"delegation.routes.{route_name or raw_name} should be a dict, got {type(route_block).__name__}",
+                        "Each route should contain sparse delegation overrides like provider/model/base_url/api_key/api_mode",
+                    ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:

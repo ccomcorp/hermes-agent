@@ -10833,6 +10833,28 @@ def _(rid, params: dict) -> dict:
             {"key": "terminal.cwd", "value": cwd, "cwd": cwd, "branch": _git_branch_for_cwd(cwd)},
         )
 
+    if key == "delegation.routes":
+        try:
+            routes = value if value is not None else {}
+            if not isinstance(routes, dict):
+                return _err(rid, 4002, "delegation.routes must be an object")
+            _write_config_key("delegation.routes", routes)
+            return _ok(rid, {"key": key, "value": routes})
+        except Exception as e:
+            return _err(rid, 5001, str(e))
+
+    if key.startswith("route_advisor."):
+        sub_key = key[len("route_advisor."):]
+        if not sub_key:
+            return _err(rid, 4002, "route_advisor key required")
+        if isinstance(value, (dict, list, tuple, set)):
+            return _err(rid, 4002, f"{key} must be a scalar value")
+        try:
+            _write_config_key(key, value)
+            return _ok(rid, {"key": key, "value": value})
+        except Exception as e:
+            return _err(rid, 5001, str(e))
+
     if key in {"prompt", "personality", "skin"}:
         try:
             cfg = _load_cfg()

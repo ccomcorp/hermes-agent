@@ -287,6 +287,45 @@ def heartbeat_current_worker_from_env() -> bool:
         return False
 
 
+_AUTOBLOCK_REASON_TAG = "auto-block:context-overflow"
+
+
+def block_current_worker_for_decomposition(
+    task_id: str,
+    compression_count: int,
+    limit: int,
+) -> bool:
+    """Self-block the current worker's card so an orchestrator decomposes it.
+
+    Best-effort and fail-open: callers must not branch on this result. Returns
+    True only when a block write was attempted.
+    """
+    env_tid = os.environ.get("HERMES_KANBAN_TASK")
+    if not env_tid or task_id != env_tid:
+        return False
+    reason = (
+        f"{_AUTOBLOCK_REASON_TAG} — this card compressed its context "
+        f"{compression_count}x (>= limit {limit}) and cannot complete or hand "
+        f"off cleanly in one worker. ORCHESTRATOR ACTION: reclaim, inspect any "
+        f"staged edits in the workspace, split this card into smaller sibling "
+        f"cards (one file/concern each), and dispatch those. Do NOT simply "
+        f"re-dispatch this card unchanged — it will overflow again."
+    )
+    try:
+        kb, conn = _connect()
+        try:
+            kb.block_task(conn, task_id, kind="needs_input", reason=reason)
+            return True
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        logger.debug("compaction auto-block: bridge failed", exc_info=True)
+        return False
+
+
 def _ok(**fields: Any) -> str:
     return json.dumps({"ok": True, **fields})
 

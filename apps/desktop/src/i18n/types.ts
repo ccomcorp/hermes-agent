@@ -639,6 +639,63 @@ export interface Translations {
       noKeysMatch: string
       loading: string
     }
+    delegation: {
+      advisorTitle: string
+      advisorDesc: string
+      advisorMode: string
+      advisorModeOff: string
+      advisorModeLog: string
+      advisorModeNudge: string
+      advisorMinLevel: string
+      advisorMinLevelModerate: string
+      advisorMinLevelComplex: string
+      advisorMinLevelExpert: string
+      advisorCooldown: string
+      noRoutes: string
+      routeCount: (count: number) => string
+      seedButton: string
+      seeding: string
+      seededTitle: string
+      seededMessage: string
+      seedFailed: string
+      emptyTitle: string
+      emptyDesc: string
+      addLane: string
+      addLaneTitle: string
+      editLaneTitle: string
+      editLaneDesc: string
+      laneName: string
+      laneProvider: string
+      laneModel: string
+      laneEffort: string
+      laneDescription: string
+      laneDescriptionPlaceholder: string
+      laneBaseUrl: string
+      laneApiKey: string
+      laneApiMode: string
+      apiKeyHint: string
+      selectProvider: string
+      selectModel: string
+      typeModel: string
+      pickProviderFirst: string
+      advanced: string
+      cancel: string
+      saveLane: string
+      edit: string
+      delete: string
+      deleteTitle: string
+      deleteDesc: (name: string) => string
+      deleteConfirm: string
+      colName: string
+      colProvider: string
+      colModel: string
+      colEffort: string
+      colDescription: string
+      apiModeOpenAI: string
+      apiModeAnthropic: string
+      apiModeGemini: string
+      saveEffectNote: string
+    }
     sessions: {
       loading: string
       archivedTitle: string

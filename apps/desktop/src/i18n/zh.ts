@@ -589,7 +589,8 @@ export const zh: Translations = {
         maxIterations: '子智能体轮次上限',
         maxConcurrentChildren: '并行子智能体',
         childTimeoutSeconds: '子智能体超时',
-        reasoningEffort: '子智能体推理强度'
+        reasoningEffort: '子智能体推理强度',
+        routes: '派发路由'
       },
       updates: {
         nonInteractiveLocalChanges: '应用内更新本地更改'
@@ -931,6 +932,65 @@ export const zh: Translations = {
       searchKeys: '搜索提供方…',
       noKeysMatch: '没有匹配的提供方。',
       loading: '正在加载提供方...'
+    },
+    delegation: {
+      advisorTitle: '路由顾问',
+      advisorDesc:
+        '路由顾问会评估子代理任务并建议最佳提供方和模型通道。它只会记录或提示，不会自动调度。',
+      advisorMode: '模式',
+      advisorModeOff: '关闭', // TODO translate
+      advisorModeLog: '记录', // TODO translate
+      advisorModeNudge: '提示', // TODO translate
+      advisorMinLevel: '最低级别',
+      advisorMinLevelModerate: '中等', // TODO translate
+      advisorMinLevelComplex: '复杂', // TODO translate
+      advisorMinLevelExpert: '专家', // TODO translate
+      advisorCooldown: '冷却（轮次）',
+      noRoutes: '未配置通道路由',
+      routeCount: count => `${count} 个通道`,
+      seedButton: '生成建议通道',
+      seeding: '生成中…',
+      seededTitle: '通道已生成',
+      seededMessage: '已根据当前配置引脚生成建议通道。',
+      seedFailed: '无法生成通道。',
+      emptyTitle: '无通道',
+      emptyDesc: '添加通道以将子代理任务路由到特定提供方和模型。',
+      addLane: '添加通道',
+      addLaneTitle: '新建派发通道',
+      editLaneTitle: '编辑派发通道',
+      editLaneDesc: '每个通道将一种任务类型映射到特定提供方和模型。',
+      laneName: '通道名称',
+      laneProvider: '提供方',
+      laneModel: '模型',
+      laneEffort: '推理力度',
+      laneDescription: '描述',
+      laneDescriptionPlaceholder: '例如："Python 项目代码生成"',
+      laneBaseUrl: '基础 URL',
+      laneApiKey: 'API 密钥',
+      laneApiMode: 'API 模式',
+      apiKeyHint: '留空则继承默认值，或使用 ${VAR} 引用密钥',
+      selectProvider: '选择提供方…',
+      selectModel: '选择模型…',
+      typeModel: '输入模型名称…',
+      pickProviderFirst: '请先选择提供方',
+      advanced: '高级',
+      cancel: '取消',
+      saveLane: '保存通道',
+      edit: '编辑',
+      delete: '删除',
+      deleteTitle: '删除通道',
+      deleteDesc: (name: string) => `删除 "${name}" 委托通道？此操作不可撤销。`,
+      deleteConfirm: '删除',
+      colName: '名称',
+      colProvider: '提供方',
+      colModel: '模型',
+      colEffort: '力度',
+      colDescription: '描述',
+      apiModeOpenAI: 'OpenAI 兼容',
+      apiModeAnthropic: 'Anthropic',
+      apiModeGemini: 'Gemini',
+      saveEffectNote:
+        'New lanes appear in new chat sessions. Model changes behind existing lanes take effect on the next delegation \u2014 even in this session.' // TODO translate
     },
     sessions: {
       loading: '正在加载已归档会话…',

@@ -719,6 +719,33 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Reasoning effort for delegated subagents",
         "options": ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
     },
+    "delegation.routes": {
+        "type": "map",
+        "description": (
+            "Named delegation lane presets for subagent work. Each entry "
+            "maps a lane name to a {provider, model, effort, description, "
+            "base_url, api_key, api_mode} config. Leave empty to "
+            "auto-route through the default provider."
+        ),
+        "category": "delegation",
+    },
+    "route_advisor.mode": {
+        "type": "select",
+        "options": ["off", "log", "nudge"],
+        "description": "Route Advisor operating mode: off (disabled), log (record suggestions only), nudge (prompt the agent).",
+        "category": "delegation",
+    },
+    "route_advisor.min_level": {
+        "type": "select",
+        "options": ["moderate", "complex", "expert"],
+        "description": "Minimum task complexity level for which the Route Advisor activates.",
+        "category": "delegation",
+    },
+    "route_advisor.cooldown_turns": {
+        "type": "int",
+        "description": "Number of turns to wait before the advisor re-evaluates a task.",
+        "category": "delegation",
+    },
     "updates.non_interactive_local_changes": {
         "type": "select",
         "description": (

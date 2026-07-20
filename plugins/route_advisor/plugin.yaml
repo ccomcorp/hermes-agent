@@ -1,0 +1,11 @@
+name: route_advisor
+version: 0.1.0
+description: "Deterministic delegation route advisor nudge for implementation-heavy turns"
+author: NousResearch
+kind: standalone
+platforms:
+  - linux
+  - macos
+  - windows
+provides_hooks:
+  - pre_llm_call

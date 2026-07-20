@@ -1420,7 +1420,9 @@ them into invariants before re-requesting review.
 | apps/ | TODO: describe |
 | assets/ | TODO: describe |
 | cron/ | TODO: describe |
+| data/ | TODO: describe |
 | datagen-config-examples/ | TODO: describe |
+| doc/ | TODO: describe |
 | docker/ | TODO: describe |
 | docs/ | TODO: describe |
 | dox/ | TODO: describe |

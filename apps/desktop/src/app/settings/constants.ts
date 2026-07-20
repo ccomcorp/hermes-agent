@@ -469,7 +469,13 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
     maxIterations: 'Subagent Turn Limit',
     maxConcurrentChildren: 'Parallel Subagents',
     childTimeoutSeconds: 'Subagent Timeout',
-    reasoningEffort: 'Subagent Reasoning Effort'
+    reasoningEffort: 'Subagent Reasoning Effort',
+    routes: 'Delegation Routes',
+    route_advisor: {
+      mode: 'Route Advisor Mode',
+      min_level: 'Min Task Level',
+      cooldown_turns: 'Cooldown (turns)'
+    }
   },
   updates: {
     nonInteractiveLocalChanges: 'In-App Update Local Changes'
@@ -567,6 +573,14 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   updates: {
     nonInteractiveLocalChanges:
       'When Hermes updates itself from the app (no terminal prompt), keep local source edits (stash) or throw them away (discard). Terminal updates always ask.'
+  },
+  delegation: {
+    routes: 'Model-to-provider routing table for subagent work. Routes are tried in top-to-bottom order.',
+    route_advisor: {
+      mode: 'Off disables the advisor. Log records suggestions. Nudge prompts the agent to act on recommendations.',
+      min_level: 'Minimum task complexity (moderate/complex/expert) to trigger advisor evaluation.',
+      cooldown_turns: 'Turns to wait before the advisor re-evaluates the same task.'
+    }
   }
 })
 

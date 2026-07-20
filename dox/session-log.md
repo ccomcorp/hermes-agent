@@ -45,3 +45,11 @@
 - **Fix:** Extracted `_unknown_toolsets_pre_discovery()` in cli.py — accepts bare server names AND the `mcp-`-prefixed canonical form when `<server>` is configured. Regression tests in `tests/hermes_cli/test_toolset_init_warning.py` (7/7 green).
 - **Verified:** new tests 7/7; `test_toolsets.py` + `test_mcp_dynamic_discovery.py` — 3 failures in TestMessageHandler confirmed PRE-EXISTING (identical on pristine tree via git stash); diff LF-clean (21+/2-).
 - **Ship:** New spawns load fixed code from disk; running gateway/Desktop keep old image until process restart.
+
+## 2026-07-20 — Delegation routes skills closeout (HS-4)
+
+- **Task:** Kanban HS-4 (t_a6ecfe10) — routing policy skills + DOX closeout. Parents HS-1 (t_b8cea341, core fork), HS-2 (t_db33106a, Desktop panel), HS-3 (t_fcf3e741, route_advisor plugin) all complete.
+- **hermes-model-routing v1.1.0:** Hard truth #2 updated for fork capability (grep probe). Replaced brief fork notice with full Named delegation routes section: config shape (A1), route param usage incl. batch, precedence chain, credential-hygiene rule (R1-B1), effect timing table (R2-B2 corrected), live-probe verification recipe. Added Routing policy (orchestration guidance — plan on main → implement route=coding → review route=review → verify on main) and Relationship to hermes-team-routing comparison table.
+- **hermes-team-routing v1.0.1:** Added related_skills → hermes-model-routing. New "Delegation routes (same-chat model lanes)" section: profile vs route decision matrix, how routes work (config + delegate_task usage), when NOT to use routes (four anti-patterns).
+- **DOX:** CHANGELOG entry, session-log entry, LIVE-STATUS scoreboard row.
+- **No chassis changes** — skills-only update to hermes-home.
