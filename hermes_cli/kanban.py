@@ -33,6 +33,9 @@ from hermes_cli.profiles import get_active_profile_name
 # Small formatting helpers
 # ---------------------------------------------------------------------------
 
+_COMPLEXITY_TIERS = ("trivial", "simple", "moderate", "complex", "expert")
+_COMPLEXITY_OVERRIDE_COLUMN = "complexity_override"
+
 _STATUS_ICONS = {
     "todo":     "◻",
     "ready":    "▶",
@@ -116,6 +119,95 @@ def _parse_workspace_flag(value: str) -> tuple[str, Optional[str]]:
         f"unknown --workspace value {value!r}: use scratch, worktree, "
         "worktree:<path>, or dir:<path>"
     )
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    return any(
+        row["name"] == column
+        for row in conn.execute(f"PRAGMA table_info({table})")
+    )
+
+
+def _format_model_examples(catalog: list[str]) -> str:
+    examples = ", ".join(catalog[:3])
+    return f" Known models include: {examples}" if examples else ""
+
+
+def _validate_create_model_override(raw_model: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Validate ``kanban create --model`` before a card can crash-loop."""
+
+    requested = (raw_model or "").strip()
+    if not requested:
+        return None, None
+
+    from hermes_cli import models as model_registry
+
+    provider, provider_model = model_registry.parse_model_input(requested, "openrouter")
+    provider_scoped = provider != "openrouter"
+
+    if not provider_scoped:
+        try:
+            catalog = list(model_registry.model_ids())
+        except Exception:
+            catalog = []
+        if catalog:
+            if requested in set(catalog):
+                return requested, None
+            examples = _format_model_examples(catalog)
+            raise ValueError(f"unknown --model {requested!r}.{examples}")
+
+    result = model_registry.validate_requested_model(provider_model, provider)
+    corrected = result.get("corrected_model")
+    if corrected:
+        if provider_scoped:
+            model_to_store = f"{provider}:{corrected}"
+        else:
+            model_to_store = str(corrected)
+    else:
+        model_to_store = requested
+
+    if not result.get("accepted") or not result.get("persist"):
+        message = str(result.get("message") or "model was not accepted")
+        if (
+            provider_scoped
+            and (provider == "custom" or str(provider).startswith("custom:"))
+            and result.get("persist")
+            and "model listing" in message.lower()
+        ):
+            return model_to_store, message
+        raise ValueError(f"unknown --model {requested!r}: {message}")
+
+    warning = str(result.get("message") or "").strip() or None
+    return model_to_store, warning
+
+
+def _store_create_overrides(
+    conn,
+    task_id: str,
+    *,
+    model_override: Optional[str],
+    complexity_override: Optional[str],
+) -> None:
+    assignments: list[str] = []
+    values: list[str] = []
+    if model_override:
+        assignments.append("model_override = ?")
+        values.append(model_override)
+    if complexity_override:
+        if not _column_exists(conn, "tasks", _COMPLEXITY_OVERRIDE_COLUMN):
+            raise RuntimeError(
+                f"tasks.{_COMPLEXITY_OVERRIDE_COLUMN} column is unavailable; "
+                "apply the classifier-routing schema migration before using --complexity"
+            )
+        assignments.append(f"{_COMPLEXITY_OVERRIDE_COLUMN} = ?")
+        values.append(complexity_override)
+    if not assignments:
+        return
+    conn.execute(
+        f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
+        (*values, task_id),
+    )
+    conn.commit()
 
 
 def _parse_branch_flag(value: Optional[str]) -> Optional[str]:
@@ -319,6 +411,12 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                           help="Link to a project (id or slug). Anchors the task's "
                                "worktree under the project's primary repo with a "
                                "deterministic branch. See `hermes project list`.")
+    p_create.add_argument("--model", default=None,
+                          help="Per-task model override. Validated before the card is created.")
+    p_create.add_argument("--complexity", default=None,
+                          choices=_COMPLEXITY_TIERS,
+                          help="Explicit complexity tier for routing "
+                               "(trivial|simple|moderate|complex|expert).")
     p_create.add_argument("--tenant", default=None, help="Tenant namespace")
     p_create.add_argument("--priority", type=int, default=0, help="Priority tiebreaker")
     p_create.add_argument("--triage", action="store_true",
@@ -1325,7 +1423,22 @@ def _cmd_create(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        model_override, model_warning = _validate_create_model_override(
+            getattr(args, "model", None)
+        )
+    except ValueError as exc:
+        print(f"kanban: {exc}", file=sys.stderr)
+        return 2
+    complexity_override = getattr(args, "complexity", None)
     with kb.connect_closing() as conn:
+        if complexity_override and not _column_exists(conn, "tasks", _COMPLEXITY_OVERRIDE_COLUMN):
+            print(
+                f"kanban: tasks.{_COMPLEXITY_OVERRIDE_COLUMN} column is unavailable; "
+                "apply the classifier-routing schema migration before using --complexity",
+                file=sys.stderr,
+            )
+            return 2
         task_id = kb.create_task(
             conn,
             title=args.title,
@@ -1348,6 +1461,16 @@ def _cmd_create(args: argparse.Namespace) -> int:
             goal_max_turns=getattr(args, "goal_max_turns", None),
             initial_status=getattr(args, "initial_status", "running"),
         )
+        try:
+            _store_create_overrides(
+                conn,
+                task_id,
+                model_override=model_override,
+                complexity_override=complexity_override,
+            )
+        except RuntimeError as exc:
+            print(f"kanban: {exc}", file=sys.stderr)
+            return 2
         task = kb.get_task(conn, task_id)
     if getattr(args, "json", False):
         print(json.dumps(_task_to_dict(task), indent=2, ensure_ascii=False))
@@ -1365,6 +1488,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
             running, message = _check_dispatcher_presence()
             if not running and message:
                 print(f"\n⚠  {message}", file=sys.stderr)
+    if model_warning:
+        print(f"kanban: --model warning: {model_warning}", file=sys.stderr)
     return 0
 
 
