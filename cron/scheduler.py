@@ -2683,9 +2683,18 @@ def run_job(
     agent = None
 
     # Mark this as a cron session so the approval system can apply cron_mode.
-    # This env var is process-wide and persists for the lifetime of the
-    # scheduler process — every job this process runs is a cron job.
-    os.environ["HERMES_CRON_SESSION"] = "1"
+    # Bind it as a context-local token (NOT process-global os.environ): the
+    # scheduler runs IN-PROCESS with the gateway, and a process-global flag
+    # leaked "this is a cron job" onto concurrent interactive/gateway turns on
+    # other threads — blocking a live user's execute_code / dangerous commands
+    # mid-session after any cron tick. run_job executes inside a copied context
+    # (contextvars.copy_context().run) on a dedicated pool thread, so the token
+    # is invisible to the gateway thread and is discarded at the context
+    # boundary; the finally below also resets it explicitly. See
+    # tools/approval.py::_is_cron_session (mirrors _is_interactive_cli, which
+    # fixed the same os.environ race for HERMES_INTERACTIVE, GHSA-96vc-wcxf-jjff).
+    from tools.approval import set_hermes_cron_context, reset_hermes_cron_context
+    _cron_ctx_token = set_hermes_cron_context(True)
 
     # Use ContextVars for per-job session/delivery state so parallel jobs
     # don't clobber each other's targets (os.environ is process-global).
@@ -3315,6 +3324,14 @@ def run_job(
         return False, output, "", error_msg
 
     finally:
+        # Reset the cron-session context token bound at the top of run_job.
+        # The copied-context boundary (contextvars.copy_context().run) already
+        # discards it, but reset explicitly to match the TERMINAL_CWD restore
+        # discipline below and to stay correct on any non-ctx.run call path.
+        try:
+            reset_hermes_cron_context(_cron_ctx_token)
+        except Exception:
+            pass
         # Restore TERMINAL_CWD to whatever it was before this job ran.  We
         # only ever mutate it when the job has a workdir; see the setup block
         # at the top of run_job for the serialization guarantee.

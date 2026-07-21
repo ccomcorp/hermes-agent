@@ -62,3 +62,13 @@
 - **Open item:** `same_tool_args_drift_warning` code observed in-session exists nowhere in chassis source (Python/TS) or git history — suspected outer-harness detector, not editable from this tree.
 - **Operational recommendation (user decision, not executed here):** run concurrent sessions under distinct profiles (isolated state) or accept the contention; do not kill the other session's processes from this side.
 - Restart of the desktop required for the guardrail fix to go live.
+
+## 2026-07-21 — Cron-flag leak into interactive approvals (execute_code blocked mid-session)
+
+- User: investigate why cron-mode jobs were getting blocked; `execute_code` was blocked by a cron-mode guard.
+- **Symptom:** `execute_code` succeeded ~4× this session, then blocked once with the `cron_mode: deny` message ("cron jobs run without a user present"). Live process env showed `HERMES_CRON_SESSION=1` AND `HERMES_INTERACTIVE=1` at once — impossible for one legitimate session.
+- **Root cause:** `cron/scheduler.py::run_job` set process-global `os.environ["HERMES_CRON_SESSION"]="1"` (set 1×, never popped). The scheduler runs IN-PROCESS with the gateway (`InProcessCronScheduler`), so a cron tick (`2cce921364b5` AV-Calibration, 09:27) poisoned the shared process; every later interactive `execute_code` hit `check_execute_code_guard`'s cron-deny branch (`tools/approval.py:3121`).
+- **Fix:** context-local token instead of process-global env. Added `_hermes_cron_ctx` ContextVar + `set/reset_hermes_cron_context` + `_is_cron_session()` (ctx-first, env fallback) — mirrors `_hermes_interactive_ctx`, which fixed the same race (GHSA-96vc-wcxf-jjff). Converted 4 readers (approval.py 282/2214/2741/3162); `run_job` binds a token + resets in `finally` (belt-and-suspenders atop the `copy_context()` boundary that already discards it).
+- **Rejected:** `cron_mode: approve` (the guard's own suggestion) — masks the leak by disabling the guard for genuine cron runs too.
+- **Verified:** `scripts/run_tests.sh` cron-approval + execute_code cluster 57/57; focused pytest incl. new `TestCronContextIsolation` 70/70; `test_approval.py` 2 failed/310 passed = PRE-EXISTING `TestDetectDangerousRm` (proven identical on pristine tree via git stash), 0 new. Diffs LF-clean.
+- **Ship:** desktop/gateway restart required to load the fix AND flush the already-poisoned `os.environ` in the running process.

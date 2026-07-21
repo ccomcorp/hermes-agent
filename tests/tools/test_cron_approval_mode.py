@@ -432,3 +432,109 @@ class TestCronWithGatewayOrigin:
                 assert result.get("status") != "approval_required"
         finally:
             clear_session_vars(tokens)
+
+
+class TestCronContextIsolation:
+    """Regression: the in-process scheduler must not leak its cron flag onto a
+    concurrent interactive/gateway turn on another thread.
+
+    Before the fix, cron-ness was a process-global os.environ["HERMES_CRON_SESSION"]
+    set (and never cleared) by scheduler.run_job. Since the scheduler runs in the
+    gateway process, any cron tick flipped every later interactive execute_code /
+    dangerous command onto the cron_mode:deny branch. The flag is now a
+    context-local token (tools.approval._hermes_cron_ctx), so it is invisible
+    across threads and reset at the job boundary.
+    """
+
+    def test_context_flag_prefers_over_env(self, monkeypatch):
+        """_is_cron_session() prefers the context token over the env var."""
+        from tools.approval import (
+            _is_cron_session,
+            set_hermes_cron_context,
+            reset_hermes_cron_context,
+        )
+        # Env says cron, but an explicit context token of False must win.
+        monkeypatch.setenv("HERMES_CRON_SESSION", "1")
+        token = set_hermes_cron_context(False)
+        try:
+            assert _is_cron_session() is False
+        finally:
+            reset_hermes_cron_context(token)
+        # After reset, falls back to the env var again.
+        assert _is_cron_session() is True
+
+    def test_cron_token_does_not_leak_to_other_thread(self, monkeypatch):
+        """A cron token bound on one thread is invisible to a concurrent thread."""
+        import threading
+        from tools.approval import (
+            _is_cron_session,
+            set_hermes_cron_context,
+            reset_hermes_cron_context,
+        )
+        monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+
+        other_thread_saw = {}
+        release = threading.Event()
+
+        def _other():
+            # No context token bound here, no env var → must be non-cron even
+            # while the main thread holds a cron token.
+            other_thread_saw["cron"] = _is_cron_session()
+            release.set()
+
+        token = set_hermes_cron_context(True)
+        try:
+            assert _is_cron_session() is True  # this thread: cron
+            t = threading.Thread(target=_other)
+            t.start()
+            assert release.wait(timeout=5)
+            t.join(timeout=5)
+        finally:
+            reset_hermes_cron_context(token)
+
+        # The concurrent thread must NOT have seen this thread's cron flag.
+        assert other_thread_saw["cron"] is False
+
+    def test_execute_code_guard_unaffected_by_other_threads_cron(self, monkeypatch):
+        """execute_code guard on a non-cron thread is not blocked by a cron flag
+        held on a different thread (the original reported bug)."""
+        import threading
+        from tools.approval import (
+            check_execute_code_guard,
+            set_hermes_cron_context,
+            reset_hermes_cron_context,
+        )
+        monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+        monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+        monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
+        monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
+        monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
+
+        result_holder = {}
+        started = threading.Event()
+        release = threading.Event()
+
+        def _cron_thread():
+            token = set_hermes_cron_context(True)
+            try:
+                started.set()
+                release.wait(timeout=5)
+            finally:
+                reset_hermes_cron_context(token)
+
+        t = threading.Thread(target=_cron_thread)
+        t.start()
+        try:
+            assert started.wait(timeout=5)
+            # Main (non-cron) thread runs the execute_code guard while the other
+            # thread holds a cron token. It must NOT hit the cron-deny branch.
+            from unittest.mock import patch as mock_patch
+            with mock_patch("tools.approval._get_cron_approval_mode", return_value="deny"):
+                guard = check_execute_code_guard("print('hi')", "local")
+            # Non-cron, non-gateway, non-ask local path → approved (documented
+            # limitation), and crucially NOT the cron-deny block message.
+            assert guard.get("approved") is True
+            assert "cron jobs run without a user present" not in (guard.get("message") or "")
+        finally:
+            release.set()
+            t.join(timeout=5)
