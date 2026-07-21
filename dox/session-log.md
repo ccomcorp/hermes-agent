@@ -53,3 +53,12 @@
 - **hermes-team-routing v1.0.1:** Added related_skills → hermes-model-routing. New "Delegation routes (same-chat model lanes)" section: profile vs route decision matrix, how routes work (config + delegate_task usage), when NOT to use routes (four anti-patterns).
 - **DOX:** CHANGELOG entry, session-log entry, LIVE-STATUS scoreboard row.
 - **No chassis changes** — skills-only update to hermes-home.
+
+## 2026-07-21 — Tool-loop guardrail truthful-negative fix + two-instance contention
+
+- User: investigate `same_tool_failure_halt` via systematic debugging; find root cause and remediate.
+- **Root cause (code):** the broad content classifier (mirror of `display._detect_tool_failure`) counted *truthful negatives* — process `not_found`, read_file `File not found` — as failures into the args-blind same-tool counter, so legitimate diagnostics against absent/degraded state marched to halt. Fix: new `tool_result_is_truthful_negative` predicate in `agent/tool_result_classification.py`; `after_call` skips the same-tool increment for negatives. Exact-signature counter stays broad (identical-args repetition of any failure type still blocks); genuine failure streaks neither incremented nor reset by negatives. 4 regression tests in `tests/agent/test_tool_guardrails.py`; guardrails + runtime + classification 30/30 green.
+- **Root cause (operational — why so many failures existed to count):** TWO Hermes desktop instances + TWO `serve` backends running concurrently (started 2026-07-21 09:14:11/13) sharing one HERMES_HOME/profile → `gateway_state.json` write contention (WinError 5 in errors.log), ws write stalls >10s ("frame left in flight"), process-registry `not_found`, wedged terminal output, and wedged calls landing MULTIPLE times (triple-applied patch in a CCOM-Email test file; 5 duplicate sweep runs). Log evidence: `tui_gateway.ws: ws write slow (loop stalled >10.0s)`; desktop.log `[hermes] [boot] Restarting desktop connection`.
+- **Open item:** `same_tool_args_drift_warning` code observed in-session exists nowhere in chassis source (Python/TS) or git history — suspected outer-harness detector, not editable from this tree.
+- **Operational recommendation (user decision, not executed here):** run concurrent sessions under distinct profiles (isolated state) or accept the contention; do not kill the other session's processes from this side.
+- Restart of the desktop required for the guardrail fix to go live.

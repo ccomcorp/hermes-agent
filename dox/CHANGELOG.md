@@ -4,6 +4,10 @@ Keep entries short. Shard or archive if approaching the ledger word budget in `d
 
 ## Unreleased
 
+### Tooling / guardrails
+
+- **2026-07-21** — Tool-loop guardrail false-positive fix: truthful negatives (process `not_found`, read_file `File not found`, generic absence phrasing) no longer feed the args-blind same-tool failure counter, so diagnostics against absent state can't march to `same_tool_failure_halt`. Exact-signature counter stays broad (identical-args repetition of any failure type still blocks); genuine execution failures still warn/halt at configured thresholds; a truthful negative neither increments nor resets a genuine streak. New predicate `tool_result_is_truthful_negative` in `agent/tool_result_classification.py`; counter wiring in `agent/tool_guardrails.py::after_call`. Regression tests: 4 new in `tests/agent/test_tool_guardrails.py`. Gates: guardrails + runtime + classification 30/30 green. Context: halts observed during legitimate diagnostics against a crashed process registry; operational root cause (two concurrent Hermes instances sharing one HERMES_HOME) documented in session-log.
+
 ### Desktop / voice
 
 - **2026-07-16** — P2a Voice conversation hardening: fixed cancel-during-speak race in `use-voice-conversation.ts` (`cancelledRef` guards re-arm after `end()`). Added 14 Vitest unit tests across `use-voice-conversation.test.tsx` (4 race-condition tests: cancel-end during speak, status transitions, re-arm after cancel) and `use-auto-speak-replies.test.tsx` (10 tests: spoken_reply fallback, hold-until-idle, conversation-inactive guard, empty/null reply, dedupe). EVAL-VDP-006 (package audit): confirmed zero HuggingFace/transformers/S2S dependencies in desktop.
