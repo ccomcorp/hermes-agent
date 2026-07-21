@@ -1202,6 +1202,12 @@ CREATE TABLE IF NOT EXISTS task_events (
     created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS classifier_cache (
+    hash       TEXT PRIMARY KEY,
+    result     TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
 -- Historical attempt record. Each time the dispatcher claims a task, a
 -- new row is created here; claim state, PID, heartbeat, runtime cap,
 -- and structured summary all live on the run, not the task. Multiple
@@ -2000,6 +2006,15 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)"
+    )
+
+    # The classifier cache is an additive dispatcher table; create it here as
+    # well as in SCHEMA_SQL so legacy boards gain it on next open.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS classifier_cache ("
+        "hash TEXT PRIMARY KEY, "
+        "result TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL)"
     )
 
     # task_events gained a run_id column; back-fill it as NULL for
@@ -5860,8 +5875,13 @@ def schedule_task(
 _COMPLEXITY_LEVELS = ("trivial", "simple", "moderate", "complex", "expert")
 _DEFAULT_COMPLEXITY_ROUTING = {
     "enabled": False,
+    "mode": "classifier",
     "trigger_assignee": "auto",
+    "min_confidence": 0.5,
     "min_signal_floor": 0.2,
+    "classifier_timeout_s": 10,
+    "classifier_tick_budget_s": 30,
+    "classifier_consecutive_failure_limit": 3,
     "map": {
         "trivial": "ponytail",
         "simple": "dev-agent",
@@ -5871,6 +5891,28 @@ _DEFAULT_COMPLEXITY_ROUTING = {
     },
     "fallback": "advisor",
 }
+_CLASSIFIER_CACHE_TTL_SECONDS = 3600
+_CLASSIFIER_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+
+
+@dataclass
+class _ClassifierTickState:
+    started_at: float
+    budget_s: float
+    timeout_s: float
+    failure_limit: int
+    consecutive_failures: int = 0
+    client_loaded: bool = False
+    client: Any = None
+    model: Optional[str] = None
+    extra_body_fn: Any = None
+    client_error: Optional[str] = None
+
+    def remaining_budget_s(self) -> float:
+        return self.budget_s - (time.monotonic() - self.started_at)
+
+    def breaker_open(self) -> bool:
+        return bool(self.failure_limit and self.consecutive_failures >= self.failure_limit)
 
 # After this many consecutive non-success attempts on a task/profile, the
 # dispatcher stops retrying and parks the task in ``blocked`` with a reason so
@@ -7207,12 +7249,47 @@ def _normalise_complexity_routing(raw: Any) -> dict[str, Any]:
         min_signal_floor = float(defaults["min_signal_floor"])
     if min_signal_floor < 0:
         min_signal_floor = float(defaults["min_signal_floor"])
+    mode = str(raw.get("mode", defaults["mode"]) or "").strip().lower()
+    if mode not in {"classifier", "tier-only"}:
+        mode = str(defaults["mode"])
+    try:
+        min_confidence = float(raw.get("min_confidence", defaults["min_confidence"]))
+    except (TypeError, ValueError):
+        min_confidence = float(defaults["min_confidence"])
+    if min_confidence < 0 or min_confidence > 1:
+        min_confidence = float(defaults["min_confidence"])
+    try:
+        classifier_timeout_s = float(raw.get("classifier_timeout_s", defaults["classifier_timeout_s"]))
+    except (TypeError, ValueError):
+        classifier_timeout_s = float(defaults["classifier_timeout_s"])
+    if classifier_timeout_s <= 0:
+        classifier_timeout_s = float(defaults["classifier_timeout_s"])
+    try:
+        classifier_tick_budget_s = float(raw.get("classifier_tick_budget_s", defaults["classifier_tick_budget_s"]))
+    except (TypeError, ValueError):
+        classifier_tick_budget_s = float(defaults["classifier_tick_budget_s"])
+    if classifier_tick_budget_s <= 0:
+        classifier_tick_budget_s = float(defaults["classifier_tick_budget_s"])
+    try:
+        classifier_failure_limit = int(raw.get(
+            "classifier_consecutive_failure_limit",
+            defaults["classifier_consecutive_failure_limit"],
+        ))
+    except (TypeError, ValueError):
+        classifier_failure_limit = int(defaults["classifier_consecutive_failure_limit"])
+    if classifier_failure_limit < 0:
+        classifier_failure_limit = int(defaults["classifier_consecutive_failure_limit"])
     trigger_assignee = str(raw.get("trigger_assignee", defaults["trigger_assignee"]) or "").strip()
     fallback = str(raw.get("fallback", defaults["fallback"]) or "").strip()
     return {
         "enabled": raw.get("enabled") is True,
+        "mode": mode,
         "trigger_assignee": trigger_assignee or defaults["trigger_assignee"],
+        "min_confidence": min_confidence,
         "min_signal_floor": min_signal_floor,
+        "classifier_timeout_s": classifier_timeout_s,
+        "classifier_tick_budget_s": classifier_tick_budget_s,
+        "classifier_consecutive_failure_limit": classifier_failure_limit,
         "map": level_map,
         "fallback": fallback or defaults["fallback"],
     }
@@ -7287,16 +7364,175 @@ def _complexity_routing_text(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _signals_below_floor(signals: Any, floor: float) -> bool:
-    if not isinstance(signals, dict) or not signals:
-        return True
-    values: list[float] = []
-    for value in signals.values():
-        try:
-            values.append(float(value))
-        except (TypeError, ValueError):
-            values.append(0.0)
-    return bool(values) and all(value < floor for value in values)
+def _classifier_cache_key(row: sqlite3.Row) -> str:
+    title = str(row["title"] or "")
+    body = str(row["body"] or "") if "body" in row.keys() and row["body"] else ""
+    return hashlib.sha256((title + body).encode("utf-8", "replace")).hexdigest()
+
+
+def _ensure_classifier_cache_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS classifier_cache ("
+        "hash TEXT PRIMARY KEY, "
+        "result TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL)"
+    )
+
+
+def _cleanup_classifier_cache(conn: sqlite3.Connection, now: Optional[int] = None) -> None:
+    _ensure_classifier_cache_table(conn)
+    cutoff = int(now if now is not None else time.time()) - _CLASSIFIER_CACHE_TTL_SECONDS
+    with write_txn(conn):
+        conn.execute("DELETE FROM classifier_cache WHERE created_at < ?", (cutoff,))
+
+
+def _read_classifier_cache(
+    conn: sqlite3.Connection,
+    cache_key: str,
+    *,
+    now: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    _ensure_classifier_cache_table(conn)
+    cutoff = int(now if now is not None else time.time()) - _CLASSIFIER_CACHE_TTL_SECONDS
+    row = conn.execute(
+        "SELECT result, created_at FROM classifier_cache WHERE hash = ?",
+        (cache_key,),
+    ).fetchone()
+    if row is None or int(row["created_at"] or 0) < cutoff:
+        return None
+    try:
+        parsed = json.loads(row["result"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _write_classifier_cache(
+    conn: sqlite3.Connection,
+    cache_key: str,
+    result: dict[str, Any],
+    *,
+    now: Optional[int] = None,
+) -> None:
+    _ensure_classifier_cache_table(conn)
+    with write_txn(conn):
+        conn.execute(
+            "INSERT OR REPLACE INTO classifier_cache(hash, result, created_at) VALUES (?, ?, ?)",
+            (cache_key, json.dumps(result, sort_keys=True), int(now if now is not None else time.time())),
+        )
+
+
+def _extract_classifier_json(raw: str) -> Optional[dict[str, Any]]:
+    if not raw:
+        return None
+    stripped = _CLASSIFIER_JSON_FENCE_RE.sub("", str(raw).strip())
+    first = stripped.find("{")
+    last = stripped.rfind("}")
+    if first == -1 or last == -1 or last <= first:
+        return None
+    try:
+        parsed = json.loads(stripped[first : last + 1])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _classifier_prompt(row: sqlite3.Row, snapshot: dict[str, Any]) -> list[dict[str, str]]:
+    route_map = snapshot.get("map", {}) if isinstance(snapshot.get("map"), dict) else {}
+    profile_map = "\n".join(
+        f"- {level}: {profile}" for level, profile in route_map.items()
+    )
+    title = str(row["title"] or "")
+    body = str(row["body"] or "") if "body" in row.keys() and row["body"] else ""
+    system = (
+        "You classify Hermes Kanban task routing. Return only strict JSON with "
+        "keys: tier, profile, confidence, rationale, and optional model. "
+        "tier must be one of trivial, simple, moderate, complex, expert. "
+        "profile must be one of the mapped profile names, never the trigger sentinel."
+    )
+    user = (
+        "Route this Kanban card.\n\n"
+        f"Profile map:\n{profile_map}\n\n"
+        f"Fallback profile: {snapshot.get('fallback')}\n"
+        f"Minimum confidence: {snapshot.get('min_confidence')}\n\n"
+        f"Title:\n{title[:1000]}\n\n"
+        f"Body:\n{body[:6000]}\n"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _load_classifier_client(state: _ClassifierTickState) -> None:
+    if state.client_loaded:
+        return
+    state.client_loaded = True
+    try:
+        from agent.auxiliary_client import (  # type: ignore
+            get_auxiliary_extra_body,
+            get_text_auxiliary_client,
+        )
+        client, model = get_text_auxiliary_client("dispatch_classifier")
+    except Exception as exc:
+        state.client_error = f"auxiliary client unavailable: {type(exc).__name__}"
+        return
+    if client is None or not model:
+        state.client_error = "no auxiliary client configured"
+        return
+    state.client = client
+    state.model = str(model)
+    state.extra_body_fn = get_auxiliary_extra_body
+
+
+def _classifier_failure(state: Optional[_ClassifierTickState]) -> None:
+    if state is not None:
+        state.consecutive_failures += 1
+
+
+def _classifier_success(state: Optional[_ClassifierTickState]) -> None:
+    if state is not None:
+        state.consecutive_failures = 0
+
+
+def _resolve_classifier_result(
+    parsed: dict[str, Any],
+    snapshot: dict[str, Any],
+    fallback: str,
+    reason: dict[str, Any],
+    state: Optional[_ClassifierTickState],
+) -> tuple[str, Optional[str]]:
+    tier = str(parsed.get("tier") or "").strip().lower()
+    profile = str(parsed.get("profile") or "").strip()
+    model = str(parsed.get("model") or "").strip() or None
+    reason["tier"] = tier or None
+    reason["confidence"] = parsed.get("confidence")
+    rationale = str(parsed.get("rationale") or "").strip()
+    if rationale:
+        reason["rationale"] = rationale[:500]
+    try:
+        confidence = float(parsed.get("confidence"))
+    except (TypeError, ValueError):
+        _classifier_failure(state)
+        reason["route_reason"] = "classifier_malformed_confidence_fallback"
+        return fallback, None
+    if confidence < float(snapshot.get("min_confidence", 0.5)):
+        _classifier_failure(state)
+        reason["route_reason"] = "classifier_low_confidence_fallback"
+        return fallback, None
+
+    trigger = str(snapshot.get("trigger_assignee") or "auto").strip()
+    route_map = snapshot.get("map", {}) if isinstance(snapshot.get("map"), dict) else {}
+    allowed_profiles = {str(value).strip() for value in route_map.values() if str(value).strip()}
+    if profile and allowed_profiles and profile not in allowed_profiles:
+        profile = ""
+    if not profile or profile == trigger:
+        profile = str(route_map.get(tier) or "").strip()
+    resolved = profile or fallback
+    if resolved == trigger:
+        resolved = fallback
+    reason["route_reason"] = f"classifier:{tier or 'unknown'}"
+    if model:
+        reason["model"] = model
+    _classifier_success(state)
+    return resolved, model
 
 
 def _resolve_complexity_route(
@@ -7304,27 +7540,80 @@ def _resolve_complexity_route(
     row: sqlite3.Row,
     snapshot: dict[str, Any],
     profile_exists,
+    classifier_state: Optional[_ClassifierTickState] = None,
+    *,
+    dry_run: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     fallback = str(snapshot.get("fallback") or _DEFAULT_COMPLEXITY_ROUTING["fallback"]).strip()
     reason: dict[str, Any] = {"source": "kanban.complexity_routing"}
-    try:
-        import plugins.route_advisor.signals as route_signals
+    model_override: Optional[str] = None
 
-        analyze = getattr(route_signals, "analyze_text", None) or getattr(route_signals, "analyze")
-        analysis = analyze(_complexity_routing_text(conn, row))
-        level = str(getattr(analysis, "level", "") or "").strip().lower()
-        signals = getattr(analysis, "signals", {})
-        reason["level"] = level or None
-        if _signals_below_floor(signals, float(snapshot.get("min_signal_floor", 0.2))):
-            resolved = fallback
-            reason["route_reason"] = "sparse_signal_fallback"
-        else:
-            resolved = str(snapshot.get("map", {}).get(level) or fallback).strip() or fallback
-            reason["route_reason"] = f"level:{level or 'unknown'}"
-    except Exception as exc:
+    if str(snapshot.get("mode") or "classifier").strip().lower() == "tier-only":
         resolved = fallback
-        reason["route_reason"] = "scorer_error_fallback"
-        reason["error"] = str(exc)[:200]
+        reason["route_reason"] = "tier_only_fallback"
+    elif classifier_state is not None and classifier_state.breaker_open():
+        resolved = fallback
+        reason["route_reason"] = "classifier_breaker_fallback"
+    elif classifier_state is not None and classifier_state.remaining_budget_s() <= 0:
+        resolved = fallback
+        reason["route_reason"] = "classifier_budget_fallback"
+    else:
+        cache_key = _classifier_cache_key(row)
+        parsed = None if dry_run else _read_classifier_cache(conn, cache_key)
+        if parsed is not None:
+            reason["cache"] = "hit"
+            resolved, model_override = _resolve_classifier_result(parsed, snapshot, fallback, reason, classifier_state)
+        else:
+            if classifier_state is None:
+                classifier_state = _ClassifierTickState(
+                    started_at=time.monotonic(),
+                    budget_s=float(snapshot.get("classifier_tick_budget_s", 30)),
+                    timeout_s=float(snapshot.get("classifier_timeout_s", 10)),
+                    failure_limit=int(snapshot.get("classifier_consecutive_failure_limit", 3)),
+                )
+            _load_classifier_client(classifier_state)
+            if classifier_state.client is None or not classifier_state.model:
+                _classifier_failure(classifier_state)
+                resolved = fallback
+                reason["route_reason"] = "classifier_unavailable_fallback"
+                if classifier_state.client_error:
+                    reason["error"] = classifier_state.client_error[:200]
+            else:
+                remaining = classifier_state.remaining_budget_s()
+                if remaining <= 0:
+                    resolved = fallback
+                    reason["route_reason"] = "classifier_budget_fallback"
+                else:
+                    timeout_s = max(0.001, min(float(classifier_state.timeout_s), remaining))
+                    try:
+                        resp = classifier_state.client.chat.completions.create(
+                            model=classifier_state.model,
+                            messages=_classifier_prompt(row, snapshot),
+                            temperature=0,
+                            max_tokens=800,
+                            timeout=timeout_s,
+                            extra_body=(classifier_state.extra_body_fn() or None) if classifier_state.extra_body_fn else None,
+                        )
+                        try:
+                            raw = resp.choices[0].message.content or ""
+                        except Exception:
+                            raw = ""
+                        parsed = _extract_classifier_json(raw)
+                        if parsed is None:
+                            _classifier_failure(classifier_state)
+                            resolved = fallback
+                            reason["route_reason"] = "classifier_malformed_fallback"
+                        else:
+                            if not dry_run:
+                                _write_classifier_cache(conn, cache_key, parsed)
+                            resolved, model_override = _resolve_classifier_result(
+                                parsed, snapshot, fallback, reason, classifier_state
+                            )
+                    except Exception as exc:
+                        _classifier_failure(classifier_state)
+                        resolved = fallback
+                        reason["route_reason"] = "classifier_error_fallback"
+                        reason["error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     if profile_exists is not None and not profile_exists(resolved):
         if fallback and profile_exists(fallback):
@@ -7334,6 +7623,8 @@ def _resolve_complexity_route(
             resolved = "default"
             reason["route_reason"] = "mapped_profile_missing_default"
     reason["assignee"] = resolved
+    if model_override:
+        reason["model"] = model_override
     return resolved, reason
 
 
@@ -7344,6 +7635,7 @@ def _apply_complexity_route_if_needed(
     snapshot: dict[str, Any],
     *,
     dry_run: bool,
+    classifier_state: Optional[_ClassifierTickState] = None,
 ) -> str:
     if not snapshot.get("enabled"):
         return row_assignee or ""
@@ -7354,13 +7646,28 @@ def _apply_complexity_route_if_needed(
     except Exception:
         profile_exists = None  # type: ignore[assignment]
 
-    resolved, route_payload = _resolve_complexity_route(conn, row, snapshot, profile_exists)
+    resolved, route_payload = _resolve_complexity_route(
+        conn,
+        row,
+        snapshot,
+        profile_exists,
+        classifier_state,
+        dry_run=dry_run,
+    )
     if not dry_run:
+        model_override = str(route_payload.get("model") or "").strip()
         with write_txn(conn):
-            conn.execute(
-                "UPDATE tasks SET assignee = ? WHERE id = ? AND assignee = ?",
-                (resolved, row["id"], row_assignee),
-            )
+            if model_override:
+                conn.execute(
+                    "UPDATE tasks SET assignee = ?, model_override = COALESCE(NULLIF(model_override, ''), ?) "
+                    "WHERE id = ? AND assignee = ?",
+                    (resolved, model_override, row["id"], row_assignee),
+                )
+            else:
+                conn.execute(
+                    "UPDATE tasks SET assignee = ? WHERE id = ? AND assignee = ?",
+                    (resolved, row["id"], row_assignee),
+                )
             _append_event(conn, row["id"], "assigned", route_payload)
     return resolved
 
@@ -7480,6 +7787,16 @@ def _dispatch_once_locked(
     result = DispatchResult()
     complexity_routing = _load_complexity_routing_snapshot()
     _validate_complexity_routing_profiles(complexity_routing)
+    classifier_state: Optional[_ClassifierTickState] = None
+    if complexity_routing.get("enabled"):
+        classifier_state = _ClassifierTickState(
+            started_at=time.monotonic(),
+            budget_s=float(complexity_routing.get("classifier_tick_budget_s", 30)),
+            timeout_s=float(complexity_routing.get("classifier_timeout_s", 10)),
+            failure_limit=int(complexity_routing.get("classifier_consecutive_failure_limit", 3)),
+        )
+        if not dry_run:
+            _cleanup_classifier_cache(conn)
     result.reclaimed = release_stale_claims(conn)
     result.stale = detect_stale_running(
         conn, stale_timeout_seconds=stale_timeout_seconds,
@@ -7628,6 +7945,7 @@ def _dispatch_once_locked(
             row_assignee,
             complexity_routing,
             dry_run=dry_run,
+            classifier_state=classifier_state,
         )
         # Skip ready tasks whose assignee is not a real Hermes profile.
         # `_default_spawn` invokes ``hermes -p <assignee>`` which fails
