@@ -1678,6 +1678,18 @@ DEFAULT_CONFIG = {
             "timeout": 180,
             "extra_body": {},
         },
+        # Dispatch classifier — classifies Kanban card complexity during the
+        # dispatcher tick when classifier-backed complexity routing is enabled.
+        # Mirrors kanban_decomposer because it needs structured reasoning over
+        # card content but should remain independently routable/tunable.
+        "dispatch_classifier": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 180,
+            "extra_body": {},
+        },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
         # ``hermes profile describe <name> --auto`` and the dashboard's
@@ -2782,8 +2794,13 @@ DEFAULT_CONFIG = {
         # midway through a current card.
         "complexity_routing": {
             "enabled": False,
+            "mode": "classifier",
             "trigger_assignee": "auto",
+            "min_confidence": 0.5,
             "min_signal_floor": 0.2,
+            "classifier_timeout_s": 10,
+            "classifier_tick_budget_s": 30,
+            "classifier_consecutive_failure_limit": 3,
             "map": {
                 "trivial": "ponytail",
                 "simple": "dev-agent",
@@ -5506,6 +5523,47 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                     "error",
                     "kanban.complexity_routing.trigger_assignee must be a non-empty profile sentinel",
                     "Use trigger_assignee: auto unless you have a different sentinel convention",
+                ))
+            mode = str(routing_cfg.get("mode", "classifier") or "").strip().lower()
+            if mode not in {"classifier", "tier-only"}:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.mode must be 'classifier' or 'tier-only'",
+                    "Use mode: classifier for LLM-backed routing, or mode: tier-only for deterministic score routing",
+                ))
+            try:
+                min_confidence = float(routing_cfg.get("min_confidence", 0.5))
+            except (TypeError, ValueError):
+                min_confidence = -1.0
+            if min_confidence < 0 or min_confidence > 1:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.min_confidence must be a number between 0 and 1",
+                    "Use min_confidence: 0.5 to accept moderate classifier certainty",
+                ))
+            for field, default, description in (
+                ("classifier_timeout_s", 10, "per-call classifier timeout"),
+                ("classifier_tick_budget_s", 30, "per-dispatch tick classifier budget"),
+            ):
+                try:
+                    value = float(routing_cfg.get(field, default))
+                except (TypeError, ValueError):
+                    value = 0.0
+                if value <= 0:
+                    issues.append(ConfigIssue(
+                        "error",
+                        f"kanban.complexity_routing.{field} must be a positive number",
+                        f"Set {field} to a positive {description} in seconds",
+                    ))
+            try:
+                failure_limit = int(routing_cfg.get("classifier_consecutive_failure_limit", 3))
+            except (TypeError, ValueError):
+                failure_limit = -1
+            if failure_limit < 0:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.classifier_consecutive_failure_limit must be a non-negative integer",
+                    "Use classifier_consecutive_failure_limit: 3 to disable classifier mode after repeated failures",
                 ))
             try:
                 floor = float(routing_cfg.get("min_signal_floor", 0.2))
