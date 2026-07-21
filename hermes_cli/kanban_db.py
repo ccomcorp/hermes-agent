@@ -5857,6 +5857,21 @@ def schedule_task(
 # Dispatcher (one-shot pass)
 # ---------------------------------------------------------------------------
 
+_COMPLEXITY_LEVELS = ("trivial", "simple", "moderate", "complex", "expert")
+_DEFAULT_COMPLEXITY_ROUTING = {
+    "enabled": False,
+    "trigger_assignee": "auto",
+    "min_signal_floor": 0.2,
+    "map": {
+        "trivial": "ponytail",
+        "simple": "dev-agent",
+        "moderate": "dev-agent",
+        "complex": "advisor",
+        "expert": "advisor",
+    },
+    "fallback": "advisor",
+}
+
 # After this many consecutive non-success attempts on a task/profile, the
 # dispatcher stops retrying and parks the task in ``blocked`` with a reason so
 # a human can investigate. Prevents retry storms when a worker repeatedly times
@@ -7171,6 +7186,185 @@ def has_spawnable_review(conn: sqlite3.Connection) -> bool:
     return False
 
 
+def _normalise_complexity_routing(raw: Any) -> dict[str, Any]:
+    """Return an atomic dispatcher routing snapshot from config data."""
+
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _DEFAULT_COMPLEXITY_ROUTING
+    level_map = dict(defaults["map"])
+    raw_map = raw.get("map")
+    if isinstance(raw_map, dict):
+        for raw_level, raw_profile in raw_map.items():
+            level = str(raw_level).strip().lower()
+            if level in _COMPLEXITY_LEVELS:
+                profile = str(raw_profile or "").strip()
+                if profile:
+                    level_map[level] = profile
+    try:
+        min_signal_floor = float(raw.get("min_signal_floor", defaults["min_signal_floor"]))
+    except (TypeError, ValueError):
+        min_signal_floor = float(defaults["min_signal_floor"])
+    if min_signal_floor < 0:
+        min_signal_floor = float(defaults["min_signal_floor"])
+    trigger_assignee = str(raw.get("trigger_assignee", defaults["trigger_assignee"]) or "").strip()
+    fallback = str(raw.get("fallback", defaults["fallback"]) or "").strip()
+    return {
+        "enabled": raw.get("enabled") is True,
+        "trigger_assignee": trigger_assignee or defaults["trigger_assignee"],
+        "min_signal_floor": min_signal_floor,
+        "map": level_map,
+        "fallback": fallback or defaults["fallback"],
+    }
+
+
+def _load_complexity_routing_snapshot() -> dict[str, Any]:
+    """Snapshot kanban.complexity_routing once per dispatch tick.
+
+    Config changes intentionally take effect on the next dispatch tick, not
+    halfway through a card's routing decision.
+    """
+
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+    except Exception:
+        return dict(_DEFAULT_COMPLEXITY_ROUTING)
+    kanban_cfg = cfg.get("kanban") if isinstance(cfg, dict) else {}
+    raw = kanban_cfg.get("complexity_routing") if isinstance(kanban_cfg, dict) else {}
+    return _normalise_complexity_routing(raw)
+
+
+def _validate_complexity_routing_profiles(snapshot: dict[str, Any]) -> None:
+    """Fail loudly when enabled routing points at non-existent profiles."""
+
+    if not snapshot.get("enabled"):
+        return
+    try:
+        from hermes_cli.profiles import profile_exists
+    except Exception as exc:  # pragma: no cover - degraded install guard
+        raise RuntimeError(
+            "kanban.complexity_routing enabled but profile validation is unavailable"
+        ) from exc
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for level, profile in snapshot.get("map", {}).items():
+        profile_name = str(profile or "").strip()
+        if profile_name and profile_name not in seen:
+            seen.add(profile_name)
+            if not profile_exists(profile_name):
+                missing.append(f"map.{level}={profile_name!r}")
+    fallback = str(snapshot.get("fallback") or "").strip()
+    if fallback and fallback not in seen and not profile_exists(fallback):
+        missing.append(f"fallback={fallback!r}")
+    if missing:
+        raise RuntimeError(
+            "kanban.complexity_routing references missing profile(s): "
+            + ", ".join(missing)
+        )
+
+
+def _complexity_routing_text(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
+    parts = [str(row["title"] or "")]
+    body = row["body"] if "body" in row.keys() else None
+    if body:
+        parts.append(str(body))
+    try:
+        parent_rows = conn.execute(
+            "SELECT p.title FROM task_links l "
+            "JOIN tasks p ON p.id = l.parent_id "
+            "WHERE l.child_id = ? ORDER BY p.created_at ASC",
+            (row["id"],),
+        ).fetchall()
+    except Exception:
+        parent_rows = []
+    for parent in parent_rows:
+        title = parent["title"]
+        if title:
+            parts.append(str(title))
+    return "\n\n".join(part for part in parts if part)
+
+
+def _signals_below_floor(signals: Any, floor: float) -> bool:
+    if not isinstance(signals, dict) or not signals:
+        return True
+    values: list[float] = []
+    for value in signals.values():
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            values.append(0.0)
+    return bool(values) and all(value < floor for value in values)
+
+
+def _resolve_complexity_route(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    snapshot: dict[str, Any],
+    profile_exists,
+) -> tuple[str, dict[str, Any]]:
+    fallback = str(snapshot.get("fallback") or _DEFAULT_COMPLEXITY_ROUTING["fallback"]).strip()
+    reason: dict[str, Any] = {"source": "kanban.complexity_routing"}
+    try:
+        import plugins.route_advisor.signals as route_signals
+
+        analyze = getattr(route_signals, "analyze_text", None) or getattr(route_signals, "analyze")
+        analysis = analyze(_complexity_routing_text(conn, row))
+        level = str(getattr(analysis, "level", "") or "").strip().lower()
+        signals = getattr(analysis, "signals", {})
+        reason["level"] = level or None
+        if _signals_below_floor(signals, float(snapshot.get("min_signal_floor", 0.2))):
+            resolved = fallback
+            reason["route_reason"] = "sparse_signal_fallback"
+        else:
+            resolved = str(snapshot.get("map", {}).get(level) or fallback).strip() or fallback
+            reason["route_reason"] = f"level:{level or 'unknown'}"
+    except Exception as exc:
+        resolved = fallback
+        reason["route_reason"] = "scorer_error_fallback"
+        reason["error"] = str(exc)[:200]
+
+    if profile_exists is not None and not profile_exists(resolved):
+        if fallback and profile_exists(fallback):
+            resolved = fallback
+            reason["route_reason"] = "mapped_profile_missing_fallback"
+        else:
+            resolved = "default"
+            reason["route_reason"] = "mapped_profile_missing_default"
+    reason["assignee"] = resolved
+    return resolved, reason
+
+
+def _apply_complexity_route_if_needed(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    row_assignee: Optional[str],
+    snapshot: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> str:
+    if not snapshot.get("enabled"):
+        return row_assignee or ""
+    if (row_assignee or "") != snapshot.get("trigger_assignee"):
+        return row_assignee or ""
+    try:
+        from hermes_cli.profiles import profile_exists  # local import: avoids cycle
+    except Exception:
+        profile_exists = None  # type: ignore[assignment]
+
+    resolved, route_payload = _resolve_complexity_route(conn, row, snapshot, profile_exists)
+    if not dry_run:
+        with write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET assignee = ? WHERE id = ? AND assignee = ?",
+                (resolved, row["id"], row_assignee),
+            )
+            _append_event(conn, row["id"], "assigned", route_payload)
+    return resolved
+
+
 def dispatch_once(
     conn: sqlite3.Connection,
     *,
@@ -7284,6 +7478,8 @@ def _dispatch_once_locked(
     reap_worker_zombies()
 
     result = DispatchResult()
+    complexity_routing = _load_complexity_routing_snapshot()
+    _validate_complexity_routing_profiles(complexity_routing)
     result.reclaimed = release_stale_claims(conn)
     result.stale = detect_stale_running(
         conn, stale_timeout_seconds=stale_timeout_seconds,
@@ -7324,7 +7520,7 @@ def _dispatch_once_locked(
         )
 
     ready_rows = conn.execute(
-        "SELECT id, assignee FROM tasks "
+        "SELECT id, title, body, assignee FROM tasks "
         "WHERE status = 'ready' AND claim_lock IS NULL "
         "ORDER BY priority DESC, created_at ASC"
     ).fetchall()
@@ -7426,6 +7622,13 @@ def _dispatch_once_locked(
             else:
                 result.skipped_unassigned.append(row["id"])
                 continue
+        row_assignee = _apply_complexity_route_if_needed(
+            conn,
+            row,
+            row_assignee,
+            complexity_routing,
+            dry_run=dry_run,
+        )
         # Skip ready tasks whose assignee is not a real Hermes profile.
         # `_default_spawn` invokes ``hermes -p <assignee>`` which fails
         # with "Profile 'X' does not exist" when the assignee names a

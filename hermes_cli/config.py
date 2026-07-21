@@ -2775,6 +2775,24 @@ DEFAULT_CONFIG = {
         # otherwise saturate one profile's local model / API quota /
         # browser pool while leaving other profiles idle.
         "max_in_progress_per_profile": None,
+        # Deterministic dispatcher-side complexity routing. Off by default:
+        # when enabled, ready cards assigned to trigger_assignee are scored at
+        # dispatch time and reassigned to a real profile before spawnability is
+        # checked. Config edits take effect on the next dispatch tick, not
+        # midway through a current card.
+        "complexity_routing": {
+            "enabled": False,
+            "trigger_assignee": "auto",
+            "min_signal_floor": 0.2,
+            "map": {
+                "trivial": "ponytail",
+                "simple": "dev-agent",
+                "moderate": "dev-agent",
+                "complex": "advisor",
+                "expert": "advisor",
+            },
+            "fallback": "advisor",
+        },
         # When true, the kanban dispatcher auto-runs the decomposer on
         # tasks that land in Triage (every dispatcher tick). When false,
         # decomposition is manual via `hermes kanban decompose <id>` or
@@ -5249,7 +5267,7 @@ _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "providers", "fallback_model",
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
-    "route_advisor", "auxiliary", "moa", "custom_providers", "context", "memory", "gateway",
+    "route_advisor", "kanban", "auxiliary", "moa", "custom_providers", "context", "memory", "gateway",
     "sessions", "streaming", "updates", "mcp_servers",
 }
 
@@ -5457,6 +5475,79 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                         f"delegation.routes.{route_name or raw_name} should be a dict, got {type(route_block).__name__}",
                         "Each route should contain sparse delegation overrides like provider/model/base_url/api_key/api_mode",
                     ))
+
+    # ── kanban.complexity_routing dispatcher profile routing ─────────────
+    kanban_cfg = config.get("kanban")
+    if isinstance(kanban_cfg, dict) and "complexity_routing" in kanban_cfg:
+        routing_cfg = kanban_cfg.get("complexity_routing")
+        if routing_cfg is not None and not isinstance(routing_cfg, dict):
+            issues.append(ConfigIssue(
+                "error",
+                f"kanban.complexity_routing should be a dict, got {type(routing_cfg).__name__}",
+                "Change to:\n"
+                "  kanban:\n"
+                "    complexity_routing:\n"
+                "      enabled: false\n"
+                "      trigger_assignee: auto\n"
+                "      map:\n"
+                "        complex: advisor\n"
+                "      fallback: advisor",
+            ))
+        elif isinstance(routing_cfg, dict):
+            if not isinstance(routing_cfg.get("enabled", False), bool):
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.enabled must be true or false",
+                    "Set enabled: false to preserve current behavior, or enabled: true to activate routing",
+                ))
+            trigger = str(routing_cfg.get("trigger_assignee", "auto") or "").strip()
+            if not trigger:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.trigger_assignee must be a non-empty profile sentinel",
+                    "Use trigger_assignee: auto unless you have a different sentinel convention",
+                ))
+            try:
+                floor = float(routing_cfg.get("min_signal_floor", 0.2))
+            except (TypeError, ValueError):
+                floor = -1.0
+            if floor < 0:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.min_signal_floor must be a non-negative number",
+                    "Use min_signal_floor: 0.2 so sparse cards route to the stronger fallback",
+                ))
+            level_map = routing_cfg.get("map")
+            if level_map is not None and not isinstance(level_map, dict):
+                issues.append(ConfigIssue(
+                    "error",
+                    f"kanban.complexity_routing.map should be a dict, got {type(level_map).__name__}",
+                    "Map complexity levels to profile names, e.g. complex: advisor",
+                ))
+            elif isinstance(level_map, dict):
+                valid_levels = {"trivial", "simple", "moderate", "complex", "expert"}
+                for raw_level, raw_profile in level_map.items():
+                    level = str(raw_level).strip().lower()
+                    profile = str(raw_profile or "").strip()
+                    if level not in valid_levels:
+                        issues.append(ConfigIssue(
+                            "error",
+                            f"kanban.complexity_routing.map contains unknown level {raw_level!r}",
+                            "Use only: trivial, simple, moderate, complex, expert",
+                        ))
+                    if not profile:
+                        issues.append(ConfigIssue(
+                            "error",
+                            f"kanban.complexity_routing.map.{level or raw_level} must name a profile",
+                            "Set the map value to an installed Hermes profile name",
+                        ))
+            fallback = str(routing_cfg.get("fallback", "advisor") or "").strip()
+            if not fallback:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.fallback must name a profile",
+                    "Use a stronger profile such as advisor for fallback routing",
+                ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:
