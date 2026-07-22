@@ -16,8 +16,8 @@ DEFAULT_MOA_REFERENCE_MODELS: list[dict[str, str]] = [
 ]
 
 DEFAULT_MOA_AGGREGATOR: dict[str, str] = {
-    "provider": "openrouter",
-    "model": "anthropic/claude-opus-4.8",
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
 }
 
 

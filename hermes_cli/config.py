@@ -2350,7 +2350,7 @@ DEFAULT_CONFIG = {
                     {"provider": "openai-codex", "model": "gpt-5.5"},
                     {"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"},
                 ],
-                "aggregator": {"provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
+                "aggregator": {"provider": "anthropic", "model": "claude-opus-4-8"},
                 "max_tokens": 4096,
                 "enabled": True,
             }
