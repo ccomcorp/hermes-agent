@@ -72,3 +72,12 @@
 - **Rejected:** `cron_mode: approve` (the guard's own suggestion) — masks the leak by disabling the guard for genuine cron runs too.
 - **Verified:** `scripts/run_tests.sh` cron-approval + execute_code cluster 57/57; focused pytest incl. new `TestCronContextIsolation` 70/70; `test_approval.py` 2 failed/310 passed = PRE-EXISTING `TestDetectDangerousRm` (proven identical on pristine tree via git stash), 0 new. Diffs LF-clean.
 - **Ship:** desktop/gateway restart required to load the fix AND flush the already-poisoned `os.environ` in the running process.
+
+## 2026-07-21 — Route Advisor B1 lane-by-type + verification nudge
+
+- User: make same-chat work default to delegated specialist lanes by complexity/task type, without Kanban and without pretending the main chat model can swap under prompt caching.
+- **Reviewer finding accepted:** existing route_advisor signals were too coarse (`code_complexity`, `math_complexity`, `reasoning_depth`, `context_size`, `tool_calling`, `domain_specificity`) to distinguish debugging/frontend/research/architecture. Locked spec v1.1 to add minimal intent detectors instead of faking lane choice from coarse buckets.
+- **Fix:** `plugins/route_advisor/signals.py` now emits `debugging_intent`, `frontend_intent`, `research_intent`, and `architecture_intent`; `plugins/route_advisor/__init__.py` chooses only configured lanes (`frontend`, `research`, explicit architecture→`planning`/`thinking`, debugging, math→`thinking`, code/tooling→`coding`, fallback `coding`). `lane_by_type:false` preserves legacy coding-only nudge.
+- **Verification nudge:** opt-in `verify_nudge` detects recent `delegate_task` history and nudges independent validation via `critic`/`source-checker`/`review`; bundled defaults keep it false for token cost, live runtime config opts it true per user request.
+- **Runtime config:** `D:/HeicH/hermes-home/config.yaml` now has `route_advisor.mode: nudge`, `min_level: moderate`, `lane_by_type: true`, `verify_nudge: true`, `verify_min_level: moderate` (backup `config.yaml.bak-route-advisor-b1-20260721`). Restart required for running gateway sessions.
+- **Verified:** focused route_advisor suite 12/12 green; `py_compile` on touched Python files green; config validation/drift 22/22 green. Broader `tests/hermes_cli/test_config.py` remains 2-red on unrelated defaults (`get_hermes_home` AppData path, voice `spoken_max_chars` 5000 vs expected 600). Live probe confirmed debugging→`debugging`, frontend→`frontend`, research→`research`, architecture→`planning`, post-delegation verify→`critic`.

@@ -2296,14 +2296,17 @@ DEFAULT_CONFIG = {
     },
 
     # Deterministic delegation-route advisor. Off by default; when enabled it
-    # may append a short pre_llm_call nudge to implementation-heavy user turns
-    # if delegation.routes.coding is configured. It never dispatches or swaps
-    # the main session model.
+    # may append a short pre_llm_call nudge to work-heavy user turns using only
+    # configured delegation.routes. It never dispatches or swaps the main
+    # session model.
     "route_advisor": {
         "mode": "off",  # off | log | nudge
         "min_level": "complex",  # moderate | complex | expert
         "cooldown_turns": 5,
         "log_signals": True,
+        "lane_by_type": True,
+        "verify_nudge": False,
+        "verify_min_level": "moderate",  # trivial | simple | moderate | complex | expert
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts

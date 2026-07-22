@@ -28,6 +28,12 @@ _DEFAULT_ROUTE_ADVISOR_CONFIG = {
     "min_level": "complex",
     "cooldown_turns": 5,
     "log_signals": True,
+    "lane_by_type": True,
+    # Default OFF: independent verification is valuable, but it adds a second
+    # model pass after delegation. Users can opt in when they prefer the
+    # quality gate over token minimisation.
+    "verify_nudge": False,
+    "verify_min_level": "moderate",
 }
 _KILL_PLATFORMS = {"cron", "kanban"}
 
@@ -37,6 +43,7 @@ class AdvisorState:
     """Session-scoped cooldown state for advisor nudges."""
 
     last_nudge_turn_by_session: Dict[str, int] = field(default_factory=dict)
+    last_verify_nudge_turn_by_session: Dict[str, int] = field(default_factory=dict)
 
 
 _STATE = AdvisorState()
@@ -102,10 +109,15 @@ def build_nudge(
     cfg = _normalise_config(route_advisor_cfg)
     analysis = analyze_text(text, message_count=_message_count(history))
     routes = delegation_cfg.get("routes") if isinstance(delegation_cfg, Mapping) else {}
-    coding_route_exists = isinstance(routes, Mapping) and isinstance(routes.get("coding"), Mapping)
-    implementation_shaped = (
+    routes = routes if isinstance(routes, Mapping) else {}
+    chosen_route = _select_route(analysis, routes, lane_by_type=cfg["lane_by_type"])
+    work_shaped = (
         analysis.signals["code_complexity"] >= 10
         or analysis.signals["tool_calling"] >= 2
+        or analysis.signals.get("debugging_intent", 0) > 0
+        or analysis.signals.get("frontend_intent", 0) > 0
+        or analysis.signals.get("research_intent", 0) > 0
+        or analysis.signals.get("architecture_intent", 0) > 0
     )
     current_turn = _current_turn_index(history)
     session_key = session_id or "<unknown>"
@@ -122,21 +134,45 @@ def build_nudge(
         cfg["mode"] in {"log", "nudge"}
         and not killed
         and level_ok
-        and implementation_shaped
-        and coding_route_exists
+        and work_shaped
+        and chosen_route is not None
         and cooldown_ok
         and not recent_delegation
+    )
+    verify_route = _select_verifier_route(routes, producer_route=chosen_route or "coding")
+    verify_level_ok = _LEVEL_ORDER.get(analysis.level, -1) >= _LEVEL_ORDER.get(
+        cfg["verify_min_level"], _LEVEL_ORDER["moderate"]
+    )
+    verify_cooldown_ok = _verify_cooldown_satisfied(
+        state=state,
+        session_id=session_key,
+        current_turn=current_turn,
+        cooldown_turns=cfg["cooldown_turns"],
+    )
+    would_verify_nudge = bool(
+        cfg["mode"] in {"log", "nudge"}
+        and cfg["verify_nudge"]
+        and not killed
+        and recent_delegation
+        and verify_level_ok
+        and verify_route is not None
+        and verify_cooldown_ok
     )
 
     if cfg["mode"] == "log":
         if cfg["log_signals"]:
-            _log_analysis(analysis, would_nudge=would_nudge)
+            _log_analysis(analysis, would_nudge=would_nudge or would_verify_nudge)
         return None
-    if cfg["mode"] != "nudge" or not would_nudge:
+    if cfg["mode"] != "nudge":
+        return None
+    if would_verify_nudge:
+        state.last_verify_nudge_turn_by_session[session_key] = current_turn
+        return _render_verify_nudge(analysis, verify_route)
+    if not would_nudge or chosen_route is None:
         return None
 
     state.last_nudge_turn_by_session[session_key] = current_turn
-    return _render_nudge(analysis)
+    return _render_nudge(analysis, chosen_route)
 
 
 def _normalise_config(config: Mapping[str, Any]) -> Dict[str, Any]:
@@ -153,12 +189,79 @@ def _normalise_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         cooldown_turns = max(0, int(merged.get("cooldown_turns", 5)))
     except (TypeError, ValueError):
         cooldown_turns = 5
+    verify_min_level = str(merged.get("verify_min_level", "moderate")).lower()
+    if verify_min_level not in _LEVEL_ORDER:
+        verify_min_level = "moderate"
     return {
         "mode": mode,
         "min_level": min_level,
         "cooldown_turns": cooldown_turns,
         "log_signals": bool(merged.get("log_signals", True)),
+        "lane_by_type": bool(merged.get("lane_by_type", True)),
+        "verify_nudge": bool(merged.get("verify_nudge", False)),
+        "verify_min_level": verify_min_level,
     }
+
+
+
+
+def _route_exists(routes: Mapping[str, Any], route: str) -> bool:
+    return isinstance(routes, Mapping) and isinstance(routes.get(route), Mapping)
+
+
+def _select_route(analysis: SpecificityAnalysis, routes: Mapping[str, Any], *, lane_by_type: bool) -> Optional[str]:
+    if not lane_by_type:
+        return "coding" if _route_exists(routes, "coding") else None
+    candidates: list[str] = []
+    signals = analysis.signals
+    if signals.get("frontend_intent", 0) > 0:
+        candidates.append("frontend")
+    if signals.get("research_intent", 0) > 0:
+        candidates.append("research")
+    if signals.get("architecture_intent", 0) > 0:
+        candidates.extend(["planning", "thinking"])
+    if signals.get("debugging_intent", 0) > 0:
+        candidates.append("debugging")
+    if (
+        signals.get("reasoning_depth", 0) >= 10
+        and _LEVEL_ORDER.get(analysis.level, 0) >= _LEVEL_ORDER["complex"]
+        and not any(
+            signals.get(key, 0) > 0
+            for key in ("frontend_intent", "research_intent", "debugging_intent")
+        )
+    ):
+        candidates.extend(["planning", "thinking"])
+    if signals.get("math_complexity", 0) >= 4:
+        candidates.append("thinking")
+    if signals.get("code_complexity", 0) >= 10 or signals.get("tool_calling", 0) >= 2:
+        candidates.append("coding")
+    candidates.append("coding")
+    for route in candidates:
+        if _route_exists(routes, route):
+            return route
+    return None
+
+
+def _select_verifier_route(routes: Mapping[str, Any], *, producer_route: str) -> Optional[str]:
+    # Prefer lanes intentionally pinned to different model families in the user's
+    # routing matrix: critic (Moonshot), source-checker (Google), review (Kimi).
+    for route in ("critic", "source-checker", "review"):
+        if route != producer_route and _route_exists(routes, route):
+            return route
+    return None
+
+
+def _verify_cooldown_satisfied(
+    *,
+    state: AdvisorState,
+    session_id: str,
+    current_turn: int,
+    cooldown_turns: int,
+) -> bool:
+    last_turn = state.last_verify_nudge_turn_by_session.get(session_id)
+    if last_turn is None or cooldown_turns <= 0:
+        return True
+    return current_turn - last_turn > cooldown_turns
 
 
 def _is_killed(*, text: str, platform: str) -> bool:
@@ -239,7 +342,7 @@ def _log_analysis(analysis: SpecificityAnalysis, *, would_nudge: bool) -> None:
     )
 
 
-def _render_nudge(analysis: SpecificityAnalysis) -> str:
+def _render_nudge(analysis: SpecificityAnalysis, route: str) -> str:
     preferred = ["code-complexity", "tool-calling"]
     signals = [sig for sig in preferred if sig in analysis.triggered_signals]
     if not signals:
@@ -248,7 +351,7 @@ def _render_nudge(analysis: SpecificityAnalysis) -> str:
     nudge = (
         f"<route-advisor score={analysis.score} level={analysis.level} "
         f"signals={signal_text}>"
-        'This turn is implementation-heavy. Consider delegate_task(route="coding"); '
+        f'This turn is work-heavy. Consider delegate_task(route="{route}"); '
         "keep planning here."
         "</route-advisor>"
     )
@@ -256,6 +359,23 @@ def _render_nudge(analysis: SpecificityAnalysis) -> str:
         return nudge
     return (
         f"<route-advisor score={analysis.score} level={analysis.level} signals={signal_text}>"
-        'Consider delegate_task(route="coding") for execution.'
+        f'Consider delegate_task(route="{route}") for execution.'
         "</route-advisor>"
     )[:220]
+
+
+def _render_verify_nudge(analysis: SpecificityAnalysis, route: str) -> str:
+    signal_text = ",".join(analysis.triggered_signals[:2]) or "none"
+    nudge = (
+        f"<route-advisor score={analysis.score} level={analysis.level} "
+        f"signals={signal_text}>"
+        f'Delegated work is present. Consider independent validation via delegate_task(route="{route}") before accepting it.'
+        "</route-advisor>"
+    )
+    if len(nudge) <= 240:
+        return nudge
+    return (
+        f"<route-advisor score={analysis.score} level={analysis.level} signals={signal_text}>"
+        f'Consider delegate_task(route="{route}") to independently validate delegated work.'
+        "</route-advisor>"
+    )[:240]

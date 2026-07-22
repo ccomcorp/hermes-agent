@@ -45,6 +45,9 @@ def test_default_config_ships_route_advisor_off() -> None:
         "min_level": "complex",
         "cooldown_turns": 5,
         "log_signals": True,
+        "lane_by_type": True,
+        "verify_nudge": False,
+        "verify_min_level": "moderate",
     }
 
 
@@ -243,3 +246,149 @@ def test_log_mode_logs_signal_summary_without_injection(caplog: pytest.LogCaptur
     assert result is None
     assert "route_advisor:" in caplog.text
     assert "would_nudge=True" in caplog.text
+
+
+def test_intent_signals_support_lane_by_type_mapping() -> None:
+    from plugins.route_advisor.signals import analyze_text
+
+    debugging = analyze_text("Debug the failing pytest traceback and find the root cause of the crash.")
+    frontend = analyze_text("Build a responsive React dashboard UI component with accessible CSS layout.")
+    research = analyze_text("Research current sources and citations comparing vector databases.")
+    architecture = analyze_text("Design the distributed system architecture and write an ADR with tradeoffs.")
+
+    assert debugging.signals["debugging_intent"] > 0
+    assert "debugging-intent" in debugging.triggered_signals
+    assert frontend.signals["frontend_intent"] > 0
+    assert "frontend-intent" in frontend.triggered_signals
+    assert research.signals["research_intent"] > 0
+    assert "research-intent" in research.triggered_signals
+    assert architecture.signals["architecture_intent"] > 0
+    assert "architecture-intent" in architecture.triggered_signals
+
+
+def test_nudge_selects_route_by_intent_when_lane_by_type_enabled() -> None:
+    from plugins.route_advisor import AdvisorState, build_nudge
+
+    cfg = {"mode": "nudge", "min_level": "moderate", "cooldown_turns": 5, "log_signals": True}
+    routes = {
+        "coding": {"provider": "glm", "model": "glm-5.2"},
+        "debugging": {"provider": "deepseek", "model": "deepseek-r1"},
+        "frontend": {"provider": "moonshot", "model": "kimi-k3"},
+        "research": {"provider": "gemini", "model": "gemini-pro"},
+        "planning": {"provider": "anthropic", "model": "opus"},
+        "thinking": {"provider": "deepseek", "model": "deepseek-reasoner"},
+    }
+
+    def nudge(text: str) -> str:
+        result = build_nudge(
+            user_message=text,
+            route_advisor_cfg=cfg,
+            delegation_cfg={"routes": routes},
+            session_id=text,
+            platform="cli",
+            conversation_history=[{"role": "user", "content": text}],
+            state=AdvisorState(),
+        )
+        assert result is not None
+        return result
+
+    assert 'delegate_task(route="debugging")' in nudge(
+        "Debug the failing integration test traceback and fix the root cause. " + _implementation_prompt()
+    )
+    assert 'delegate_task(route="frontend")' in nudge(
+        "Build a responsive React UI component and CSS layout. " + _implementation_prompt()
+    )
+    assert 'delegate_task(route="research")' in nudge(
+        "Research sources and citations for this technical comparison. " + _implementation_prompt()
+    )
+    assert 'delegate_task(route="planning")' in nudge(
+        "Design the distributed architecture and ADR tradeoffs. " + _implementation_prompt()
+    )
+
+
+def test_lane_by_type_false_preserves_legacy_coding_nudge() -> None:
+    from plugins.route_advisor import AdvisorState, build_nudge
+
+    result = build_nudge(
+        user_message="Debug the failing traceback. " + _implementation_prompt(),
+        route_advisor_cfg={
+            "mode": "nudge",
+            "min_level": "moderate",
+            "cooldown_turns": 5,
+            "log_signals": True,
+            "lane_by_type": False,
+        },
+        delegation_cfg={
+            "routes": {
+                "coding": {"provider": "glm", "model": "glm-5.2"},
+                "debugging": {"provider": "deepseek", "model": "deepseek-r1"},
+            }
+        },
+        session_id="legacy",
+        platform="cli",
+        conversation_history=[{"role": "user", "content": _implementation_prompt()}],
+        state=AdvisorState(),
+    )
+
+    assert result is not None
+    assert 'delegate_task(route="coding")' in result
+
+
+def test_missing_selected_lane_falls_back_to_existing_coding_route() -> None:
+    from plugins.route_advisor import AdvisorState, build_nudge
+
+    result = build_nudge(
+        user_message="Debug the failing traceback. " + _implementation_prompt(),
+        route_advisor_cfg={"mode": "nudge", "min_level": "moderate", "cooldown_turns": 5, "log_signals": True},
+        delegation_cfg={"routes": {"coding": {"provider": "glm", "model": "glm-5.2"}}},
+        session_id="fallback",
+        platform="cli",
+        conversation_history=[{"role": "user", "content": _implementation_prompt()}],
+        state=AdvisorState(),
+    )
+
+    assert result is not None
+    assert 'delegate_task(route="coding")' in result
+    assert 'delegate_task(route="debugging")' not in result
+
+
+def test_verify_nudge_is_opt_in_and_names_independent_verifier_route() -> None:
+    from plugins.route_advisor import AdvisorState, build_nudge
+
+    cfg = {"mode": "nudge", "min_level": "moderate", "cooldown_turns": 5, "log_signals": True}
+    delegation_cfg = {
+        "routes": {
+            "coding": {"provider": "glm", "model": "glm-5.2"},
+            "critic": {"provider": "moonshot", "model": "kimi-k3"},
+        }
+    }
+    history = [
+        {"role": "user", "content": "Please implement the feature"},
+        {"role": "assistant", "tool_calls": [{"function": {"name": "delegate_task"}}]},
+        {"role": "tool", "name": "delegate_task", "content": "implemented"},
+        {"role": "user", "content": _implementation_prompt()},
+    ]
+
+    assert build_nudge(
+        user_message=_implementation_prompt(),
+        route_advisor_cfg=cfg,
+        delegation_cfg=delegation_cfg,
+        session_id="verify-off",
+        platform="cli",
+        conversation_history=history,
+        state=AdvisorState(),
+    ) is None
+
+    verify = build_nudge(
+        user_message=_implementation_prompt(),
+        route_advisor_cfg={**cfg, "verify_nudge": True, "verify_min_level": "moderate"},
+        delegation_cfg=delegation_cfg,
+        session_id="verify-on",
+        platform="cli",
+        conversation_history=history,
+        state=AdvisorState(),
+    )
+
+    assert verify is not None
+    assert "independent validation" in verify
+    assert 'delegate_task(route="critic")' in verify

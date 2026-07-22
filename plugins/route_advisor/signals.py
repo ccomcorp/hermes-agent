@@ -25,6 +25,10 @@ SIGNAL_KEYS = (
     "context_size",
     "tool_calling",
     "domain_specificity",
+    "debugging_intent",
+    "frontend_intent",
+    "research_intent",
+    "architecture_intent",
 )
 
 _TRIGGER_NAMES = {
@@ -34,6 +38,10 @@ _TRIGGER_NAMES = {
     "context_size": "context-size",
     "tool_calling": "tool-calling",
     "domain_specificity": "domain-specificity",
+    "debugging_intent": "debugging-intent",
+    "frontend_intent": "frontend-intent",
+    "research_intent": "research-intent",
+    "architecture_intent": "architecture-intent",
 }
 
 
@@ -168,6 +176,66 @@ def detect_domain_specificity(text: str) -> int:
     return min(10, max_domain_score)
 
 
+
+
+def detect_debugging_intent(text: str) -> int:
+    matches = _count_patterns(
+        text,
+        [
+            r"\b(?:debug|bug|failure|failing|failed|error|exception|traceback|stack\s*trace|crash|regression|root\s*cause|reproduce)\b",
+            r"\b(?:test|tests|build|lint|typecheck)\s+(?:fails?|failed|broken)\b",
+        ],
+        re.IGNORECASE,
+    )
+    return min(20, matches * 4)
+
+
+def detect_frontend_intent(text: str) -> int:
+    matches = _count_patterns(
+        text,
+        [
+            r"\b(?:frontend|front-end|ui|ux|css|html|react|vue|svelte|component|layout|responsive|tailwind|accessibility|a11y|design\s*system)\b",
+            r"\b(?:button|modal|form|sidebar|dashboard|landing\s*page|mobile\s*view)\b",
+        ],
+        re.IGNORECASE,
+    )
+    return min(20, matches * 4)
+
+
+def detect_research_intent(text: str) -> int:
+    matches = _count_patterns(
+        text,
+        [
+            r"\bresearch\b",
+            r"\binvestigate\b",
+            r"\bsurvey\b",
+            r"\bstate\s+of\s+the\s+art\b",
+            r"\bliterature\b",
+            r"\bsources?\b",
+            r"\bcitations?\b",
+            r"\bbibliography\b",
+            r"\bweb\s*search\b",
+            r"\bpapers?\b",
+            r"\barxiv\b",
+            r"\b(?:find|gather|synthesize)\s+(?:sources|papers|research)\b",
+        ],
+        re.IGNORECASE,
+    )
+    return min(24, matches * 6)
+
+
+def detect_architecture_intent(text: str) -> int:
+    matches = _count_patterns(
+        text,
+        [
+            r"\b(?:architecture|architect|design|spec|specification|plan|roadmap|rfc|adr|trade\s*off|tradeoff|system\s*design|distributed|scalable|migration|strategy)\b",
+            r"\b(?:decide|evaluate|choose)\s+(?:an|the)?\s*(?:architecture|approach|design|strategy)\b",
+        ],
+        re.IGNORECASE,
+    )
+    return min(20, matches * 4)
+
+
 def specificity_level(score: int) -> str:
     if score <= 5:
         return "trivial"
@@ -189,6 +257,10 @@ def analyze_text(text: str, message_count: int = 1) -> SpecificityAnalysis:
         "context_size": detect_context_size(current_text),
         "tool_calling": detect_tool_calling(current_text),
         "domain_specificity": detect_domain_specificity(current_text),
+        "debugging_intent": detect_debugging_intent(current_text),
+        "frontend_intent": detect_frontend_intent(current_text),
+        "research_intent": detect_research_intent(current_text),
+        "architecture_intent": detect_architecture_intent(current_text),
     }
     score = sum(signals.values())
     triggered = [_TRIGGER_NAMES[key] for key in SIGNAL_KEYS if signals.get(key, 0) > 0]
