@@ -3809,7 +3809,7 @@ def test_gateway_dispatcher_retries_corrupt_board_after_quarantine(
     def _monotonic_for_gateway_dispatcher():
         caller = inspect.currentframe().f_back  # type: ignore[union-attr]
         code = caller.f_code if caller is not None else None
-        filename = code.co_filename if code is not None else ""
+        filename = Path(code.co_filename).as_posix() if code is not None else ""
         # The kanban dispatcher/notifier watcher loops were extracted from
         # gateway/run.py into gateway/kanban_watchers.py (god-file Phase 3),
         # so accept either filename for the time-travel mock.

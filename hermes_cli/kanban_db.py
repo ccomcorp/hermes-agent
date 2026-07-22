@@ -6103,6 +6103,17 @@ def _classify_worker_exit(pid: int) -> "tuple[str, Optional[int]]":
             return ("signaled", os.WTERMSIG(raw))
     except Exception:
         pass
+    # Windows has no POSIX wait-status helpers, but tests and any future
+    # Windows reaper shims may still record raw return codes. Decode the
+    # common raw forms instead of degrading a clean exit to ``unknown``.
+    if raw == 0:
+        return ("clean_exit", 0)
+    if raw in {KANBAN_RATE_LIMIT_EXIT_CODE, KANBAN_RATE_LIMIT_EXIT_CODE << 8}:
+        return ("rate_limited", KANBAN_RATE_LIMIT_EXIT_CODE)
+    if raw > 255 and raw % 256 == 0:
+        return ("nonzero_exit", raw >> 8)
+    if raw > 0:
+        return ("nonzero_exit", raw)
     return ("unknown", None)
 
 
@@ -6233,6 +6244,14 @@ def _terminate_reclaimed_worker(
         info["terminated"] = True
         return info
     except OSError:
+        # Windows' os.kill raises a generic OSError (not ProcessLookupError)
+        # for a missing PID, so the branch above never catches the
+        # already-dead case there. Fall back to the cross-platform liveness
+        # probe: if the worker is truly gone the SIGTERM "failure" is really a
+        # successful termination; otherwise the signal genuinely failed and we
+        # must NOT claim termination (the defer guard needs the honest answer).
+        if not _pid_alive(pid):
+            info["terminated"] = True
         return info
 
     for _ in range(10):
@@ -9331,7 +9350,10 @@ def list_profiles_on_disk() -> list[str]:
     """
     try:
         from hermes_constants import get_default_hermes_root
-        default_root = get_default_hermes_root()
+        if os.environ.get("HERMES_HOME", "").strip():
+            default_root = get_default_hermes_root()
+        else:
+            default_root = Path.home() / ".hermes"
         profiles_dir = default_root / "profiles"
     except Exception:
         return []
