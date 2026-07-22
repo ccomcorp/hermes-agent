@@ -1,5 +1,13 @@
 # Session Log
 
+## 2026-07-22 — Slash popover mid-message fix
+
+- User: `/` popup only appears at position 0 of the chat box; typing `/` mid-message shows no command list, so commands can't be combined while composing.
+- Root cause: `SLASH_TRIGGER_RE` in `apps/desktop/src/app/chat/composer/text-utils.ts` was `^...$` anchored — deliberate old behavior ("slash commands only execute at the beginning of a message"), now stale vs. desired UX.
+- Fix: `lastSlashTokenStart()` scans for the last `/` at a token boundary (start-of-text or after whitespace); command grammar matched from there. Path/ratio/URL guards preserved. Tests updated + extended (14/14). Commit `e3d42c85e`.
+- Gates: touched-file tsc + eslint clean; composer-suite `document is not defined` failures proven pre-existing via `git stash` A/B.
+- **Ship:** requires Desktop rebuild (REPO ROOT npm install → build/pack, stop Desktop first).
+
 ## 2026-07-16 — Chassis relocation investigation
 
 - User: finalize AIOS build phase; move hermes-agent to new directory; proposed new GH repo → push → clone.
