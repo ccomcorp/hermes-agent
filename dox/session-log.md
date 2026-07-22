@@ -1,5 +1,15 @@
 # Session Log
 
+## 2026-07-22 — Kanban worker-lifecycle Windows portability (understand-first)
+
+- User: "look into the kanban" (2 uncommitted files in the working tree, no DOX provenance) → then "go to the root of the cause, understand what the code is supposed to do before making any changes."
+- **Method:** A/B'd the full kanban suites with `git stash` — clean tree 17 fail, uncommitted-as-is 12 fail. `comm` diff of the two failure sets revealed the changes fixed 6 tests but the 12→ vs 17 was misleading: change #2 (`_terminate_reclaimed_worker` blunt pre-`kill` early-return) **traded** a fix for a regression — it fixed nothing net and broke `test_stale_claim_reclaimed` (skipped the defensive SIGTERM the reclaim contract `06f24351c` requires).
+- **Root cause (understood via git blame, not guessed):** `os.kill(missing_pid)` raises `ProcessLookupError` on POSIX but generic `OSError` on Windows. Commit `35e7ca03d` ("treat already-gone worker as terminated, not survived") solved the dead-worker-deferred-forever bug via a `ProcessLookupError` branch — which **never fires on Windows**. The uncommitted early-return was a blunt workaround that violated the SIGTERM contract.
+- **Fix:** removed the early-return; instead the `OSError` branch consults the cross-platform `_pid_alive` probe and sets `terminated=True` only when the worker is genuinely gone. Satisfies BOTH `test_stale_claim_reclaimed` (SIGTERM still fires) AND `test_dispatch_once_integrates_stale_detection` (Windows dead-PID via real `os.kill`).
+- Changes #1 (`_classify_worker_exit` raw-form decoder) and #3 (`list_profiles_on_disk` `~/.hermes` fallback) verified sound + necessary (each maps to a test that fails without it); test tweak = `.as_posix()` slash-agnostic filename compare.
+- **Gates:** 387 passed / 1 skipped; 11 remaining failures are unrelated pre-existing Windows gaps (git-worktree, `resolve_hermes_argv` PATH shim, POSIX-only `reap_worker_zombies`), zero net-new vs clean tree. ruff clean. Commit `8b53cd5b7`.
+- **Lesson:** a failure-count that holds steady can hide a fix-for-regression trade. Always `comm`-diff the actual failure *sets*, not just counts, and A/B against the pre-change tree.
+
 ## 2026-07-22 — Slash popover mid-message fix
 
 - User: `/` popup only appears at position 0 of the chat box; typing `/` mid-message shows no command list, so commands can't be combined while composing.
