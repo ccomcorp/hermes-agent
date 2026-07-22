@@ -46,12 +46,27 @@ describe('detectTrigger', () => {
     expect(detectTrigger('/path/to/file')).toBeNull()
   })
 
-  it('does not trigger slash popover mid-message', () => {
-    expect(detectTrigger('hello /')).toBeNull()
-    expect(detectTrigger('hello /skill')).toBeNull()
-    expect(detectTrigger('hello there /personality alic')).toBeNull()
-    expect(detectTrigger('text\n/skill')).toBeNull()
-    expect(detectTrigger('multi word message /')).toBeNull()
+  it('triggers the slash popover mid-message at a token boundary', () => {
+    expect(detectTrigger('hello /')).toEqual({ kind: '/', query: '', tokenLength: 1 })
+    expect(detectTrigger('hello /skill')).toEqual({ kind: '/', query: 'skill', tokenLength: 6 })
+    expect(detectTrigger('hello there /personality alic')).toEqual({
+      kind: '/',
+      query: 'personality alic',
+      tokenLength: 17
+    })
+    expect(detectTrigger('text\n/skill')).toEqual({ kind: '/', query: 'skill', tokenLength: 6 })
+    expect(detectTrigger('multi word message /')).toEqual({ kind: '/', query: '', tokenLength: 1 })
+  })
+
+  it('tracks the last slash token when the draft holds several', () => {
+    expect(detectTrigger('/first arg /second')).toEqual({ kind: '/', query: 'second', tokenLength: 7 })
+  })
+
+  it('still ignores non-token slashes mid-message', () => {
+    expect(detectTrigger('see src/foo/bar')).toBeNull()
+    expect(detectTrigger('ratio 1/2')).toBeNull()
+    expect(detectTrigger('visit https://example.com/x')).toBeNull()
+    expect(detectTrigger('hello / world')).toBeNull()
   })
 
   it('still anchors at-mention triggers strictly at the token edge', () => {

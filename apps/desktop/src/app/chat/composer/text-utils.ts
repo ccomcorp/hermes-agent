@@ -12,11 +12,25 @@ export interface TriggerState {
 // Restricting the slash command name to `[a-zA-Z][\w-]*` avoids matching file
 // paths like `src/foo/bar`.
 //
-// Slash commands only execute at the beginning of a message, so the `/`
-// trigger is anchored strictly at position 0 — not after whitespace — to
-// avoid opening the popover mid-message (e.g. `hello /`).
+// A `/` trigger may appear anywhere in the draft — not only at position 0 —
+// so commands can be composed mid-message. To count, the `/` must start a
+// token (preceded by start-of-text or whitespace), which keeps file paths
+// (`src/foo/bar`, `/path/to/file`) and URLs from opening the popover. When a
+// draft holds several slash tokens, the LAST one wins so the popover tracks
+// the command currently being typed rather than an earlier one.
 const AT_TRIGGER_RE = /(?:^|[\s])(@)([^\s@/]*)$/
-const SLASH_TRIGGER_RE = /^(\/)((?:[a-zA-Z][\w-]*(?:\s+\S*)*)?)$/
+const SLASH_TAIL_RE = /^(\/)((?:[a-zA-Z][\w-]*(?:\s+\S*)*)?)$/
+
+/** Index of the last `/` that starts a token (start-of-text or after whitespace), or -1. */
+function lastSlashTokenStart(text: string): number {
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    if (text[i] === '/' && (i === 0 || /\s/.test(text[i - 1]))) {
+      return i
+    }
+  }
+
+  return -1
+}
 
 /** Stable key for paste dedupe — `items` and `files` often mirror the same image as different objects. */
 export function blobDedupeKey(blob: Blob): string {
@@ -107,10 +121,14 @@ export function textBeforeCaret(editor: HTMLDivElement): string | null {
 }
 
 export function detectTrigger(textBefore: string): TriggerState | null {
-  const slash = SLASH_TRIGGER_RE.exec(textBefore)
+  const slashStart = lastSlashTokenStart(textBefore)
 
-  if (slash) {
-    return { kind: '/', query: slash[2], tokenLength: 1 + slash[2].length }
+  if (slashStart >= 0) {
+    const slash = SLASH_TAIL_RE.exec(textBefore.slice(slashStart))
+
+    if (slash) {
+      return { kind: '/', query: slash[2], tokenLength: 1 + slash[2].length }
+    }
   }
 
   const at = AT_TRIGGER_RE.exec(textBefore)
