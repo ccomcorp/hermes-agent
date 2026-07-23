@@ -3649,10 +3649,29 @@ def _compress_session_history(
     before_messages: list | None = None,
     history_version: int | None = None,
 ) -> tuple[int, dict]:
+    """Compress a session's history — the single choke point shared by all
+    three manual-compress routes (session.compress RPC, command.dispatch
+    /compress|/compact, and the slash-exec mirror).
+
+    ``focus_topic`` is the RAW argument string after ``/compress``. It is
+    parsed here with :func:`parse_partial_compress_args` so boundary-aware
+    forms (``here [N]``, ``up to here``, ``--keep N``) trigger a partial
+    compress — head summarized, most recent ``keep_last`` exchanges kept
+    verbatim — on EVERY route, mirroring cli.py's ``_manual_compress`` and
+    gateway/slash_commands.py (PR #35252). Parsing at the choke point (not
+    per-route) is what fixes #35533: previously "/compress here 3" reached
+    this helper unparsed and ran a FULL compress focused on the literal
+    text "here 3".
+    """
     from agent.conversation_compression import (
         finalize_context_engine_compression_notification,
     )
     from agent.model_metadata import estimate_request_tokens_rough
+    from hermes_cli.partial_compress import (
+        parse_partial_compress_args,
+        rejoin_compressed_head_and_tail,
+        split_history_for_partial_compress,
+    )
 
     agent = session["agent"]
     # Snapshot history under the lock so the LLM-bound compression call
@@ -3667,6 +3686,18 @@ def _compress_session_history(
     if len(history) < 4:
         usage = _get_usage(agent)
         return 0, usage
+    partial, keep_last, focus_topic = parse_partial_compress_args(focus_topic or "")
+    # Boundary-aware split: only the head is summarized; the most recent
+    # `keep_last` exchanges ride along verbatim. A degenerate split (empty
+    # tail — everything would be kept, or no head left to compress) falls
+    # back to full compression so the user still gets an action.
+    tail: list = []
+    head = history
+    if partial:
+        head, tail = split_history_for_partial_compress(history, keep_last)
+        if not tail:
+            partial = False
+            head = history
     if approx_tokens is None:
         # Include system prompt + tool schemas so the figure reflects real
         # request pressure, not a transcript-only underestimate (#6217).
@@ -3687,9 +3718,12 @@ def _compress_session_history(
     # and gateway handlers.
     try:
         compressed, _ = agent._compress_context(
-            history,
+            head,
             None,
             approx_tokens=approx_tokens,
+            # Partial compress has no focus topic (the modes are exclusive;
+            # parse_partial_compress_args returns focus_topic=None for the
+            # boundary-aware forms).
             focus_topic=focus_topic or None,
             force=True,
             defer_context_engine_notification=True,
@@ -3700,6 +3734,8 @@ def _compress_session_history(
             committed=False,
         )
         raise
+    if partial and tail:
+        compressed = rejoin_compressed_head_and_tail(compressed, tail)
     with session["history_lock"]:
         if int(session.get("history_version", 0)) != history_version:
             # External mutation during compaction — drop the compressed
@@ -3866,11 +3902,15 @@ def _get_usage(agent) -> dict:
 
 
 def _probe_credentials(agent) -> str:
-    """Light credential check at session creation — returns warning or ''."""
+    """Light credential check at session creation — returns warning or ''.
+
+    ``no-key-required`` is a valid sentinel for keyless custom providers; only
+    warn when the key is genuinely missing.
+    """
     try:
         key = getattr(agent, "api_key", "") or ""
         provider = getattr(agent, "provider", "") or ""
-        if not key or key == "no-key-required":
+        if not key:
             return f"No API key configured for provider '{provider}'. First message will fail."
     except Exception:
         pass
@@ -5670,6 +5710,20 @@ def _is_text_only_busy_payload(content: Any) -> bool:
     return False
 
 
+def _is_display_hidden_marker(role: str | None, text: str) -> bool:
+    """Gateway bookkeeping notices (model-switch, personality) are persisted as
+    role=user ``[System: …]`` rows so strict providers accept them mid-history.
+    They are model-facing runtime metadata, not user turns, and must never
+    render as a user bubble in ANY client transcript (desktop, TUI, CLI, web).
+
+    Filtering here — the single display projection every surface reads — hides
+    them everywhere while the raw marker stays in ``session["history"]`` for the
+    model. It also removes the stored marker from the payload the desktop
+    reconciles against, so it can no longer shift user-message ordinals and
+    duplicate the optimistic prompt (#67603)."""
+    return role == "user" and text.lstrip().startswith("[System:")
+
+
 def _history_to_messages(history: list[dict]) -> list[dict]:
     messages = []
     tool_call_args = {}
@@ -5681,6 +5735,8 @@ def _history_to_messages(history: list[dict]) -> list[dict]:
         if role not in {"user", "assistant", "tool", "system"}:
             continue
         content_text = _coerce_message_text(m.get("content"))
+        if _is_display_hidden_marker(role, content_text):
+            continue
         if role == "assistant" and m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 fn = tc.get("function", {})
@@ -10523,6 +10579,9 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                         _provider,
                         _model,
                         _cfg,
+                        requested_provider=getattr(
+                            agent, "requested_provider", ""
+                        ),
                     )
                     if getattr(agent, "api_mode", "") == "codex_app_server":
                         _mode = "text"
@@ -13828,6 +13887,10 @@ def _(rid, params: dict) -> dict:
     if hint:
         return _ok(rid, {"blocked": True, "hint": hint, "code": -1, "output": ""})
     try:
+        # CREATE_NO_WINDOW on Windows — under the desktop GUI's windowless
+        # parent, this spawn otherwise flashes a console (#56747).
+        from hermes_cli._subprocess_compat import windows_hide_flags
+
         r = subprocess.run(
             [sys.executable, "-m", "hermes_cli.main", *argv],
             capture_output=True,
@@ -13838,6 +13901,7 @@ def _(rid, params: dict) -> dict:
             # needs provider credentials. Tier-1 secrets still stripped (#29157).
             env=hermes_subprocess_env(inherit_credentials=True),
             stdin=subprocess.DEVNULL,
+            creationflags=windows_hide_flags(),
         )
         parts = [r.stdout or "", r.stderr or ""]
         out = "\n".join(p for p in parts if p).strip() or "(no output)"
@@ -13897,6 +13961,8 @@ def _(rid, params: dict) -> dict:
             # has all API keys in os.environ.
             from tools.environments.local import _sanitize_subprocess_env
             sanitized_env = _sanitize_subprocess_env(os.environ.copy())
+            from hermes_cli._subprocess_compat import windows_hide_flags
+
             r = subprocess.run(
                 qc.get("command", ""),
                 shell=True,
@@ -13905,6 +13971,7 @@ def _(rid, params: dict) -> dict:
                 timeout=30,
                 stdin=subprocess.DEVNULL,
                 env=sanitized_env,
+                creationflags=windows_hide_flags(),
             )
             output = (
                 (r.stdout or "")
@@ -15483,6 +15550,10 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
                 else 0
             )
 
+            # The raw argument goes through unparsed: _compress_session_history
+            # (the choke point shared by all three manual-compress routes)
+            # parses the boundary-aware forms (here [N], up to here, --keep N)
+            # and does the partial head/tail split there (#35533).
             _compress_session_history(session, arg)
             _sync_session_key_after_compress(sid, session)
 
@@ -16967,9 +17038,12 @@ def _(rid, params: dict) -> dict:
     except ImportError:
         return _err(rid, 5001, "shell.exec unavailable: approval safety module not importable")
     try:
+        from hermes_cli._subprocess_compat import windows_hide_flags
+
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=os.getcwd(),
             stdin=subprocess.DEVNULL,
+            creationflags=windows_hide_flags(),
         )
         return _ok(
             rid,
