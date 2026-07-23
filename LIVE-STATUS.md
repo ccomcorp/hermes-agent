@@ -3,7 +3,7 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-21 (Route Advisor B1 lane-by-type + verification nudge)
+**Updated:** 2026-07-23 (upstream/main merge resolved + verified locally)
 
 ## Scoreboard
 
@@ -20,6 +20,7 @@
 | CodeGraph | **PASS** | re-init 4650 files / 123667 nodes |
 | Open Notebook | **PASS** | :5055 healthy |
 | Delegation routes + Route Advisor | **SOURCE FIXED** | Routes live; route_advisor B1 lane-by-type + verify nudge committed source; runtime config opted in; restart gateway/Desktop to load |
+| Upstream/main merge | **LOCAL PASS** | Branch `merge/upstream-main-test-20260723-005006`; conflicts resolved, local merge commit created, desktop build/typecheck + focused Python/Desktop gates green; adversarial review pending before push/promote |
 
 ## Maintenance
 

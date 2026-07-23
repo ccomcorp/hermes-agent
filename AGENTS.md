@@ -1438,10 +1438,10 @@ them into invariants before re-requesting review.
 | --- | --- |
 | __pycache__/ | TODO: describe |
 | acp_adapter/ | TODO: describe |
-| acp_registry/ | TODO: describe |
 | agent/ | TODO: describe |
 | apps/ | TODO: describe |
 | assets/ | TODO: describe |
+| contributors/ | TODO: describe |
 | cron/ | TODO: describe |
 | data/ | TODO: describe |
 | datagen-config-examples/ | TODO: describe |
@@ -1454,16 +1454,17 @@ them into invariants before re-requesting review.
 | hermes_cli/ | TODO: describe |
 | infographic/ | TODO: describe |
 | locales/ | TODO: describe |
+| native/ | TODO: describe |
 | nix/ | TODO: describe |
 | node_modules/ | TODO: describe |
 | optional-mcps/ | TODO: describe |
 | optional-skills/ | TODO: describe |
-| packaging/ | TODO: describe |
 | plugins/ | TODO: describe |
 | providers/ | TODO: describe |
 | reports/ | TODO: describe |
 | scripts/ | TODO: describe |
 | skills/ | TODO: describe |
+| tests-js/ | TODO: describe |
 | tests/ | TODO: describe |
 | tools/ | TODO: describe |
 | tui_gateway/ | TODO: describe |
