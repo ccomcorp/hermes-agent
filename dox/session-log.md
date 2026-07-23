@@ -1,5 +1,14 @@
 # Session Log
 
+## 2026-07-23 — Desktop left-panel route mounts after upstream merge
+
+- **Symptom:** multiple visible left-panel entries and Settings → Plugins were inert after the upstream Desktop shell/routing merge.
+- **Source-doc check:** `apps/desktop/AGENTS.md` confirms the renderer owns navigation/routes and that code wins if docs drift; `apps/desktop/README.md` says React owns Desktop routes/panes/interaction state; `website/docs/developer-guide/desktop-plugin-sdk.md` states a full-page route must be paired with sidebar navigation to be reachable. That matches the bug class: visible navigation without a mounted route/surface is incomplete wiring, not a backend problem.
+- **Root cause:** route constants and sidebar rows survived the merge, but the new `ChatRoutesSurface` did not mount all built-in pages; `ContribWiring` had a `docopsOpen` overlay state with no `<DocOpsView />` renderer; `route-tile.tsx` only knew a subset of built-in routes for split panes.
+- **Fix:** restored lazy mounts for Models, Kanban, Canvas, Channels, Pairing, Webhooks, Plugins, Files, Workbench, System, Config, Logs; rendered DocOps overlay; added split-pane route renderers; updated the `session-actions-menu` test mock for upstream project-store exports.
+- **Gates:** touched-file ESLint green; desktop typecheck green; focused UI tests 6/6; full Desktop UI suite 2074 passed / 1 skipped; desktop build/assert-dist green; `dox status/check` active with drift none. Full `npm run check --workspace apps/desktop` still fails in unrelated Windows/Electron platform tests outside the touched files.
+- **Learning:** after any Desktop shell/routing merge, verify every visible built-in nav item across four points together: route constant, sidebar row, mounted workspace/overlay surface, and split-pane route renderer.
+
 ## 2026-07-22 — Kanban worker-lifecycle Windows portability (understand-first)
 
 - User: "look into the kanban" (2 uncommitted files in the working tree, no DOX provenance) → then "go to the root of the cause, understand what the code is supposed to do before making any changes."

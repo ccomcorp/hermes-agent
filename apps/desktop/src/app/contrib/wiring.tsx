@@ -111,6 +111,7 @@ import type { WiringActions, WiringApi } from './types'
 const AgentsView = lazy(async () => ({ default: (await import('../agents')).AgentsView }))
 const CommandCenterView = lazy(async () => ({ default: (await import('../command-center')).CommandCenterView }))
 const CronView = lazy(async () => ({ default: (await import('../cron')).CronView }))
+const DocOpsView = lazy(async () => ({ default: (await import('../docops')).DocOpsView }))
 const ProfilesView = lazy(async () => ({ default: (await import('../profiles')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('../settings')).SettingsView }))
 const StarmapView = lazy(async () => ({ default: (await import('../starmap')).StarmapView }))
@@ -190,6 +191,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     commandCenterOpen,
     cronOpen,
     currentView,
+    docopsOpen,
     openAgents,
     openCommandCenterSection,
     openStarmap,
@@ -998,6 +1000,12 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       {starmapOpen && (
         <Suspense fallback={null}>
           <StarmapView onClose={closeOverlayToPreviousRoute} />
+        </Suspense>
+      )}
+
+      {docopsOpen && (
+        <Suspense fallback={null}>
+          <DocOpsView onClose={closeOverlayToPreviousRoute} />
         </Suspense>
       )}
 

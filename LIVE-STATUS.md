@@ -3,7 +3,7 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-23 (upstream/main merge blocker fixed + verified locally)
+**Updated:** 2026-07-23 (desktop sidebar route-mount regression fixed + source-doc checked)
 
 ## Scoreboard
 
@@ -12,6 +12,7 @@
 | Cutover HeicH | **PASS** | Desktop live on D: path; stamp e19a76010 |
 | DocOps hybrid | **PASS** | active; drift cleared |
 | DocOps Desktop panel | **FIXED (source)** | Hosted in Panel/OverlayView; theme tokens; needs Desktop rebuild to ship |
+| Desktop left-panel routing | **FIXED (source + built)** | Visible built-in sidebar rows now have route constants + mounted workspace/overlay surfaces + split-pane renderers; restart Desktop to load |
 | Composite + experience | **PASS** | 357 lessons; AIOS_PACKAGES_DIR wired |
 | NeuroLinked | **PASS** | connected ADOLESCENT |
 | QMD + gbrain | **PASS** | dual vault retrieval OK |

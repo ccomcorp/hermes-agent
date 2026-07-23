@@ -23,7 +23,7 @@ vi.mock('@/components/pane-shell/tree/store', () => ({
   closeTreeTabsToRight: vi.fn(),
   treeTabCloseTargets: vi.fn(() => null)
 }))
-vi.mock('@/hermes', () => ({ renameSession: vi.fn() }))
+vi.mock('@/hermes', () => ({ renameSession: vi.fn(), setApiRequestProfile: vi.fn() }))
 vi.mock('@/i18n', () => ({
   useI18n: () => ({
     t: {
@@ -57,6 +57,14 @@ vi.mock('@/lib/profile-color', () => ({ PROFILE_SWATCHES: [] }))
 vi.mock('@/lib/session-export', () => ({ exportSession: vi.fn() }))
 vi.mock('@/store/gateway', () => ({ activeGateway: vi.fn(() => null) }))
 vi.mock('@/store/notifications', () => ({ notify: vi.fn(), notifyError: vi.fn() }))
+vi.mock('@/store/projects', () => ({
+  $projects: atom<unknown[]>([]),
+  createProjectAndMoveSession: vi.fn(),
+  moveSessionToProject: vi.fn(),
+  pickProjectFolder: vi.fn(),
+  projectWorkspacePath: vi.fn(() => null),
+  refreshProjects: vi.fn(() => Promise.resolve())
+}))
 vi.mock('@/store/session', () => ({
   $activeSessionId: atom<null | string>(null),
   $selectedStoredSessionId: atom<null | string>(null),

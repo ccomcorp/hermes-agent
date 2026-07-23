@@ -32,8 +32,20 @@ import type { SidebarActions, WiringActions } from './types'
 // full-page views the workspace route table mounts live here; overlay views
 // (agents/settings/…) are the controller's and stay in wiring.tsx.
 const ArtifactsView = lazy(async () => ({ default: (await import('../artifacts')).ArtifactsView }))
+const CanvasView = lazy(async () => ({ default: (await import('../canvas')).CanvasView }))
+const ChannelsView = lazy(async () => ({ default: (await import('../channels')).ChannelsView }))
+const ConfigView = lazy(async () => ({ default: (await import('../config')).ConfigView }))
+const FilesView = lazy(async () => ({ default: (await import('../files')).FilesView }))
+const KanbanView = lazy(async () => ({ default: (await import('../kanban')).KanbanView }))
+const LogsView = lazy(async () => ({ default: (await import('../logs')).LogsView }))
 const MessagingView = lazy(async () => ({ default: (await import('../messaging')).MessagingView }))
+const ModelsView = lazy(async () => ({ default: (await import('../models')).ModelsView }))
+const PairingView = lazy(async () => ({ default: (await import('../pairing')).PairingView }))
+const PluginsView = lazy(async () => ({ default: (await import('../plugins')).PluginsView }))
 const SkillsView = lazy(async () => ({ default: (await import('../skills')).SkillsView }))
+const SystemView = lazy(async () => ({ default: (await import('../system')).SystemView }))
+const WebhooksView = lazy(async () => ({ default: (await import('../webhooks')).WebhooksView }))
+const WorkbenchView = lazy(async () => ({ default: (await import('../workbench')).WorkbenchView }))
 
 export function LegacySessionRedirect() {
   const { sessionId } = useParams()
@@ -183,9 +195,22 @@ export const ChatRoutesSurface = memo(function ChatRoutesSurface({
       <Route element={page(<SkillsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="skills" />
       <Route element={page(<MessagingView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="messaging" />
       <Route element={page(<ArtifactsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="artifacts" />
+      <Route element={page(<KanbanView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="kanban" />
+      <Route element={page(<CanvasView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="canvas" />
+      <Route element={page(<ChannelsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="channels" />
+      <Route element={page(<PairingView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="pairing" />
+      <Route element={page(<WebhooksView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="webhooks" />
+      <Route element={page(<PluginsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="plugins" />
+      <Route element={page(<FilesView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="files" />
+      <Route element={page(<WorkbenchView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="workbench" />
+      <Route element={page(<SystemView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="system" />
+      <Route element={page(<ConfigView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="config" />
+      <Route element={page(<LogsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="logs" />
+      <Route element={page(<ModelsView setStatusbarItemGroup={setStatusbarItemGroup} />)} path="models" />
       <Route element={null} path="agents" />
       <Route element={null} path="command-center" />
       <Route element={null} path="cron" />
+      <Route element={null} path="docops" />
       <Route element={null} path="profiles" />
       <Route element={null} path="settings" />
       <Route element={null} path="starmap" />
