@@ -13770,9 +13770,7 @@ async def run_backup(body: BackupRequest):
         # arguments: <path>"). AIOS-FIX: backup-dashboard-output-flag
         args.extend(["-o", body.output.strip()])
     output = (body.output or "").strip()
-    if output:
-        args.extend(["-o", output])
-    else:
+    if not output:
         archive = _new_dashboard_backup_path()
         try:
             archive.parent.mkdir(parents=True, exist_ok=True)

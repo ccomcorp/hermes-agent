@@ -3022,6 +3022,27 @@ class TestWebServerEndpoints:
         assert archive.name.startswith("hermes-backup-")
         assert archive.suffix == ".zip"
 
+    def test_ops_backup_explicit_output_passes_single_output_flag(self, tmp_path, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        explicit_archive = tmp_path / "explicit-backup.zip"
+        captured = {}
+
+        def fake_spawn(subcommand, name):
+            captured["args"] = subcommand
+            captured["name"] = name
+            from types import SimpleNamespace as NS
+            return NS(pid=12345)
+
+        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn)
+
+        resp = self.client.post("/api/ops/backup", json={"output": str(explicit_archive)})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "pid": 12345, "name": "backup"}
+        assert captured["name"] == "backup"
+        assert captured["args"] == ["backup", "-o", str(explicit_archive)]
+
     def test_ops_backup_uses_hosted_hermes_home(self, tmp_path, monkeypatch):
         from pathlib import Path
 
