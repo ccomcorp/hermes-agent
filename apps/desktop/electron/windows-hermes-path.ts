@@ -131,8 +131,10 @@ export function getVenvSitePackagesEntries(
       }
     })
 
+  const pathApi = isWindows ? path.win32 : path.posix
+
   if (isWindows) {
-    const sitePackages = path.join(venvRoot, 'Lib', 'site-packages')
+    const sitePackages = pathApi.join(venvRoot, 'Lib', 'site-packages')
 
     if (directoryExists(sitePackages)) {
       entries.push(sitePackages)
@@ -141,7 +143,7 @@ export function getVenvSitePackagesEntries(
     return entries
   }
 
-  const cfg = readFile(path.join(venvRoot, 'pyvenv.cfg'))
+  const cfg = readFile(pathApi.join(venvRoot, 'pyvenv.cfg'))
 
   const version = (() => {
     if (!cfg) {
@@ -154,7 +156,7 @@ export function getVenvSitePackagesEntries(
   })()
 
   if (version) {
-    const sitePackages = path.join(venvRoot, 'lib', `python${version}`, 'site-packages')
+    const sitePackages = pathApi.join(venvRoot, 'lib', `python${version}`, 'site-packages')
 
     if (directoryExists(sitePackages)) {
       entries.push(sitePackages)

@@ -119,7 +119,8 @@ function redactSecrets(text) {
 // (~72 bytes on macOS) stays clear. Windows has no AF_UNIX sun_path limit.
 function controlSocketPath(user, host, port, baseDir?, identity: any = {}) {
   const dir = baseDir || defaultControlDir()
-  const keyPathIdentity = path.normalize(String(identity.keyPath || ''))
+  const pathApi = pathApiForControlPath(dir, identity.keyPath)
+  const keyPathIdentity = pathApi.normalize(String(identity.keyPath || ''))
 
   const parts = [
     identity.ownershipId || '',
@@ -133,7 +134,21 @@ function controlSocketPath(user, host, port, baseDir?, identity: any = {}) {
 
   const id = crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 16)
 
-  return path.join(dir, `${id}.sock`)
+  return pathApi.join(dir, `${id}.sock`)
+}
+
+function pathApiForControlPath(...values) {
+  const text = values.map(value => String(value || '')).join('\n')
+
+  if (/^[a-z]:[\\/]/i.test(text) || text.includes('\\')) {
+    return path.win32
+  }
+
+  if (text.includes('/')) {
+    return path.posix
+  }
+
+  return path
 }
 
 function defaultControlDir() {
@@ -573,7 +588,7 @@ class SshConnection {
       return
     }
 
-    const controlDir = path.dirname(this.controlPath)
+    const controlDir = pathApiForControlPath(this.controlPath).dirname(this.controlPath)
 
     try {
       fs.mkdirSync(controlDir, { recursive: true, mode: 0o700 })

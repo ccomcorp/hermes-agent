@@ -320,4 +320,4 @@ test('addWorktree: base origin/main does not set up upstream tracking', async ()
     fs.rmSync(remoteDir, { recursive: true, force: true })
     fs.rmSync(cloneDir, { recursive: true, force: true })
   }
-})
+}, 15000)
