@@ -1,3 +1,8 @@
+import { atom } from 'nanostores'
+import type { ReactNode } from 'react'
+
+import { registry } from '@/contrib/registry'
+
 export const SESSION_ROUTE_PREFIX = '/'
 export const NEW_CHAT_ROUTE = '/'
 export const SETTINGS_ROUTE = '/settings'
@@ -34,6 +39,8 @@ export type AppView =
   | 'config'
   | 'cron'
   | 'docops'
+  // A contributed (plugin) full page at its own route — NOT chat.
+  | 'extension'
   | 'files'
   | 'kanban'
   | 'logs'
@@ -109,9 +116,39 @@ export const APP_ROUTES = [
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))
 const RESERVED_PATHS: ReadonlySet<string> = new Set(APP_ROUTES.map(route => route.path))
 
+// ── Contributed routes — the `routes` registry area ─────────────────────────
+export const ROUTES_AREA = 'routes'
+
+export interface RouteContribution {
+  path: string
+}
+
+export function contributedRoutes(): Array<{ key: string; path: string; title?: string; render: () => ReactNode }> {
+  return registry
+    .getArea(ROUTES_AREA)
+    .map(c => ({
+      key: `${c.source ?? 'core'}:${c.id}`,
+      path: (c.data as RouteContribution | undefined)?.path ?? '',
+      title: c.title,
+      render: c.render!
+    }))
+    .filter(route => Boolean(route.path.startsWith('/') && route.render) && !RESERVED_PATHS.has(route.path))
+}
+
+function isContributedPath(pathname: string): boolean {
+  return contributedRoutes().some(route => route.path === pathname)
+}
+
+// ── Contributed sidebar nav — the `sidebar.nav` registry area ────────────────
+export const SIDEBAR_NAV_AREA = 'sidebar.nav'
+
+export interface SidebarNavContribution {
+  codicon: string
+  label: string
+  path: string
+}
+
 // Views that render as a full-screen modal card (OverlayView) over the shell.
-// While one is open the app's titlebar control clusters must hide so they don't
-// bleed over the overlay (they sit at a higher z-index than the overlay card).
 export const OVERLAY_VIEWS: ReadonlySet<AppView> = new Set([
   'agents',
   'command-center',
@@ -131,7 +168,7 @@ export function isNewChatRoute(pathname: string): boolean {
 }
 
 export function routeSessionId(pathname: string): string | null {
-  if (!pathname.startsWith(SESSION_ROUTE_PREFIX) || RESERVED_PATHS.has(pathname)) {
+  if (!pathname.startsWith(SESSION_ROUTE_PREFIX) || RESERVED_PATHS.has(pathname) || isContributedPath(pathname)) {
     return null
   }
 
@@ -149,5 +186,21 @@ export function appViewForPath(pathname: string): AppView {
     return 'chat'
   }
 
+  if (isContributedPath(pathname)) {
+    return 'extension'
+  }
+
   return APP_VIEW_BY_PATH.get(pathname) ?? 'chat'
+}
+
+/** True while the workspace pane shows a FULL PAGE instead of chat. */
+export const $workspaceIsPage = atom(false)
+
+export function syncWorkspaceIsPage(pathname: string): void {
+  const view = appViewForPath(pathname)
+  const isPage = view !== 'chat' && !isOverlayView(view)
+
+  if (isPage !== $workspaceIsPage.get()) {
+    $workspaceIsPage.set(isPage)
+  }
 }

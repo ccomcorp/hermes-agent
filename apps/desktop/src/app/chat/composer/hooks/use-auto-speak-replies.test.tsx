@@ -42,8 +42,8 @@ function makeMockAtom<T>(initial: T): MockAtom<T> {
 
 // vi.hoisted for vi.fn() — vi is a vitest global, available at hoist time.
 const m = vi.hoisted(() => ({
-  playSpeechText: vi.fn<[string, { messageId?: string; source?: string }?], Promise<boolean>>(),
-  stopVoicePlayback: vi.fn()
+  playSpeechText: vi.fn<(text: string, options?: { messageId?: string; source?: string }) => Promise<boolean>>(),
+  stopVoicePlayback: vi.fn<() => void>()
 }))
 
 // Fresh atoms container — reassigned in beforeEach so each test gets clean atoms.
@@ -128,9 +128,9 @@ describe('useAutoSpeakReplies', () => {
     vi.clearAllMocks()
     // Fresh atoms per test — no stale subscribers
     $aa = makeMockAtom(false)
-    $sm = makeMockAtom('full')
-    $msg = makeMockAtom([])
-    $vp = makeMockAtom({ status: 'idle' })
+    $sm = makeMockAtom<SpeakMode>('full')
+    $msg = makeMockAtom<unknown[]>([])
+    $vp = makeMockAtom<{ status: string }>({ status: 'idle' })
     m.playSpeechText.mockResolvedValue(true)
   })
 

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 
 import { resolveSpeakText } from '@/lib/speech-text'
 import { playSpeechText } from '@/lib/voice-playback'
+import { ownsAmbientCue } from '@/store/ambient'
 import { notifyError } from '@/store/notifications'
 import { $messages } from '@/store/session'
 import { $voicePlayback } from '@/store/voice-playback'
@@ -81,9 +82,16 @@ export function useAutoSpeakReplies({
         return
       }
 
-      void playSpeechText(text, { messageId: reply.id, source: 'read-aloud' }).catch(error =>
-        notifyError(error, failureLabel)
-      )
+      // Only one window voices a given reply when the same chat is open in
+      // several (reply.id is the shared backend message id). markSpoken already
+      // ran in every window, so peers just stay quiet.
+      void ownsAmbientCue(`speak:${reply.id}`).then(owns => {
+        if (owns) {
+          void playSpeechText(text, { messageId: reply.id, source: 'read-aloud' }).catch(error =>
+            notifyError(error, failureLabel)
+          )
+        }
+      })
     }
 
     // Re-check on a reply completing ($messages) and on the prior clip ending

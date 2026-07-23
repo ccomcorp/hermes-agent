@@ -1,29 +1,15 @@
 import {
   Box,
   Brain,
-  Clipboard,
-  Clock,
-  Cpu,
-  FileText,
   type IconComponent,
-  GitBranch,
-  Globe,
-  LayoutDashboard,
   Lock,
   MessageCircle,
   Mic,
   Monitor,
   Moon,
-  Package,
   Palette,
-  RefreshCw,
-  Settings,
   Sun,
-  Terminal,
-  Users,
-  Volume2,
-  Wrench,
-  Zap
+  Wrench
 } from '@/lib/icons'
 import type { ThemeMode } from '@/themes/context'
 
@@ -58,6 +44,15 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
     description: 'Hosted Hermes & Nous-trained models',
     docsUrl: 'https://portal.nousresearch.com',
     priority: 0
+  },
+  {
+    prefix: 'FIREWORKS_',
+    name: 'Fireworks AI',
+    description: 'OpenAI-compatible direct model API',
+    docsUrl: 'https://app.fireworks.ai/settings/users/api-keys',
+    // Slot #2 — mirrors CANONICAL_PROVIDERS (after Nous, ahead of OpenRouter).
+    // Same numeric priority as OpenRouter; name sort puts Fireworks first.
+    priority: 1
   },
   {
     prefix: 'OPENROUTER_',
@@ -248,27 +243,15 @@ export const BUILTIN_PERSONALITIES = [
 // backend schema only declares a string type.
 export const ENUM_OPTIONS: Record<string, string[]> = {
   'agent.image_input_mode': ['auto', 'native', 'text'],
-  // Keep in sync with hermes_cli/config.py approvals block.
   'approvals.mode': ['manual', 'smart', 'off'],
-  'approvals.cron_mode': ['deny', 'approve'],
   'code_execution.mode': ['project', 'strict'],
   'context.engine': ['compressor', 'default', 'custom'],
   'delegation.reasoning_effort': ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  // Keep in sync with hermes_cli/web_server.py _SCHEMA_OVERRIDES['memory.provider']
-  // and plugins/memory/* . Empty = built-in MEMORY.md only; 'builtin' accepted as alias.
-  'memory.provider': [
-    '',
-    'builtin',
-    'hindsight',
-    'honcho',
-    'mem0',
-    'holographic',
-    'openviking',
-    'retaindb',
-    'supermemory',
-    'byterover',
-    'composite'
-  ],
+  // NOTE: memory.provider is intentionally NOT listed here. Its options are
+  // discovery-driven and served by the backend config schema (merged
+  // per-request in web_server._schema_with_dynamic_provider_options), so
+  // config-field consumes schema.options directly — a static list here would
+  // shadow that and hide user-installed/pip providers (#49513).
   // Terminal execution backends — kept in sync with the dispatch ladder in
   // tools/terminal_tool.py::_create_environment (local/docker/singularity/
   // modal/daytona/ssh). Remote backends need extra env (image, tokens, host).
@@ -278,7 +261,77 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   // Speech-to-text backends — kept in sync with the stt block in
   // hermes_cli/config.py (local/groq/openai/mistral/elevenlabs).
   'stt.provider': ['local', 'groq', 'openai', 'mistral', 'xai', 'elevenlabs'],
-  'tts.openai.voice': ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'],
+  // gpt-4o-mini-tts voice set (the tts-1 era stopped at shimmer). Free-input
+  // field — the list is suggestions, not a gate (see FREE_INPUT_KEYS).
+  'tts.openai.voice': [
+    'alloy',
+    'ash',
+    'ballad',
+    'cedar',
+    'coral',
+    'echo',
+    'fable',
+    'marin',
+    'nova',
+    'onyx',
+    'sage',
+    'shimmer',
+    'verse'
+  ],
+  // Popular Edge neural voices (the full catalog is 400+ — free input).
+  'tts.edge.voice': [
+    'en-US-AriaNeural',
+    'en-US-JennyNeural',
+    'en-US-AndrewNeural',
+    'en-US-BrianNeural',
+    'en-US-GuyNeural',
+    'en-GB-SoniaNeural'
+  ],
+  'tts.gemini.model': ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts'],
+  // Gemini TTS prebuilt voice set.
+  'tts.gemini.voice': [
+    'Zephyr',
+    'Puck',
+    'Charon',
+    'Kore',
+    'Fenrir',
+    'Leda',
+    'Orus',
+    'Aoede',
+    'Callirrhoe',
+    'Autonoe',
+    'Enceladus',
+    'Iapetus',
+    'Umbriel',
+    'Algieba',
+    'Despina',
+    'Erinome',
+    'Algenib',
+    'Rasalgethi',
+    'Laomedeia',
+    'Achernar',
+    'Alnilam',
+    'Schedar',
+    'Gacrux',
+    'Pulcherrima',
+    'Achird',
+    'Zubenelgenubi',
+    'Vindemiatrix',
+    'Sadachbia',
+    'Sadaltager',
+    'Sulafat'
+  ],
+  'tts.xai.voice_id': ['eve'],
+  'tts.minimax.model': ['speech-02-hd', 'speech-02-turbo'],
+  'tts.mistral.model': ['voxtral-mini-tts-2603'],
+  'tts.kittentts.model': [
+    'KittenML/kitten-tts-nano-0.8-int8',
+    'KittenML/kitten-tts-micro-0.8-int8',
+    'KittenML/kitten-tts-mini-0.8-int8'
+  ],
+  'tts.kittentts.voice': ['Jasper'],
+  'tts.piper.voice': ['en_US-lessac-medium', 'en_US-amy-medium', 'en_US-ryan-high', 'en_GB-alan-medium'],
+  'tts.neutts.model': ['neuphonic/neutts-air-q4-gguf', 'neuphonic/neutts-air-q8-gguf', 'neuphonic/neutts-air'],
   // Text-to-speech backends — kept in sync with the built-in source of truth
   // (agent/tts_registry.py::_BUILTIN_NAMES / tools/tts_tool.py::
   // BUILTIN_TTS_PROVIDERS). 'xai' is Grok TTS.
@@ -300,9 +353,33 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   'tts.elevenlabs.model_id': ['eleven_multilingual_v2', 'eleven_turbo_v2_5', 'eleven_flash_v2_5'],
   // NeuTTS local inference device.
   'tts.neutts.device': ['cpu', 'cuda', 'mps'],
-  'updates.non_interactive_local_changes': ['stash', 'discard'],
-  'voice.speak_mode': ['full', 'conversational']
+  'updates.non_interactive_local_changes': ['stash', 'discard']
 }
+
+// Voice/model name fields render as a free-input combobox (Input + datalist)
+// instead of a closed Select: providers accept custom voice IDs (ElevenLabs
+// cloned voices, xAI custom voices, Edge's 400+ catalog) and ship new model
+// names faster than this list updates. The ENUM_OPTIONS above become
+// suggestions rather than a gate for these keys.
+export const FREE_INPUT_KEYS = new Set([
+  'tts.edge.voice',
+  'tts.openai.model',
+  'tts.openai.voice',
+  'tts.elevenlabs.voice_id',
+  'tts.gemini.model',
+  'tts.gemini.voice',
+  'tts.xai.voice_id',
+  'tts.minimax.model',
+  'tts.minimax.voice_id',
+  'tts.mistral.model',
+  'tts.mistral.voice_id',
+  'tts.neutts.model',
+  'tts.kittentts.model',
+  'tts.kittentts.voice',
+  'tts.piper.voice',
+  'tts.deepinfra.model',
+  'tts.deepinfra.voice'
+])
 
 export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   model: 'Default Model',
@@ -313,6 +390,11 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   display: {
     personality: 'Personality',
     showReasoning: 'Reasoning Blocks'
+  },
+  desktop: {
+    repoScanEnabled: 'Automatic Repository Discovery',
+    repoScanRoots: 'Repository Discovery Roots',
+    repoScanExcludePaths: 'Excluded Repository Paths'
   },
   agent: {
     maxTurns: 'Max Agent Steps',
@@ -344,29 +426,12 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   approvals: {
     mode: 'Approval Mode',
     timeout: 'Approval Timeout',
-    cronMode: 'Cron Approval Mode',
-    deny: 'Deny Rules',
-    mcpReloadConfirm: 'Confirm MCP Reloads',
-    destructiveSlashConfirm: 'Confirm Destructive Slash Commands'
+    mcpReloadConfirm: 'Confirm MCP Reloads'
   },
   commandAllowlist: 'Command Allowlist',
-  privacy: {
-    redactPii: 'Redact PII'
-  },
   security: {
     redactSecrets: 'Redact Secrets',
-    allowPrivateUrls: 'Allow Private URLs',
-    tirithEnabled: 'Tirith Pre-Exec Scan',
-    tirithPath: 'Tirith Path',
-    tirithTimeout: 'Tirith Timeout (seconds)',
-    tirithFailOpen: 'Tirith Fail-Open',
-    allowLazyInstalls: 'Allow Lazy Package Installs',
-    ackedAdvisories: 'Acknowledged Advisories',
-    websiteBlocklist: {
-      enabled: 'Website Blocklist',
-      domains: 'Blocked Domains',
-      sharedFiles: 'Blocklist Shared Files'
-    }
+    allowPrivateUrls: 'Allow Private URLs'
   },
   browser: {
     allowPrivateUrls: 'Browser Private URLs',
@@ -379,8 +444,7 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
   voice: {
     recordKey: 'Voice Shortcut',
     maxRecordingSeconds: 'Max Recording Length',
-    autoTts: 'Read Responses Aloud',
-    speakMode: 'Speak Mode'
+    autoTts: 'Read Responses Aloud'
   },
   stt: {
     enabled: 'Speech To Text',
@@ -421,7 +485,12 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
     },
     xai: {
       voiceId: 'xAI (Grok) Voice',
-      language: 'xAI Language'
+      language: 'xAI Language',
+      speed: 'xAI Playback Speed',
+      autoSpeechTags: 'xAI Auto Speech Tags',
+      optimizeStreamingLatency: 'xAI Streaming Latency Optimization',
+      sampleRate: 'xAI Sample Rate',
+      bitRate: 'xAI Bit Rate'
     },
     minimax: {
       model: 'MiniMax TTS Model',
@@ -445,6 +514,10 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
     },
     piper: {
       voice: 'Piper Voice'
+    },
+    deepinfra: {
+      model: 'DeepInfra TTS Model',
+      voice: 'DeepInfra Voice'
     }
   },
   memory: {
@@ -469,13 +542,7 @@ export const FIELD_LABELS: Record<string, string> = defineFieldCopy({
     maxIterations: 'Subagent Turn Limit',
     maxConcurrentChildren: 'Parallel Subagents',
     childTimeoutSeconds: 'Subagent Timeout',
-    reasoningEffort: 'Subagent Reasoning Effort',
-    routes: 'Delegation Routes',
-    route_advisor: {
-      mode: 'Route Advisor Mode',
-      min_level: 'Min Task Level',
-      cooldown_turns: 'Cooldown (turns)'
-    }
+    reasoningEffort: 'Subagent Reasoning Effort'
   },
   updates: {
     nonInteractiveLocalChanges: 'In-App Update Local Changes'
@@ -489,6 +556,11 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   display: {
     personality: 'Default assistant style for new sessions.',
     showReasoning: 'Show reasoning sections when the backend provides them.'
+  },
+  desktop: {
+    repoScanEnabled: 'Scan local folders for Git repositories to show in Projects.',
+    repoScanRoots: 'Folders to scan. Leave empty to scan your home directory.',
+    repoScanExcludePaths: 'Folders and their descendants to skip during repository discovery.'
   },
   timezone: 'Used when Hermes needs local time context. Blank uses the system timezone.',
   agent: {
@@ -509,36 +581,14 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   },
   fileReadMaxChars: 'Maximum characters Hermes can read from one file request.',
   approvals: {
-    mode: 'How Hermes handles commands that need explicit approval (manual / smart / off).',
-    timeout: 'How long approval prompts wait before timing out.',
-    cronMode:
-      'When a scheduled cron job hits a dangerous command: deny blocks it (safe default); approve auto-allows.',
-    deny: 'fnmatch globs that always block a terminal command, even under YOLO / mode=off. Comma-separated.',
-    mcpReloadConfirm: 'Ask before /reload-mcp, which invalidates the prompt cache and can re-send full context.',
-    destructiveSlashConfirm: 'Confirm /clear, /new, /reset, and /undo before discarding conversation state.'
-  },
-  privacy: {
-    redactPii: 'Hash user IDs and strip phone numbers from LLM context when true.'
+    mode: 'How Hermes handles commands that need explicit approval.',
+    timeout: 'How long approval prompts wait before timing out.'
   },
   security: {
-    redactSecrets: 'Hide detected secrets from model-visible content when possible.',
-    allowPrivateUrls: 'Allow agent HTTP tools to reach private/internal IPs (LAN, VPN, OpenWrt).',
-    tirithEnabled: 'Run Tirith pre-exec scanning on terminal commands (homograph URLs, pipe-to-shell, etc.).',
-    tirithPath: 'Executable name or path for the Tirith binary.',
-    tirithTimeout: 'Seconds to wait for a Tirith scan before giving up.',
-    tirithFailOpen: 'If Tirith is missing or times out, allow the command instead of blocking it.',
-    allowLazyInstalls:
-      'Let Hermes pip-install opt-in backend packages the first time you enable a feature that needs them.',
-    ackedAdvisories: 'Supply-chain advisory IDs silenced via hermes doctor --ack. Comma-separated.',
-    websiteBlocklist: {
-      enabled: 'Block agent web access to listed domains.',
-      domains: 'Domains the agent must not visit. Comma-separated hostnames.',
-      sharedFiles: 'Optional shared blocklist file paths. Comma-separated.'
-    }
+    redactSecrets: 'Hide detected secrets from model-visible content when possible.'
   },
   checkpoints: {
-    enabled: 'Create rollback snapshots before file edits.',
-    maxSnapshots: 'Maximum number of file-checkpoint snapshots to retain.'
+    enabled: 'Create rollback snapshots before file edits.'
   },
   memory: {
     memoryEnabled: 'Save durable memories that can help future sessions.',
@@ -551,13 +601,17 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
     enabled: 'Summarize older context when conversations get large.'
   },
   voice: {
-    autoTts: 'Automatically speak assistant responses.',
-    speakMode: 'Voice response style: "full" reads every response aloud; "conversational" speaks summaries only.'
+    autoTts: 'Automatically speak assistant responses.'
   },
   tts: {
     xai: {
       voiceId: 'xAI voice ID (e.g. eve) or a custom voice ID.',
-      language: 'Spoken language code, e.g. en.'
+      language: 'Spoken language code (e.g. en, pt-BR) or "auto" for auto-detection.',
+      speed: 'Playback speed. 0.7 = slower, 1.0 = normal, 1.5 = faster.',
+      autoSpeechTags: 'Let an LLM insert expressive audio tags ([laughing], [sighs]) into the script before synthesis.',
+      optimizeStreamingLatency: 'Latency vs. quality trade-off. 0 = best quality, 2 = lowest latency.',
+      sampleRate: 'Audio sample rate in Hz. Higher = better quality, larger files.',
+      bitRate: 'MP3 bitrate in bps. Only applies when codec is mp3.'
     },
     neutts: {
       device: 'Local inference device for NeuTTS.'
@@ -573,23 +627,10 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = defineFieldCopy({
   updates: {
     nonInteractiveLocalChanges:
       'When Hermes updates itself from the app (no terminal prompt), keep local source edits (stash) or throw them away (discard). Terminal updates always ask.'
-  },
-  delegation: {
-    routes: 'Model-to-provider routing table for subagent work. Routes are tried in top-to-bottom order.',
-    route_advisor: {
-      mode: 'Off disables the advisor. Log records suggestions. Nudge prompts the agent to act on recommendations.',
-      min_level: 'Minimum task complexity (moderate/complex/expert) to trigger advisor evaluation.',
-      cooldown_turns: 'Turns to wait before the advisor re-evaluates the same task.'
-    }
   }
 })
 
-// Desktop config tabs — aligned with upstream web dashboard category order
-// (hermes_cli/web_server.py `_CATEGORY_ORDER` + schema categories).
-// Sections with `schemaCategory` pull ALL fields for that category from
-// GET /api/config/schema (so new DEFAULT_CONFIG keys show without a desktop edit).
-// Desktop-only: `model` (ModelSettings host) and `appearance` (themes).
-// Security matches the web Config → Security side panel (approvals/privacy/security.*).
+// Curated desktop config surface: only fields a user might tune from the app.
 export const SECTIONS: DesktopConfigSection[] = [
   {
     id: 'model',
@@ -598,44 +639,142 @@ export const SECTIONS: DesktopConfigSection[] = [
     keys: ['model_context_length', 'fallback_providers']
   },
   {
+    id: 'chat',
+    label: 'Chat',
+    icon: MessageCircle,
+    keys: ['display.personality', 'timezone', 'display.show_reasoning', 'agent.image_input_mode']
+  },
+  {
     id: 'appearance',
     label: 'Appearance',
     icon: Palette,
     keys: []
   },
-  { id: 'general', label: 'General', icon: Settings, keys: [], schemaCategory: 'general' },
-  { id: 'agent', label: 'Agent', icon: Cpu, keys: [], schemaCategory: 'agent' },
-  { id: 'terminal', label: 'Terminal', icon: Terminal, keys: [], schemaCategory: 'terminal' },
-  { id: 'display', label: 'Display', icon: Monitor, keys: [], schemaCategory: 'display' },
-  { id: 'delegation', label: 'Delegation', icon: Users, keys: [], schemaCategory: 'delegation' },
-  { id: 'memory', label: 'Memory', icon: Brain, keys: ['memory.provider'], schemaCategory: 'memory' },
-  // Context engine lives under category "agent" after _CATEGORY_MERGE; surface it
-  // on its own tab so users can find it next to Memory.
-  { id: 'context', label: 'Context', icon: Package, keys: ['context.engine'] },
-  { id: 'compression', label: 'Compression', icon: Package, keys: [], schemaCategory: 'compression' },
-  { id: 'security', label: 'Security', icon: Lock, keys: [], schemaCategory: 'security' },
-  { id: 'browser', label: 'Browser', icon: Globe, keys: [], schemaCategory: 'browser' },
-  { id: 'voice', label: 'Voice', icon: Mic, keys: [], schemaCategory: 'voice' },
-  { id: 'tts', label: 'TTS', icon: Volume2, keys: [], schemaCategory: 'tts' },
-  { id: 'stt', label: 'STT', icon: Mic, keys: [], schemaCategory: 'stt' },
-  { id: 'logging', label: 'Logging', icon: Clipboard, keys: [], schemaCategory: 'logging' },
-  { id: 'discord', label: 'Discord', icon: MessageCircle, keys: [], schemaCategory: 'discord' },
-  { id: 'auxiliary', label: 'Auxiliary', icon: Wrench, keys: [], schemaCategory: 'auxiliary' },
-  { id: 'bedrock', label: 'Bedrock', icon: Globe, keys: [], schemaCategory: 'bedrock' },
-  { id: 'curator', label: 'Curator', icon: Zap, keys: [], schemaCategory: 'curator' },
-  { id: 'kanban', label: 'Kanban', icon: LayoutDashboard, keys: [], schemaCategory: 'kanban' },
-  { id: 'model_catalog', label: 'Model catalog', icon: FileText, keys: [], schemaCategory: 'model_catalog' },
-  { id: 'openrouter', label: 'OpenRouter', icon: GitBranch, keys: [], schemaCategory: 'openrouter' },
-  { id: 'sessions', label: 'Sessions', icon: Clock, keys: [], schemaCategory: 'sessions' },
   {
-    id: 'tool_loop_guardrails',
-    label: 'Tool loop guardrails',
-    icon: Lock,
-    keys: [],
-    schemaCategory: 'tool_loop_guardrails'
+    id: 'workspace',
+    label: 'Workspace',
+    icon: Monitor,
+    keys: [
+      'terminal.cwd',
+      'desktop.repo_scan_enabled',
+      'desktop.repo_scan_roots',
+      'desktop.repo_scan_exclude_paths',
+      'code_execution.mode',
+      'terminal.persistent_shell',
+      'terminal.env_passthrough',
+      'file_read_max_chars'
+    ]
   },
-  { id: 'tool_output', label: 'Tool output', icon: FileText, keys: [], schemaCategory: 'tool_output' },
-  { id: 'updates', label: 'Updates', icon: RefreshCw, keys: [], schemaCategory: 'updates' }
+  {
+    id: 'safety',
+    label: 'Safety',
+    icon: Lock,
+    keys: [
+      'approvals.mode',
+      'approvals.timeout',
+      'approvals.mcp_reload_confirm',
+      'command_allowlist',
+      'security.redact_secrets',
+      'security.allow_private_urls',
+      'browser.allow_private_urls',
+      'browser.auto_local_for_private_urls',
+      'checkpoints.enabled'
+    ]
+  },
+  {
+    id: 'memory',
+    label: 'Memory & Context',
+    icon: Brain,
+    keys: [
+      'memory.memory_enabled',
+      'memory.user_profile_enabled',
+      'memory.memory_char_limit',
+      'memory.user_char_limit',
+      'memory.provider',
+      'context.engine',
+      'compression.enabled',
+      'compression.threshold',
+      'compression.target_ratio',
+      'compression.protect_last_n'
+    ]
+  },
+  {
+    id: 'voice',
+    label: 'Voice',
+    icon: Mic,
+    keys: [
+      'tts.provider',
+      'stt.enabled',
+      'stt.echo_transcripts',
+      'stt.provider',
+      'voice.auto_tts',
+      'tts.edge.voice',
+      'tts.openai.model',
+      'tts.openai.voice',
+      'tts.elevenlabs.voice_id',
+      'tts.elevenlabs.model_id',
+      'tts.xai.voice_id',
+      'tts.xai.language',
+      'tts.xai.speed',
+      'tts.xai.auto_speech_tags',
+      'tts.xai.optimize_streaming_latency',
+      'tts.xai.sample_rate',
+      'tts.xai.bit_rate',
+      'tts.minimax.model',
+      'tts.minimax.voice_id',
+      'tts.mistral.model',
+      'tts.mistral.voice_id',
+      'tts.gemini.model',
+      'tts.gemini.voice',
+      'tts.neutts.model',
+      'tts.neutts.device',
+      'tts.kittentts.model',
+      'tts.kittentts.voice',
+      'tts.piper.voice',
+      'tts.deepinfra.model',
+      'tts.deepinfra.voice',
+      'stt.local.model',
+      'stt.local.language',
+      'stt.openai.model',
+      'stt.groq.model',
+      'stt.mistral.model',
+      'stt.elevenlabs.model_id',
+      'stt.elevenlabs.language_code',
+      'stt.elevenlabs.tag_audio_events',
+      'stt.elevenlabs.diarize',
+      'voice.record_key',
+      'voice.max_recording_seconds'
+    ]
+  },
+  {
+    id: 'advanced',
+    label: 'Advanced',
+    icon: Wrench,
+    keys: [
+      'toolsets',
+      'terminal.backend',
+      'terminal.timeout',
+      'terminal.docker_image',
+      'terminal.singularity_image',
+      'terminal.modal_image',
+      'terminal.daytona_image',
+      'tool_output.max_bytes',
+      'tool_output.max_lines',
+      'tool_output.max_line_length',
+      'checkpoints.max_snapshots',
+      'agent.max_turns',
+      'agent.api_max_retries',
+      'agent.service_tier',
+      'agent.tool_use_enforcement',
+      'delegation.model',
+      'delegation.provider',
+      'delegation.max_iterations',
+      'delegation.max_concurrent_children',
+      'delegation.child_timeout_seconds',
+      'delegation.reasoning_effort',
+      'updates.non_interactive_local_changes'
+    ]
+  }
 ]
 
 export interface ModeOption {

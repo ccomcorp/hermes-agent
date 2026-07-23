@@ -2,8 +2,15 @@ import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  closeAllTreeTabs,
+  closeOtherTreeTabs,
+  closeTreeTabsToRight,
+  treeTabCloseTargets
+} from '@/components/pane-shell/tree/store'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { ColorSwatches } from '@/components/ui/color-swatches'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -34,9 +41,11 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Tip } from '@/components/ui/tooltip'
 import { renameSession } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
+import { PROFILE_SWATCHES } from '@/lib/profile-color'
 import { exportSession } from '@/lib/session-export'
 import { activeGateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
@@ -48,7 +57,17 @@ import {
   projectWorkspacePath,
   refreshProjects
 } from '@/store/projects'
-import { $activeSessionId, $currentCwd, $selectedStoredSessionId, setSessions } from '@/store/session'
+import {
+  $activeSessionId,
+  $currentCwd,
+  $selectedStoredSessionId,
+  $sessions,
+  sessionMatchesStoredId,
+  sessionPinId,
+  setSessions
+} from '@/store/session'
+import { $sessionColorOverrides, setSessionColorOverride } from '@/store/session-color'
+import { $sessionTiles, openSessionTile } from '@/store/session-states'
 import { canOpenSessionWindow, openSessionInNewWindow } from '@/store/windows'
 import type { ProjectInfo } from '@/types/hermes'
 
@@ -108,9 +127,46 @@ interface SessionActions {
   onBranch?: () => void
   onArchive?: () => void
   onDelete?: () => void
+  /** Close this surface (a tile tab) — omitted where nothing closes (sidebar
+   *  rows, the main tab). */
+  onClose?: () => void
+  /** TAB surfaces: the session is already a tab, so "Open in new tab" is
+   *  nonsense there — sidebar rows/dropdowns keep it. */
+  surface?: 'row' | 'tab'
+  /** The tab's layout-tree pane id (`session-tile:<id>` or `workspace`) — enables
+   *  the Close-others / to-the-right / all tab verbs. Tab surfaces only. */
+  tabPaneId?: string
+  /** The MAIN tab's escape hatch: hide the zone's tab bar (it sticky-shows
+   *  once a tab is ever gained; this is the explicit off switch). */
+  onHideTabBar?: () => void
 }
 
 type MenuItem = typeof DropdownMenuItem | typeof ContextMenuItem
+
+/** A menu flavour (dropdown / context) — item + separator + submenu components. */
+interface MenuKit {
+  Item: MenuItem
+  Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator
+  Sub: typeof DropdownMenuSub | typeof ContextMenuSub
+  SubTrigger: typeof DropdownMenuSubTrigger | typeof ContextMenuSubTrigger
+  SubContent: typeof DropdownMenuSubContent | typeof ContextMenuSubContent
+}
+
+const DROPDOWN_KIT: MenuKit = {
+  Item: DropdownMenuItem,
+  Separator: DropdownMenuSeparator,
+  Sub: DropdownMenuSub,
+  SubContent: DropdownMenuSubContent,
+  SubTrigger: DropdownMenuSubTrigger
+}
+
+const CONTEXT_KIT: MenuKit = {
+  Item: ContextMenuItem,
+  Separator: ContextMenuSeparator,
+  Sub: ContextMenuSub,
+  SubContent: ContextMenuSubContent,
+  SubTrigger: ContextMenuSubTrigger
+}
 
 interface ItemSpec {
   className?: string
@@ -121,6 +177,27 @@ interface ItemSpec {
   variant?: 'destructive'
 }
 
+// The color picker inside the session menu's Appearance submenu. Its own
+// component so only an OPEN submenu subscribes to the stores (not every row's
+// menu). Reads/writes the override keyed by the DURABLE id so a color survives
+// compression; clearing falls back to the inherited project color.
+function SessionColorSwatches({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n()
+  const overrides = useStore($sessionColorOverrides)
+  const session = useStore($sessions).find(s => sessionMatchesStoredId(s, sessionId))
+  const durableId = session ? sessionPinId(session) : sessionId
+
+  return (
+    <ColorSwatches
+      clearIcon="circle-slash"
+      clearLabel={t.sidebar.projects.noColor}
+      onChange={color => setSessionColorOverride(durableId, color)}
+      swatches={PROFILE_SWATCHES}
+      value={overrides[durableId] ?? null}
+    />
+  )
+}
+
 function useSessionActions({
   sessionId,
   title,
@@ -129,7 +206,11 @@ function useSessionActions({
   onPin,
   onBranch,
   onArchive,
-  onDelete
+  onDelete,
+  onClose,
+  onHideTabBar,
+  surface = 'row',
+  tabPaneId
 }: SessionActions) {
   const { t } = useI18n()
   const r = t.sidebar.row
@@ -175,21 +256,36 @@ function useSessionActions({
       setMoving(false)
     }
   }
+  const tiles = useStore($sessionTiles)
+  const selectedStoredSessionId = useStore($selectedStoredSessionId)
 
-  const pinItem: ItemSpec = {
-    disabled: !onPin,
-    icon: 'pin',
-    label: pinned ? r.unpin : r.pin,
-    onSelect: () => {
-      triggerHaptic('selection')
-      onPin?.()
-    }
-  }
+  // Already showing as a tab somewhere (a tile, or loaded in main — main IS
+  // a tab): offering "Open in new tab" again is noise.
+  const alreadyTabbed = sessionId === selectedStoredSessionId || tiles.some(tile => tile.storedSessionId === sessionId)
 
-  const items: ItemSpec[] = [
+  const spec = (partial: Omit<ItemSpec, 'onSelect'> & { onSelect: () => void }): ItemSpec => partial
+
+  // OPEN — where else this session can go. A tab surface IS a tab already,
+  // so it only offers the window hop (and its own Close, below).
+  const openItems: ItemSpec[] = [
+    ...(surface === 'row' && !alreadyTabbed
+      ? [
+          spec({
+            disabled: !sessionId,
+            icon: 'browser',
+            label: r.openInNewTab,
+            onSelect: () => {
+              triggerHaptic('selection')
+              // Stack into the MAIN zone as a tab (center dock; the strip
+              // sticky-shows on gain) — the door to the tab bar.
+              openSessionTile(sessionId, 'center')
+            }
+          })
+        ]
+      : []),
     ...(canOpenSessionWindow()
       ? [
-          {
+          spec({
             disabled: !sessionId,
             icon: 'link-external',
             label: r.newWindow,
@@ -197,28 +293,14 @@ function useSessionActions({
               triggerHaptic('selection')
               void openSessionInNewWindow(sessionId)
             }
-          }
+          })
         ]
-      : []),
-    {
-      disabled: !sessionId,
-      icon: 'cloud-download',
-      label: r.export,
-      onSelect: () => {
-        triggerHaptic('selection')
-        void exportSession(sessionId, { profile, title })
-      }
-    },
-    {
-      disabled: !onBranch,
-      icon: 'git-branch',
-      label: r.branchFrom,
-      onSelect: () => {
-        triggerHaptic('selection')
-        onBranch?.()
-      }
-    },
-    {
+      : [])
+  ]
+
+  // IDENTITY — name/mark/reference the session.
+  const identityItems: ItemSpec[] = [
+    spec({
       disabled: !sessionId,
       icon: 'edit',
       label: r.rename,
@@ -226,8 +308,99 @@ function useSessionActions({
         triggerHaptic('selection')
         setRenameOpen(true)
       }
-    },
-    {
+    }),
+    spec({
+      disabled: !onPin,
+      icon: 'pin',
+      label: pinned ? r.unpin : r.pin,
+      onSelect: () => {
+        triggerHaptic('selection')
+        onPin?.()
+      }
+    })
+  ]
+
+  // WORK — derive/extract from the session.
+  const workItems: ItemSpec[] = [
+    spec({
+      disabled: !onBranch,
+      // Fork glyph to match the inline message action's GitFork icon
+      // (assistant-message.tsx). NB: this codicon font has no `git-fork`
+      // glyph (only `git-fork-private`); `repo-forked` is the fork icon.
+      icon: 'repo-forked',
+      label: r.branchFrom,
+      onSelect: () => {
+        triggerHaptic('selection')
+        onBranch?.()
+      }
+    }),
+    spec({
+      disabled: !sessionId,
+      icon: 'cloud-download',
+      label: r.export,
+      onSelect: () => {
+        triggerHaptic('selection')
+        void exportSession(sessionId, { profile, title })
+      }
+    })
+  ]
+
+  // TAB — close verbs that act on the strip (tabs only; a row isn't a tab).
+  const closeTargets = surface === 'tab' && tabPaneId ? treeTabCloseTargets(tabPaneId) : null
+
+  const tabCloseItems: ItemSpec[] =
+    surface === 'tab'
+      ? [
+          ...(onClose
+            ? [
+                spec({
+                  disabled: false,
+                  icon: 'close',
+                  label: t.common.close,
+                  onSelect: () => {
+                    triggerHaptic('selection')
+                    onClose()
+                  }
+                })
+              ]
+            : []),
+          ...(tabPaneId
+            ? [
+                spec({
+                  disabled: !closeTargets?.others,
+                  icon: 'close-all',
+                  label: t.zones.closeOthers,
+                  onSelect: () => {
+                    triggerHaptic('selection')
+                    closeOtherTreeTabs(tabPaneId)
+                  }
+                }),
+                spec({
+                  disabled: !closeTargets?.right,
+                  icon: 'arrow-right',
+                  label: t.zones.closeToRight,
+                  onSelect: () => {
+                    triggerHaptic('selection')
+                    closeTreeTabsToRight(tabPaneId)
+                  }
+                }),
+                spec({
+                  disabled: !closeTargets?.all,
+                  icon: 'clear-all',
+                  label: t.zones.closeAll,
+                  onSelect: () => {
+                    triggerHaptic('selection')
+                    closeAllTreeTabs(tabPaneId)
+                  }
+                })
+              ]
+            : [])
+        ]
+      : []
+
+  // DANGER — put it away / destroy it (delete stays last, destructive-red).
+  const dangerItems: ItemSpec[] = [
+    spec({
       disabled: !onArchive,
       icon: 'archive',
       label: r.archive,
@@ -235,7 +408,7 @@ function useSessionActions({
         triggerHaptic('selection')
         onArchive?.()
       }
-    },
+    }),
     {
       className: 'text-destructive focus:text-destructive',
       disabled: !onDelete,
@@ -256,59 +429,62 @@ function useSessionActions({
     </Item>
   )
 
-  const renderMoveSubmenu = (variant: 'dropdown' | 'context') => {
-    const Sub = variant === 'dropdown' ? DropdownMenuSub : ContextMenuSub
-    const SubTrigger = variant === 'dropdown' ? DropdownMenuSubTrigger : ContextMenuSubTrigger
-    const SubContent = variant === 'dropdown' ? DropdownMenuSubContent : ContextMenuSubContent
-    const Item = variant === 'dropdown' ? DropdownMenuItem : ContextMenuItem
-    const Separator = variant === 'dropdown' ? DropdownMenuSeparator : ContextMenuSeparator
+  const renderMoveSubmenu = (kit: MenuKit) => (
+    <kit.Sub key="move-to-project">
+      <kit.SubTrigger disabled={!sessionId || moving} className="gap-2">
+        <Codicon name="folder" size="0.875rem" />
+        <span>{r.moveToProject}</span>
+      </kit.SubTrigger>
+      <kit.SubContent className="max-h-72 w-56 overflow-y-auto">
+        {moveTargets.length === 0 ? (
+          <kit.Item disabled>
+            <span className="text-muted-foreground">{r.moveNoProjects}</span>
+          </kit.Item>
+        ) : (
+          moveTargets.map(project => (
+            <kit.Item
+              disabled={moving}
+              key={project.id}
+              onSelect={() => {
+                void runMove(project)
+              }}
+            >
+              <Codicon name="folder" size="0.875rem" />
+              <span className="truncate">{project.name || project.id}</span>
+            </kit.Item>
+          ))
+        )}
+        <kit.Separator />
+        <kit.Item
+          disabled={!sessionId || moving}
+          onSelect={() => {
+            triggerHaptic('selection')
+            setMoveCreateOpen(true)
+          }}
+        >
+          <Codicon name="new-folder" size="0.875rem" />
+          <span>{r.moveNewProject}</span>
+        </kit.Item>
+      </kit.SubContent>
+    </kit.Sub>
+  )
 
-    return (
-      <Sub key="move-to-project">
-        <SubTrigger disabled={!sessionId || moving} className="gap-2">
-          <Codicon name="folder" size="0.875rem" />
-          <span>{r.moveToProject}</span>
-        </SubTrigger>
-        <SubContent className="max-h-72 w-56 overflow-y-auto">
-          {moveTargets.length === 0 ? (
-            <Item disabled>
-              <span className="text-muted-foreground">{r.moveNoProjects}</span>
-            </Item>
-          ) : (
-            moveTargets.map(project => (
-              <Item
-                disabled={moving}
-                key={project.id}
-                onSelect={() => {
-                  void runMove(project)
-                }}
-              >
-                <Codicon name="folder" size="0.875rem" />
-                <span className="truncate">{project.name || project.id}</span>
-              </Item>
-            ))
-          )}
-          <Separator />
-          <Item
-            disabled={!sessionId || moving}
-            onSelect={() => {
-              triggerHaptic('selection')
-              setMoveCreateOpen(true)
-            }}
-          >
-            <Codicon name="new-folder" size="0.875rem" />
-            <span>{r.moveNewProject}</span>
-          </Item>
-        </SubContent>
-      </Sub>
-    )
-  }
-
-  const renderItems = (Item: MenuItem, variant: 'dropdown' | 'context') => (
+  const renderItems = (kit: MenuKit) => (
     <>
-      {renderMenuItem(Item, pinItem)}
+      {openItems.map(item => renderMenuItem(kit.Item, item))}
+      {openItems.length > 0 && <kit.Separator />}
+      {identityItems.map(item => renderMenuItem(kit.Item, item))}
+      <kit.Sub>
+        <kit.SubTrigger disabled={!sessionId}>
+          <Codicon name="symbol-color" size="0.875rem" />
+          <span>{t.sidebar.projects.menuAppearance}</span>
+        </kit.SubTrigger>
+        <kit.SubContent className="p-2">
+          <SessionColorSwatches sessionId={sessionId} />
+        </kit.SubContent>
+      </kit.Sub>
       <CopyButton
-        appearance={Item === DropdownMenuItem ? 'menu-item' : 'context-menu-item'}
+        appearance={kit.Item === DropdownMenuItem ? 'menu-item' : 'context-menu-item'}
         disabled={!sessionId}
         errorMessage={r.copyIdFailed}
         iconClassName="size-3.5 text-current"
@@ -317,8 +493,31 @@ function useSessionActions({
         onCopyError={err => notifyError(err, r.copyIdFailed)}
         text={sessionId}
       />
-      {renderMoveSubmenu(variant)}
-      {items.map(spec => renderMenuItem(Item, spec))}
+      {renderMoveSubmenu(kit)}
+      <kit.Separator />
+      {workItems.map(item => renderMenuItem(kit.Item, item))}
+      {tabCloseItems.length > 0 && (
+        <>
+          <kit.Separator />
+          {tabCloseItems.map(item => renderMenuItem(kit.Item, item))}
+        </>
+      )}
+      <kit.Separator />
+      {dangerItems.map(item => renderMenuItem(kit.Item, item))}
+      {onHideTabBar && (
+        <>
+          <kit.Separator />
+          {renderMenuItem(kit.Item, {
+            disabled: false,
+            icon: 'eye-closed',
+            label: r.hideTabBar,
+            onSelect: () => {
+              triggerHaptic('selection')
+              onHideTabBar()
+            }
+          })}
+        </>
+      )}
     </>
   )
 
@@ -348,23 +547,38 @@ function useSessionActions({
 interface SessionActionsMenuProps
   extends SessionActions, Pick<React.ComponentProps<typeof DropdownMenuContent>, 'align' | 'sideOffset'> {
   children: React.ReactNode
+  /** Tooltip label for the trigger. Composed INSIDE the dropdown trigger
+   *  (Tip wraps DropdownMenuTrigger, not the other way around) — Tip doesn't
+   *  forward the extra props/ref an `asChild` clone injects, so putting it as
+   *  the trigger's direct child silently drops onClick/aria-haspopup/ref and
+   *  the menu stops opening (#67500). */
+  tooltip?: React.ReactNode
 }
 
-export function SessionActionsMenu({ children, align = 'end', sideOffset = 6, ...actions }: SessionActionsMenuProps) {
+export function SessionActionsMenu({
+  children,
+  tooltip,
+  align = 'end',
+  sideOffset = 6,
+  ...actions
+}: SessionActionsMenuProps) {
   const { t } = useI18n()
   const { moveCreateDialog, renameDialog, renderItems } = useSessionActions(actions)
+  const [open, setOpen] = useState(false)
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+      <DropdownMenu onOpenChange={setOpen} open={open}>
+        <Tip label={tooltip}>
+          <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent
           align={align}
           aria-label={t.sidebar.row.actionsFor(actions.title)}
-          className="w-48"
+          className="w-40"
           sideOffset={sideOffset}
         >
-          {renderItems(DropdownMenuItem, 'dropdown')}
+          {renderItems(DROPDOWN_KIT)}
         </DropdownMenuContent>
       </DropdownMenu>
       {renameDialog}
@@ -385,8 +599,8 @@ export function SessionContextMenu({ children, ...actions }: SessionContextMenuP
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent aria-label={t.sidebar.row.actionsFor(actions.title)} className="w-48">
-          {renderItems(ContextMenuItem, 'context')}
+        <ContextMenuContent aria-label={t.sidebar.row.actionsFor(actions.title)} className="w-40">
+          {renderItems(CONTEXT_KIT)}
         </ContextMenuContent>
       </ContextMenu>
       {renameDialog}

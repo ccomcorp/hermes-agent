@@ -8,8 +8,8 @@ import { useVoiceConversation } from './use-voice-conversation'
 // ---------------------------------------------------------------------------
 
 const { playSpeechText, stopVoicePlayback } = vi.hoisted(() => ({
-  playSpeechText: vi.fn<[string, { source: string }?], Promise<boolean>>(),
-  stopVoicePlayback: vi.fn()
+  playSpeechText: vi.fn<(text: string, options?: { source: string }) => Promise<boolean>>(),
+  stopVoicePlayback: vi.fn<() => void>()
 }))
 
 vi.mock('@/lib/voice-playback', () => ({ playSpeechText, stopVoicePlayback }))
@@ -23,9 +23,9 @@ vi.mock('@/store/notifications', () => ({ notify, notifyError }))
 
 // Simulate a mic handle we can control
 const { micStart, micStop, micCancel, micHook } = vi.hoisted(() => {
-  const start = vi.fn<[], Promise<void>>()
-  const stop = vi.fn<[], Promise<{ audio: Blob; durationMs: number; heardSpeech: boolean } | null>>()
-  const cancel = vi.fn()
+  const start = vi.fn<() => Promise<void>>()
+  const stop = vi.fn<() => Promise<{ audio: Blob; durationMs: number; heardSpeech: boolean } | null>>()
+  const cancel = vi.fn<() => void>()
 
   const useMicRecorderFn = () => ({ handle: { start, stop, cancel }, level: 0 })
 
