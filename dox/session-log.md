@@ -1,5 +1,13 @@
 # Session Log
 
+## 2026-07-24 — Kanban C+D / brain model-selection status spec
+
+- **Question:** review pending Kanban complexity/delegation routing and brain-learned model selection, then commit the resulting implementation spec.
+- **Finding:** in-chat specialist routing is complete, but Kanban C+D remains partial: `default_assignee: dev-agent` can bypass the `auto` sentinel, `--complexity` lacks live schema/read support, explicit `--model` still runs classifier on `assignee=auto`, classifier-suggested models need validation, and routing telemetry needs a report surface.
+- **Brain-learning state:** no dedicated `(features, model, outcome)` store or model-performance corpus exists; NeuroLinked recall did not return a model-selection policy. Learned model selection is therefore deferred until C+D emits structured features and typed outcomes.
+- **Artifact:** `docs/plans/2026-07-22-kanban-cd-brain-model-selection-work-spec.md`, committed as `c594e6dfb`.
+- **Gates:** focused Kanban C+D tests `26 passed`; spec content guard and secret scan passed; DOX status/check rerun with drift none.
+
 ## 2026-07-24 — Clarify cancellation is not Skip
 
 - **Symptom:** pressing Stop while a Desktop clarify card was pending made the question look skipped and made an ongoing requirements interview appear to have lost its prior Q&A progress.
