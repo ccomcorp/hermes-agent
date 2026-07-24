@@ -40,6 +40,7 @@ interface ClarifyResult {
   question?: string
   answer?: string
   error?: string
+  status?: 'answered' | 'skipped' | 'cancelled'
 }
 
 function stringField(row: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -50,6 +51,14 @@ function stringField(row: Record<string, unknown>, ...keys: string[]): string | 
       return value
     }
   }
+}
+
+function clarifyStatusField(row: Record<string, unknown>): ClarifyResult['status'] {
+  const status = stringField(row, 'status')
+
+  return status === 'answered' || status === 'skipped' || status === 'cancelled'
+    ? status
+    : undefined
 }
 
 function readClarifyArgs(args: unknown): ClarifyArgs {
@@ -69,7 +78,7 @@ function readClarifyArgs(args: unknown): ClarifyArgs {
   }
 }
 
-/** Parse clarify tool JSON (`question` + `user_response`). */
+/** Parse clarify tool JSON (`question` + `user_response` + optional `status`). */
 export function readClarifyResult(result: unknown): ClarifyResult {
   const row = parseMaybeObject(result)
 
@@ -80,7 +89,8 @@ export function readClarifyResult(result: unknown): ClarifyResult {
   return {
     question: stringField(row, 'question'),
     answer: stringField(row, 'user_response', 'answer'),
-    error: stringField(row, 'error')
+    error: stringField(row, 'error'),
+    status: clarifyStatusField(row)
   }
 }
 
@@ -217,16 +227,19 @@ function ClarifyToolSettled({ args, result }: ToolCallMessagePartProps) {
   const question = fromResult.question || fromArgs.question || ''
   const answer = fromResult.answer
   const error = fromResult.error
-  const skipped = !error && answer !== undefined && !answer.trim()
-  const answerText = error || (skipped ? copy.skipped : (answer ?? '').trim())
+  const resultStatus = fromResult.status
+  // cancelled: session.interrupt / Stop tore down the clarify while it was pending.
+  // skipped:   user pressed Skip, or the entry timed out (callback returned empty).
+  const cancelled = !error && resultStatus === 'cancelled'
+  const skipped = !error && !cancelled && answer !== undefined && !answer.trim()
+  const answerText = error || (cancelled ? copy.cancelled : (skipped ? copy.skipped : (answer ?? '').trim()))
   const choices = fromArgs.choices ?? []
 
-  // A skipped (timed-out) clarify keeps its choices on screen and actionable.
-  // The blocking request is long gone — the tool already returned empty — so a
-  // pick can't resolve it retroactively. Instead it drafts a quoted follow-up
-  // into the composer (Enter sends; if the agent is mid-turn it queues like
-  // any other prompt). Without this the card collapsed to just "Skipped" and
-  // the options were unrecoverable.
+  // On skip, keep choices on screen and actionable — the blocking request is
+  // long gone, so a pick drafts a quoted follow-up into the composer.  On
+  // cancel the session was torn down underneath; don't offer late-choice
+  // affordances because the user didn't choose to skip — their prior Q&A /
+  // progress was not lost, the session was just interrupted.
   const followUp = useCallback(
     (choice: string) => {
       requestComposerInsert(copy.lateAnswer(question, choice), { mode: 'block' })
@@ -249,9 +262,11 @@ function ClarifyToolSettled({ args, result }: ToolCallMessagePartProps) {
             className={cn(
               'whitespace-pre-wrap leading-(--conversation-line-height)',
               error ? 'text-destructive' : 'text-(--ui-text-secondary)',
+              cancelled && 'italic text-(--ui-text-tertiary)',
               skipped && 'italic text-(--ui-text-tertiary)'
             )}
             data-clarify-answer=""
+            data-clarify-cancelled={cancelled || undefined}
           >
             {answerText}
           </p>

@@ -2606,6 +2606,7 @@ export const en: Translations = {
       placeholder: 'Type your answer…',
       skip: 'Skip',
       skipped: 'Skipped',
+      cancelled: 'Cancelled',
       continueLabel: 'Continue',
       lateAnswer: (question, choice) => `Re: "${question}" — my answer: ${choice}`,
       lateAnswerTip: 'Draft this answer as a follow-up message',

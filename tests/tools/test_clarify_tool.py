@@ -257,3 +257,60 @@ class TestClarifySchema:
     def test_max_choices_is_four(self):
         """MAX_CHOICES constant should be 4."""
         assert MAX_CHOICES == 4
+
+
+class TestClarifyCancellationSemantics:
+    """status: cancelled vs skipped vs answered in clarify_tool output."""
+
+    def test_cancelled_sentinel_produces_cancelled_status(self):
+        """When the callback returns CANCEL_SENTINEL, the tool emits
+        user_response:'' and status:'cancelled'."""
+        from tools.clarify_gateway import CANCEL_SENTINEL
+
+        result = json.loads(clarify_tool(
+            "Proceed?",
+            choices=["Yes", "No"],
+            callback=lambda q, c: CANCEL_SENTINEL,
+        ))
+        assert result["user_response"] == ""
+        assert result["status"] == "cancelled"
+        assert result["question"] == "Proceed?"
+        assert result["choices_offered"] == ["Yes", "No"]
+
+    def test_empty_response_produces_skipped_status(self):
+        """When the callback returns empty string (Skip), the tool emits
+        user_response:'' and status:'skipped'."""
+        result = json.loads(clarify_tool(
+            "Proceed?",
+            choices=["Yes", "No"],
+            callback=lambda q, c: "",
+        ))
+        assert result["user_response"] == ""
+        assert result["status"] == "skipped"
+
+    def test_nonempty_response_produces_answered_status(self):
+        """When the callback returns a real answer, the tool emits
+        status:'answered'."""
+        result = json.loads(clarify_tool(
+            "Proceed?",
+            choices=["Yes", "No"],
+            callback=lambda q, c: "Yes",
+        ))
+        assert result["user_response"] == "Yes"
+        assert result["status"] == "answered"
+
+    def test_whitespace_only_response_is_skipped(self):
+        """A whitespace-only callback return is treated the same as empty."""
+        result = json.loads(clarify_tool(
+            "Q?", callback=lambda q, c: "   ",
+        ))
+        assert result["user_response"] == ""
+        assert result["status"] == "skipped"
+
+    def test_sentinel_looking_user_text_is_still_an_answer(self):
+        """No string a user can type is reserved as an internal control."""
+        result = json.loads(clarify_tool(
+            "Q?", callback=lambda q, c: "__CLARIFY_CANCELLED__",
+        ))
+        assert result["status"] == "answered"
+        assert result["user_response"] == "__CLARIFY_CANCELLED__"

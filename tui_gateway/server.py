@@ -130,7 +130,7 @@ _sessions: dict[str, dict] = {}
 _methods: dict[str, callable] = {}
 _pending: dict[str, tuple[str, threading.Event]] = {}
 _pending_prompt_payloads: dict[str, tuple[str, dict]] = {}
-_answers: dict[str, str] = {}
+_answers: dict[str, object] = {}
 _db = None
 _db_error: str | None = None
 _stdout_lock = threading.Lock()
@@ -2411,7 +2411,7 @@ def _enable_gateway_prompts() -> None:
 # ── Blocking prompt factory ──────────────────────────────────────────
 
 
-def _block(event: str, sid: str, payload: dict, timeout: float | None = 300) -> str:
+def _block(event: str, sid: str, payload: dict, timeout: float | None = 300) -> object:
     rid = uuid.uuid4().hex[:8]
     ev = threading.Event()
     with _prompt_lock:
@@ -2469,18 +2469,31 @@ def _clarify_timeout_seconds() -> float | None:
 
 
 def _clear_pending(sid: str | None = None) -> None:
-    """Release pending prompts with an empty answer.
+    """Release pending prompts with a type-appropriate control response.
 
     When *sid* is provided, only prompts owned by that session are
     released — critical for session.interrupt, which must not
     collaterally cancel clarify/sudo/secret prompts on unrelated
     sessions sharing the same tui_gateway process.  When *sid* is
     None, every pending prompt is released (used during shutdown).
+
+    Clarify requests use a dedicated CANCEL_SENTINEL so the Desktop
+    clarify card can distinguish a session-interrupt cancellation from
+    the user pressing Skip (both release the blocked thread, but the
+    sentinel lets clarify_tool emit ``status:'cancelled'`` vs
+    ``status:'skipped'``).  Secret/sudo/terminal.read prompts still
+    resolve to the empty string (no semantic difference at those tools).
     """
+    from tools.clarify_gateway import CANCEL_SENTINEL
+
     with _prompt_lock:
         for rid, (owner_sid, ev) in list(_pending.items()):
             if sid is None or owner_sid == sid:
-                _answers[rid] = ""
+                payload_entry = _pending_prompt_payloads.get(rid)
+                if payload_entry and payload_entry[0] == "clarify.request":
+                    _answers[rid] = CANCEL_SENTINEL
+                else:
+                    _answers[rid] = ""
                 ev.set()
 
 

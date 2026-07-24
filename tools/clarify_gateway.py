@@ -40,6 +40,18 @@ from typing import Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+class _CancelledResponse:
+    """Identity-only control value that cannot collide with user text."""
+
+    __slots__ = ()
+
+
+# Returned when a session boundary cancels a pending clarify request. This is
+# intentionally not a string: users may type any string, including
+# sentinel-looking text, without accidentally being classified as cancelled.
+CANCEL_SENTINEL = _CancelledResponse()
+
+
 # =========================================================================
 # Module-level state
 # =========================================================================
@@ -52,7 +64,7 @@ class _ClarifyEntry:
     question: str
     choices: Optional[List[str]]
     event: threading.Event = field(default_factory=threading.Event)
-    response: Optional[str] = None
+    response: Optional[str | _CancelledResponse] = None
     awaiting_text: bool = False  # set when user picked "Other" or clarify is open-ended
 
     def signature(self) -> Dict[str, object]:
@@ -100,7 +112,10 @@ def register(
     return entry
 
 
-def wait_for_response(clarify_id: str, timeout: float) -> Optional[str]:
+def wait_for_response(
+    clarify_id: str,
+    timeout: float,
+) -> Optional[str | _CancelledResponse]:
     """Block on the entry's event until resolved or timeout fires.
 
     Polls in 1-second slices so the agent's inactivity heartbeat keeps
@@ -112,7 +127,8 @@ def wait_for_response(clarify_id: str, timeout: float) -> Optional[str]:
     heartbeat still fires each slice so inactivity watchdogs don't kill a live
     prompt.
 
-    Returns the resolved response string, or ``None`` on timeout.
+    Returns the resolved response string, :data:`CANCEL_SENTINEL` when the
+    session is cancelled, or ``None`` on timeout.
     """
     with _lock:
         entry = _entries.get(clarify_id)
@@ -165,11 +181,11 @@ def resolve_gateway_clarify(clarify_id: str, response: str) -> bool:
     """
     with _lock:
         entry = _entries.get(clarify_id)
-        if entry is None:
+        if entry is None or entry.event.is_set():
             return False
-    entry.response = str(response) if response is not None else ""
-    entry.event.set()
-    return True
+        entry.response = str(response) if response is not None else ""
+        entry.event.set()
+        return True
 
 
 def get_pending_for_session(
@@ -290,20 +306,16 @@ def clear_session(session_key: str) -> int:
     end of their session.  Returns the number of entries cancelled.
     """
     with _lock:
-        ids = list(_session_index.pop(session_key, []) or [])
-        entries = [_entries.pop(cid, None) for cid in ids]
-    cancelled = 0
-    for entry in entries:
-        if entry is None:
-            continue
-        # Empty string sentinel — agent code can distinguish from a real
-        # response by inspecting the wait_for_response return value
-        # alongside its own timeout deadline.  Most callers just treat any
-        # falsy result as "user did not respond".
-        entry.response = ""
-        entry.event.set()
-        cancelled += 1
-    return cancelled
+        ids = list(_session_index.pop(session_key, []))
+        cancelled = 0
+        for clarify_id in ids:
+            entry = _entries.pop(clarify_id, None)
+            if entry is None or entry.event.is_set():
+                continue
+            entry.response = CANCEL_SENTINEL
+            entry.event.set()
+            cancelled += 1
+        return cancelled
 
 
 # =========================================================================

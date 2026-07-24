@@ -2779,6 +2779,7 @@ export const zh: Translations = {
       placeholder: '输入你的答案…',
       skip: '跳过',
       skipped: '已跳过',
+      cancelled: '已取消',
       continueLabel: '继续',
       lateAnswer: (question, choice) => `关于"${question}" — 我的回答: ${choice}`,
       lateAnswerTip: '将此回答起草为后续消息',

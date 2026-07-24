@@ -21129,11 +21129,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # callback contract).  Bridges sync→async by scheduling the
             # adapter's send_clarify on the gateway event loop, then blocks on
             # the clarify primitive's threading.Event with a configurable
-            # timeout.  Returns the user's response string, or a sentinel
-            # explaining that no response arrived (so the agent can adapt
-            # rather than hang forever).
+            # timeout. Returns the user's response, an internal session-cancel
+            # control value, or explanatory text when no response arrives.
             # ------------------------------------------------------------------
-            def _clarify_callback_sync(question: str, choices) -> str:
+            def _clarify_callback_sync(question: str, choices) -> object:
                 from tools import clarify_gateway as _clarify_mod
                 import uuid as _uuid
 

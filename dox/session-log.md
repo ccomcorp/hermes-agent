@@ -1,5 +1,14 @@
 # Session Log
 
+## 2026-07-24 — Clarify cancellation is not Skip
+
+- **Symptom:** pressing Stop while a Desktop clarify card was pending made the question look skipped and made an ongoing requirements interview appear to have lost its prior Q&A progress.
+- **Root cause:** `tui_gateway.server._clear_pending()` released every blocking prompt with `""`; `clarify_tool` correctly interpreted that value as Skip, so the backend result could not tell explicit Skip from turn-level `session.interrupt`. The renderer therefore had no cancellation state to show.
+- **Fix:** introduced an identity-only cancellation control value in `tools/clarify_gateway.py`; scoped it to `clarify.request` in `_clear_pending` while preserving empty responses for secret/sudo/terminal prompts; translated it to JSON `status:"cancelled"`; added Desktop parsing, copy, and cancelled-card rendering; retained backward compatibility for old payloads without status. Reply/cancel resolution is now atomic and first-wins.
+- **Review:** adversarial review traced Desktop/TUI, messaging-gateway, and CLI surfaces and judged the core sentinel boundary sound. Follow-up hardened terminal-resolution concurrency and corrected callback/blocking type contracts.
+- **Gates:** Python clarify/gateway/protocol cluster **226 passed**; Desktop clarify/store/i18n **40 passed**; Desktop typecheck PASS; Ruff PASS; focused ESLint 0 errors / 12 pre-existing `document` warnings; `npm run build --workspace apps/desktop` plus `assert-dist-built` PASS; diff check PASS.
+- **Ship state:** source fixed, tested, and compiled into `apps/desktop/dist`. The packaged running Desktop still needs its phase-2 pack/restart before the new card state is live.
+
 ## 2026-07-23 — Desktop left-panel route mounts after upstream merge
 
 - **Symptom:** multiple visible left-panel entries and Settings → Plugins were inert after the upstream Desktop shell/routing merge.

@@ -3,7 +3,7 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-23 (desktop routing fixed; Windows Electron test failures fixed; packaging blocked only by running Desktop lock)
+**Updated:** 2026-07-24 (clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
 
 ## Scoreboard
 
@@ -13,6 +13,7 @@
 | DocOps hybrid | **PASS** | active; drift cleared |
 | DocOps Desktop panel | **FIXED (source)** | Hosted in Panel/OverlayView; theme tokens; needs Desktop rebuild to ship |
 | Desktop left-panel routing | **FIXED (source + built)** | Visible built-in sidebar rows now have route constants + mounted workspace/overlay surfaces + split-pane renderers; restart Desktop to load |
+| Clarify cancellation semantics | **FIXED (source + built)** | Stop/session.interrupt now produces `cancelled`, never Skip; first reply/cancel wins atomically; Python 226 + Desktop 40 focused tests and production build passed; pack/restart pending |
 | Desktop Windows checks | **TESTS GREEN / PACKAGE LOCKED** | `npm run check` now passes typecheck + all app tests (2775/4 skipped); `test:desktop:all` package step hits EBUSY because this live Desktop is running from `apps/desktop/release/win-unpacked` |
 | Composite + experience | **PASS** | 357 lessons; AIOS_PACKAGES_DIR wired |
 | NeuroLinked | **PASS** | connected ADOLESCENT |

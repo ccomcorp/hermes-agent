@@ -121,7 +121,8 @@ describe('readClarifyResult', () => {
     expect(readClarifyResult({ question: 'Ok?', user_response: '' })).toEqual({
       question: 'Ok?',
       answer: '',
-      error: undefined
+      error: undefined,
+      status: undefined
     })
   })
 })
@@ -336,5 +337,149 @@ describe('ClarifyTool pending marker', () => {
 
     // No shortcuts → nothing to protect → composer type-to-focus stays live.
     expect(document.querySelector('[data-clarify-choices]')).toBeNull()
+  })
+})
+
+describe('readClarifyResult — cancellation semantics', () => {
+  it('parses status:cancelled from the tool JSON payload', () => {
+    expect(
+      readClarifyResult({
+        question: 'Proceed?',
+        choices_offered: ['Yes', 'No'],
+        user_response: '',
+        status: 'cancelled'
+      })
+    ).toEqual({
+      question: 'Proceed?',
+      answer: '',
+      error: undefined,
+      status: 'cancelled'
+    })
+  })
+
+  it('parses status:skipped from the tool JSON payload', () => {
+    expect(
+      readClarifyResult({
+        question: 'Proceed?',
+        user_response: '',
+        status: 'skipped'
+      })
+    ).toEqual({
+      question: 'Proceed?',
+      answer: '',
+      error: undefined,
+      status: 'skipped'
+    })
+  })
+
+  it('parses status:answered from the tool JSON payload', () => {
+    expect(
+      readClarifyResult({
+        question: 'Proceed?',
+        user_response: 'Yes',
+        status: 'answered'
+      })
+    ).toEqual({
+      question: 'Proceed?',
+      answer: 'Yes',
+      error: undefined,
+      status: 'answered'
+    })
+  })
+
+  it('back-compat: missing status field is undefined (old payloads)', () => {
+    expect(
+      readClarifyResult({ question: 'Ok?', user_response: 'yes' })
+    ).toEqual({
+      question: 'Ok?',
+      answer: 'yes',
+      error: undefined,
+      status: undefined
+    })
+  })
+
+  it('ignores unknown status values instead of trusting unvalidated payloads', () => {
+    expect(
+      readClarifyResult({ question: 'Ok?', user_response: '', status: 'surprise' })
+    ).toEqual({
+      question: 'Ok?',
+      answer: '',
+      error: undefined,
+      status: undefined
+    })
+  })
+})
+
+describe('ClarifyTool settled — cancelled view', () => {
+  it('renders Cancelled label when status is cancelled', () => {
+    renderClarify(
+      <ClarifyTool
+        {...settledClarifyProps(
+          { question: 'Proceed?', choices: ['Yes', 'No'] },
+          {
+            question: 'Proceed?',
+            choices_offered: ['Yes', 'No'],
+            user_response: '',
+            status: 'cancelled'
+          },
+          'clarify-cancel-1'
+        )}
+      />
+    )
+
+    expect(screen.getByText('Proceed?')).toBeTruthy()
+    expect(screen.getByText('Cancelled')).toBeTruthy()
+    expect(screen.queryByText('Skipped')).toBeNull()
+  })
+
+  it('does not render late-choice affordances on cancelled', () => {
+    renderClarify(
+      <ClarifyTool
+        {...settledClarifyProps(
+          { question: 'Proceed?', choices: ['Yes', 'No'] },
+          {
+            question: 'Proceed?',
+            choices_offered: ['Yes', 'No'],
+            user_response: '',
+            status: 'cancelled'
+          },
+          'clarify-cancel-2'
+        )}
+      />
+    )
+
+    // No late-choice group on cancelled — session was torn down.
+    expect(document.querySelector('[data-clarify-late-choices]')).toBeNull()
+    // No choice buttons either.
+    expect(screen.queryByText('Yes')).toBeNull()
+    expect(screen.queryByText('No')).toBeNull()
+  })
+
+  it('sets data-clarify-cancelled attribute on the answer line', () => {
+    renderClarify(
+      <ClarifyTool
+        {...settledClarifyProps(
+          { question: 'Proceed?' },
+          { question: 'Proceed?', user_response: '', status: 'cancelled' },
+          'clarify-cancel-3'
+        )}
+      />
+    )
+
+    expect(document.querySelector('[data-clarify-cancelled]')).toBeTruthy()
+  })
+
+  it('does not set data-clarify-cancelled on a skipped result', () => {
+    renderClarify(
+      <ClarifyTool
+        {...settledClarifyProps(
+          { question: 'Proceed?' },
+          { question: 'Proceed?', user_response: '', status: 'skipped' },
+          'clarify-cancel-4'
+        )}
+      />
+    )
+
+    expect(document.querySelector('[data-clarify-cancelled]')).toBeNull()
   })
 })

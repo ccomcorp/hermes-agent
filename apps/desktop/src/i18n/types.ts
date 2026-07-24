@@ -2212,6 +2212,7 @@ export interface Translations {
       placeholder: string
       skip: string
       skipped: string
+      cancelled: string
       continueLabel: string
       lateAnswer: (question: string, choice: string) => string
       lateAnswerTip: string

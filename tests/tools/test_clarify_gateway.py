@@ -168,6 +168,28 @@ class TestClarifyPrimitive:
 
         assert cm.resolve_gateway_clarify("nope", "anything") is False
 
+    def test_first_terminal_resolution_wins(self):
+        """A reply and cancellation cannot overwrite each other after resolution."""
+        from tools import clarify_gateway as cm
+
+        answered = cm.register("answer-first", "session-answer", "Q?", ["A"])
+        assert cm.resolve_gateway_clarify("answer-first", "A") is True
+        assert cm.clear_session("session-answer") == 0
+        assert answered.response == "A"
+
+        cancelled = cm.register("cancel-first", "session-cancel", "Q?", ["A"])
+        assert cm.clear_session("session-cancel") == 1
+        assert cm.resolve_gateway_clarify("cancel-first", "A") is False
+        assert cancelled.response is cm.CANCEL_SENTINEL
+
+    def test_duplicate_reply_cannot_overwrite_first_answer(self):
+        from tools import clarify_gateway as cm
+
+        entry = cm.register("reply-once", "session-reply", "Q?", ["A", "B"])
+        assert cm.resolve_gateway_clarify("reply-once", "A") is True
+        assert cm.resolve_gateway_clarify("reply-once", "B") is False
+        assert entry.response == "A"
+
     def test_resolve_after_wait_completes_is_noop(self):
         """A late resolve on a finished entry doesn't blow up."""
         from tools import clarify_gateway as cm
@@ -180,7 +202,7 @@ class TestClarifyPrimitive:
         assert result is False
 
     def test_clear_session_cancels_pending_entries(self):
-        """clear_session unblocks blocked threads with empty response."""
+        """clear_session unblocks blocked threads with cancellation identity."""
         from tools import clarify_gateway as cm
 
         cm.register("id7", "sk7", "Q?", ["A"])
@@ -194,8 +216,7 @@ class TestClarifyPrimitive:
             cancelled = cm.clear_session("sk7")
             assert cancelled == 1
             result = fut.result(timeout=10.0)
-            # clear_session sets response="" then the wait returns it
-            assert result == ""
+            assert result is cm.CANCEL_SENTINEL
 
     def test_has_pending(self):
         from tools import clarify_gateway as cm
@@ -222,7 +243,7 @@ class TestClarifyPrimitive:
 
             # unregister_notify calls clear_session; thread unwinds
             result = fut.result(timeout=10.0)
-            assert result == ""
+            assert result is cm.CANCEL_SENTINEL
 
     def test_session_index_isolation(self):
         """Entries from different sessions don't leak across get_pending lookups."""
@@ -439,3 +460,28 @@ class TestUnlimitedWait:
         t.join(timeout=5.0)
         assert not t.is_alive()
         assert result_box["r"] == "B"
+
+
+class TestCancelSentinel:
+    """Cancellation is an internal control value, never reserved user text."""
+
+    def test_sentinel_cannot_collide_with_user_text(self):
+        from tools import clarify_gateway as cm
+
+        assert hasattr(cm, "CANCEL_SENTINEL")
+        assert not isinstance(cm.CANCEL_SENTINEL, str)
+
+    def test_sentinel_is_distinct_from_empty(self):
+        """CANCEL_SENTINEL is not the empty string (Skip sentinel)."""
+        from tools import clarify_gateway as cm
+
+        assert cm.CANCEL_SENTINEL != ""
+        assert cm.CANCEL_SENTINEL is not None
+
+    def test_clear_session_sets_control_value_and_event(self):
+        from tools import clarify_gateway as cm
+
+        entry = cm.register("cancel-me", "session-a", "Proceed?", ["Yes", "No"])
+        assert cm.clear_session("session-a") == 1
+        assert entry.response is cm.CANCEL_SENTINEL
+        assert entry.event.is_set()

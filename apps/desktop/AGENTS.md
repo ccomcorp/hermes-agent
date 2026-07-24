@@ -165,6 +165,10 @@ sacred:
   honest copy and their own way out.
 - Keyboard ownership follows focus. The focused surface wins its keys; one
   cancel gesture does exactly one thing.
+- Cancelling a pending clarify is a turn interruption, not the user pressing
+  Skip. Preserve that distinction through the gateway result and renderer;
+  completed Q&A stays in transcript history and cancelled cards offer no late
+  answer affordance.
 - Expensive, stateful surfaces (terminals, live tools) stay alive when hidden.
   Visibility is not lifecycle.
 

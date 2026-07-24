@@ -56,7 +56,7 @@ def _flatten_choice(c) -> str:
 def clarify_tool(
     question: str,
     choices: Optional[List[str]] = None,
-    callback: Optional[Callable] = None,
+    callback: Optional[Callable[[str, Optional[List[str]]], object]] = None,
 ) -> str:
     """
     Ask the user a question, optionally with multiple-choice options.
@@ -66,8 +66,9 @@ def clarify_tool(
         choices:  Up to 4 predefined answer choices. When omitted the
                   question is purely open-ended.
         callback: Platform-provided function that handles the actual UI
-                  interaction. Signature: callback(question, choices) -> str.
-                  Injected by the agent runner (cli.py / gateway).
+                  interaction. It returns user text or an internal session-
+                  cancellation control value and is injected by the agent
+                  runner (cli.py / gateway).
 
     Returns:
         JSON string with the user's response.
@@ -106,10 +107,28 @@ def clarify_tool(
             ensure_ascii=False,
         )
 
+    from tools.clarify_gateway import CANCEL_SENTINEL
+
+    if user_response is CANCEL_SENTINEL:
+        # Session-level cancellation (e.g. Stop / session.interrupt while the
+        # clarify card was pending).  The user did not press Skip — the session
+        # was torn down underneath them, so prior Q&A / progress was *not* lost.
+        status = "cancelled"
+        response_text = ""
+    else:
+        response_text = str(user_response).strip()
+        if response_text:
+            status = "answered"
+        else:
+            # User pressed Skip, or the clarify timed out — the agent opted not
+            # to wait for an answer and the entry resolved to empty string.
+            status = "skipped"
+
     return json.dumps({
         "question": question,
         "choices_offered": choices,
-        "user_response": str(user_response).strip(),
+        "user_response": response_text,
+        "status": status,
     }, ensure_ascii=False)
 
 

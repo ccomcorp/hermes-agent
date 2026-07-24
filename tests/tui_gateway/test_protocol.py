@@ -40,6 +40,7 @@ def server():
         # via reload (which we don't do).
         mod._sessions.clear()
         mod._pending.clear()
+        mod._pending_prompt_payloads.clear()
         mod._answers.clear()
         mod._live_transports.clear()
 
@@ -314,6 +315,24 @@ def test_clear_pending(server):
 
     assert ev.is_set()
     assert server._answers["r1"] == ""
+
+
+def test_clear_pending_marks_clarify_as_cancelled(server):
+    from tools.clarify_gateway import CANCEL_SENTINEL
+
+    clarify_event = threading.Event()
+    secret_event = threading.Event()
+    server._pending["clarify-rid"] = ("sid-x", clarify_event)
+    server._pending_prompt_payloads["clarify-rid"] = ("clarify.request", {})
+    server._pending["secret-rid"] = ("sid-x", secret_event)
+    server._pending_prompt_payloads["secret-rid"] = ("secret.request", {})
+
+    server._clear_pending("sid-x")
+
+    assert clarify_event.is_set()
+    assert secret_event.is_set()
+    assert server._answers["clarify-rid"] is CANCEL_SENTINEL
+    assert server._answers["secret-rid"] == ""
 
 
 # ── Session lookup ───────────────────────────────────────────────────
