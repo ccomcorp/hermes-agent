@@ -21209,7 +21209,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 timeout = _clarify_mod.get_clarify_timeout()
                 response = _clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
                 if response is None or response == "":
-                    # Timeout or session-boundary cancellation
+                    # Timeout or explicit Skip. Session-boundary cancellation
+                    # returns CANCEL_SENTINEL and must pass through unchanged so
+                    # clarify_tool can emit status="cancelled".
                     return f"[user did not respond within {int(timeout / 60)}m]"
                 return response
 
