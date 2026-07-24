@@ -3,7 +3,7 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-24 (clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
+**Updated:** 2026-07-24 (non-primary agent-context memory fence source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
 
 ## Scoreboard
 
@@ -16,6 +16,7 @@
 | Clarify cancellation semantics | **FIXED (source + built)** | Stop/session.interrupt now produces `cancelled`, never Skip; first reply/cancel wins atomically; Python 226 + Desktop 40 focused tests and production build passed; pack/restart pending |
 | Desktop Windows checks | **TESTS GREEN / PACKAGE LOCKED** | `npm run check` now passes typecheck + all app tests (2775/4 skipped); `test:desktop:all` package step hits EBUSY because this live Desktop is running from `apps/desktop/release/win-unpacked` |
 | Composite + experience | **PASS** | 357 lessons; AIOS_PACKAGES_DIR wired |
+| Non-primary memory fence | **SOURCE FIXED** | cron/subagent/flush agents carry explicit lifecycle context; direct `memory` writes fenced before MEMORY/USER/provider mutation; focused gates green |
 | NeuroLinked | **PASS** | connected ADOLESCENT |
 | QMD + gbrain | **PASS** | dual vault retrieval OK |
 | MCP suite | **PASS** | all 6 servers enabled |

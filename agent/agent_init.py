@@ -470,6 +470,7 @@ def init_agent(
     skip_context_files: bool = False,
     load_soul_identity: bool = False,
     skip_memory: bool = False,
+    agent_context: str = "primary",
     session_db=None,
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
@@ -533,6 +534,20 @@ def init_agent(
             remain skipped.
     """
     _install_safe_stdio()
+
+    # Validate lifecycle context before any provider / IO work so an invalid
+    # value fails deterministically rather than silently degrading memory
+    # isolation. ``agent_context`` gates which external memory providers
+    # consider this session eligible for ordinary user-memory writes
+    # (primary) vs. read-only / skipped contexts (cron / subagent / flush).
+    _VALID_AGENT_CONTEXTS = ("primary", "cron", "subagent", "flush")
+    _ctx = str(agent_context or "").strip()
+    if _ctx not in _VALID_AGENT_CONTEXTS:
+        raise ValueError(
+            f"Invalid agent_context {agent_context!r}; expected one of "
+            f"{_VALID_AGENT_CONTEXTS}"
+        )
+    agent_context = _ctx
 
     agent.model = model
     agent.max_iterations = max_iterations
@@ -1476,6 +1491,7 @@ def init_agent(
     agent._codex_reasoning_replay_enabled = True
     agent._memory_write_origin = "assistant_tool"
     agent._memory_write_context = "foreground"
+    agent._agent_context = agent_context
     
     # Cached system prompt -- built once per session, only rebuilt on compression
     agent._cached_system_prompt: Optional[str] = None
@@ -1632,7 +1648,7 @@ def init_agent(
                         "session_id": agent.session_id,
                         "platform": platform or "cli",
                         "hermes_home": str(get_hermes_home()),
-                        "agent_context": "primary",
+                        "agent_context": agent_context,
                     }
                     if _init_kwargs["platform"] == "cli":
                         _init_kwargs["warning_callback"] = agent._emit_warning

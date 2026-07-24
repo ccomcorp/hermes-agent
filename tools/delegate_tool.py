@@ -1391,6 +1391,7 @@ def _build_child_agent(
             platform="subagent",
             skip_context_files=True,
             skip_memory=True,
+            agent_context="subagent",
             clarify_callback=None,
             thinking_callback=child_thinking_cb,
             session_db=getattr(parent_agent, "_session_db", None),

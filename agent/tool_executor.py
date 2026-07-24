@@ -472,6 +472,32 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 error_message=_ts_scope_block,
                 middleware_trace=list(middleware_trace),
             )
+        elif function_name == "memory" and getattr(agent, "_agent_context", "primary") != "primary":
+            # Centralized non-primary write fence: cron, subagent, and flush
+            # agent contexts must never mutate MEMORY.md / USER.md. Reject
+            # before MemoryStore changes and before MemoryManager/provider
+            # notification. The error is deterministic and must not mirror
+            # to providers.
+            _ctx = getattr(agent, "_agent_context", "primary")
+            from tools.memory_tool import tool_error as _mem_tool_error
+            _fence_msg = json.loads(_mem_tool_error(
+                f"Memory writes are disabled in {_ctx} agent context. "
+                "Only the primary foreground session can mutate MEMORY.md / USER.md.",
+                success=False,
+            ))["error"]
+            block_result = json.dumps({"error": _fence_msg}, ensure_ascii=False)
+            _emit_terminal_post_tool_call(
+                agent,
+                function_name=function_name,
+                function_args=function_args,
+                result=block_result,
+                effective_task_id=effective_task_id,
+                tool_call_id=getattr(tool_call, "id", "") or "",
+                status="blocked",
+                error_type="non_primary_memory_fence",
+                error_message=_fence_msg,
+                middleware_trace=list(middleware_trace),
+            )
         else:
             try:
                 from hermes_cli.plugins import resolve_pre_tool_block
@@ -1146,6 +1172,20 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         if _ts_scope_block is not None:
             _block_msg = _ts_scope_block
             _block_error_type = "tool_scope_block"
+        elif function_name == "memory" and getattr(agent, "_agent_context", "primary") != "primary":
+            # Centralized non-primary write fence: cron, subagent, and flush
+            # agent contexts must never mutate MEMORY.md / USER.md. Reject
+            # before MemoryStore changes and before MemoryManager/provider
+            # notification. The error is deterministic and must not mirror
+            # to providers.
+            _ctx = getattr(agent, "_agent_context", "primary")
+            from tools.memory_tool import tool_error as _mem_tool_error
+            _block_msg = json.loads(_mem_tool_error(
+                f"Memory writes are disabled in {_ctx} agent context. "
+                "Only the primary foreground session can mutate MEMORY.md / USER.md.",
+                success=False,
+            ))["error"]
+            _block_error_type = "non_primary_memory_fence"
         else:
             try:
                 from hermes_cli.plugins import resolve_pre_tool_block

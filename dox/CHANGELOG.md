@@ -12,6 +12,7 @@ Keep entries short. Detailed pre-hotfix ledger entries from this active update c
 
 ### Tooling / guardrails
 
+- **2026-07-24** — Added lifecycle `agent_context` wiring and a central non-primary memory-write fence: cron/subagent/flush agents now carry explicit context into memory providers, and direct `memory` tool writes from those contexts are blocked before `MEMORY.md`/`USER.md` or provider mirrors can mutate.
 - **2026-07-24** — Added the source-grounded Kanban C+D completion spec at `docs/plans/2026-07-22-kanban-cd-brain-model-selection-work-spec.md` (`c594e6dfb`). The spec records that in-chat delegation routes are complete, Kanban classifier routing remains partial, and brain-learned model selection stays deferred until C+D produces a structured route/outcome corpus.
 - **2026-07-23** — Upstream/main merge landed locally with AIOS/local seams preserved; follow-up fixed duplicate dashboard backup `-o` flag in `/api/ops/backup`. Detailed gate evidence and conflict notes are in the archive file above.
 - **2026-07-22** — Kanban worker-lifecycle Windows portability committed as `8b53cd5b7`; fixed raw exit-status decoding, Windows dead-PID reclaim handling, and `~/.hermes` profile fallback. Detailed A/B failure-set analysis is in the archive.

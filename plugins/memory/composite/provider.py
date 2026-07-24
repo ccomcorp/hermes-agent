@@ -81,17 +81,29 @@ for _d in (_STORE_DIR, _COMPOSITE_DIR):
 def _resolve_aios_health_dir() -> Optional[str]:
     """Return the AIOS ``packages/health`` dir (for ``ExperienceHealth``), or ``None``.
 
-    Mirrors ``synthetic_week_ac1.py``: ``AIOS_HEALTH_DIR`` override, else sibling
-    ``<AIOS>/aios/packages/health`` resolved from this file. The loop self-check (AC-PX5 #3)
-    reads ``ExperienceHealth.circulation_report``; an absent health package degrades that
-    check to a quiet no-op (best-effort — it never blocks session-end)."""
+    Resolution order mirrors the memory package resolver: explicit ``AIOS_HEALTH_DIR`` first,
+    then the configured ``AIOS_PACKAGES_DIR`` root, then the historical sibling checkout path.
+    The loop self-check (AC-PX5 #3) reads ``ExperienceHealth.circulation_report``; an absent
+    health package degrades that check to a quiet no-op (best-effort — it never blocks
+    session-end).
+    """
+    candidates = []
     env = os.environ.get("AIOS_HEALTH_DIR")
-    cand = (
-        Path(env)
-        if env
-        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "health"
-    )
-    return str(cand) if cand.is_dir() else None
+    if env:
+        candidates.append(Path(env))
+
+    packages_env = os.environ.get("AIOS_PACKAGES_DIR")
+    if packages_env:
+        # AIOS_PACKAGES_DIR points at ``.../packages/memory``; health is the sibling
+        # ``.../packages/health`` package used by the loop self-check tests and live boot.
+        candidates.append(Path(packages_env).parent / "health")
+
+    candidates.append(Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "health")
+
+    for cand in candidates:
+        if cand.is_dir():
+            return str(cand)
+    return None
 
 
 _HEALTH_DIR = _resolve_aios_health_dir()
@@ -346,10 +358,10 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         ``build_provider``/``register`` (which the loader re-runs per discovery probe). The
         build is idempotent (only when no store was injected).
 
-        #5 (latent guard): the chassis currently hardcodes ``agent_context="primary"`` at its
-        single ``initialize_all`` call site (agent_init.py), so the non-primary skip in
-        ``sync_turn`` does not yet fire in practice. It is kept as future-proofing AND because
-        ``sync_turn`` performs no store append regardless — the store stays clean either way.
+        #5: the chassis passes the lifecycle ``agent_context`` through this
+        # initialize_all call site. Non-primary contexts are read/skip-only for
+        # ordinary memory mirroring, so sync_turn/on_memory_write return without
+        # appending foreground user-memory artifacts.
         """
         # AC-PX5 #2 (boot wiring assertion, OWN PROVIDER ONLY): refuse to boot a silently-dead
         # loop. Assert the chassis still exposes the MemoryManager fan-out dispatch AND the seam
@@ -557,7 +569,12 @@ class HermesCompositeProvider(CompositeMemoryProvider):
           * NEVER reward here — standing-note writes are not RPE outcomes
 
         Best-effort: never raises; store/brain faults are logged and skipped.
+        Non-primary guard: cron / subagent / flush agent contexts
+        skip all memory mirroring (the composite store is for the
+        foreground user session only).
         """
+        if getattr(self, "_agent_context", "primary") != "primary":
+            return  # Non-primary — skip store + brain mirroring
         action = str(action or "")
         target = str(target or "memory")
         meta = dict(metadata or {})

@@ -1,5 +1,12 @@
 # Session Log
 
+## 2026-07-24 — Non-primary agent-context memory fence
+
+- **Goal:** continue development by finishing the in-flight lifecycle-context slice that prevents non-primary agents from writing ordinary user memories.
+- **Fix:** added `agent_context` to `AIAgent`/`init_agent`, validated `primary|cron|subagent|flush`, propagated the exact context into `MemoryManager.initialize_all`, wired cron jobs to `cron`, delegated children to `subagent`, and background-review/curator forks to `flush` while retaining `skip_memory=True`. Follow-up repair made the composite health package resolver honor `AIOS_PACKAGES_DIR` so AC-PX5 loop self-check remains active after the D:\HeicH chassis relocation.
+- **Fence:** `agent.tool_executor` now blocks direct `memory` tool calls in every non-primary context on both sequential and concurrent tool-call paths before `MEMORY.md`/`USER.md` changes or provider notifications can occur; the composite provider skips `on_memory_write` mirroring when not primary.
+- **Gates:** focused lifecycle/fence tests `54 passed`; provider/composite focused suite `123 passed / 1 skipped`; broader memory/delegate/background-review/cron cluster `496 passed`; Ruff on changed files passed (one pre-existing invalid-noqa warning in `run_agent.py`).
+
 ## 2026-07-24 — Kanban C+D / brain model-selection status spec
 
 - **Question:** review pending Kanban complexity/delegation routing and brain-learned model selection, then commit the resulting implementation spec.
