@@ -9,6 +9,8 @@ import pytest
 from hermes_cli import kanban_db as kb
 from hermes_cli.config import DEFAULT_CONFIG, validate_config_structure
 
+VALID_MODEL = "anthropic/claude-sonnet-4.5"
+
 
 def test_default_config_declares_complexity_routing_disabled():
     routing = DEFAULT_CONFIG["kanban"]["complexity_routing"]
@@ -91,11 +93,15 @@ def routing_cfg(monkeypatch):
         tick_budget_s: float = 30,
         failure_limit: int = 3,
         floor: float = 0.2,
+        explicit_model_profile: str = "advisor",
+        default_to_trigger: bool = False,
     ):
         block = {
             "enabled": enabled,
             "mode": mode,
             "trigger_assignee": "auto",
+            "explicit_model_profile": explicit_model_profile,
+            "default_to_trigger": default_to_trigger,
             "min_confidence": min_confidence,
             "min_signal_floor": floor,
             "classifier_timeout_s": timeout_s,
@@ -157,6 +163,26 @@ def _install_aux(monkeypatch: pytest.MonkeyPatch, *responses, model: str = "clas
     monkeypatch.setattr(aux, "get_text_auxiliary_client", lambda task: (client, model))
     monkeypatch.setattr(aux, "get_auxiliary_extra_body", lambda: None, raising=False)
     return client
+
+
+def _install_model_catalog(monkeypatch: pytest.MonkeyPatch, *, valid: set[str] | None = None):
+    from hermes_cli import models
+
+    valid = valid or {VALID_MODEL}
+    monkeypatch.setattr(models, "model_ids", lambda *, force_refresh=False: sorted(valid))
+
+    def validate_requested_model(model_name, provider, **_kwargs):
+        requested = f"{provider}:{model_name}" if provider != "openrouter" else model_name
+        if requested in valid or model_name in valid:
+            return {"accepted": True, "persist": True, "recognized": True, "message": None}
+        return {
+            "accepted": False,
+            "persist": False,
+            "recognized": False,
+            "message": f"Model `{requested}` was not found in the test catalog.",
+        }
+
+    monkeypatch.setattr(models, "validate_requested_model", validate_requested_model)
 
 
 def _capture_spawn(captured: list[tuple[str, str | None]]):
@@ -332,6 +358,170 @@ def test_tier_only_mode_does_not_call_auxiliary_classifier(
         conn.close()
 
 
+def test_explicit_complexity_override_routes_without_classifier(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg()
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(monkeypatch)
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Expert override", assignee="auto")
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET complexity_override = ? WHERE id = ?",
+                ("expert", tid),
+            )
+        result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("advisor", None)]
+        assert kb.get_task(conn, tid).assignee == "advisor"
+        assert client.calls == []
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["route_reason"] == "explicit_complexity:expert"
+    finally:
+        conn.close()
+
+
+def test_invalid_complexity_override_falls_back_without_classifier(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg()
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(monkeypatch)
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Bad override", assignee="auto")
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET complexity_override = ? WHERE id = ?",
+                ("impossible", tid),
+            )
+        result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("advisor", None)]
+        assert client.calls == []
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["route_reason"] == "explicit_complexity_invalid_fallback"
+        assert payload["complexity_override"] == "impossible"
+    finally:
+        conn.close()
+
+
+def test_explicit_model_override_routes_without_classifier(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg(explicit_model_profile="advisor")
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(monkeypatch)
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Pinned model auto card", assignee="auto")
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET model_override = ? WHERE id = ?",
+                (VALID_MODEL, tid),
+            )
+        result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("advisor", VALID_MODEL)]
+        task = kb.get_task(conn, tid)
+        assert task.assignee == "advisor"
+        assert task.model_override == VALID_MODEL
+        assert client.calls == []
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["route_reason"] == "explicit_model"
+        assert payload["model"] == VALID_MODEL
+    finally:
+        conn.close()
+
+
+def test_default_to_trigger_routes_unassigned_before_default_assignee(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg(default_to_trigger=True)
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(
+        monkeypatch,
+        {
+            "tier": "trivial",
+            "profile": "ponytail",
+            "confidence": 0.95,
+            "rationale": "small card",
+        },
+    )
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Unassigned routed card", assignee=None)
+        result = kb.dispatch_once(
+            conn,
+            spawn_fn=_capture_spawn(spawned_profiles),
+            default_assignee="dev-agent",
+        )
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("ponytail", None)]
+        assert result.auto_assigned_default == []
+        assert kb.get_task(conn, tid).assignee == "ponytail"
+        assert len(client.calls) == 1
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["route_reason"] == "classifier:trivial"
+        assert payload["assignee"] == "ponytail"
+    finally:
+        conn.close()
+
+
+def test_default_to_trigger_does_not_reroute_explicit_assignee(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg(default_to_trigger=True)
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(monkeypatch)
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Explicit dev card", assignee="dev-agent")
+        result = kb.dispatch_once(
+            conn,
+            spawn_fn=_capture_spawn(spawned_profiles),
+            default_assignee="advisor",
+        )
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("dev-agent", None)]
+        assert kb.get_task(conn, tid).assignee == "dev-agent"
+        assert client.calls == []
+    finally:
+        conn.close()
+
+
 def test_classifier_cache_hits_for_matching_title_and_body_in_same_tick(
     kanban_home, routing_cfg, profile_set, monkeypatch
 ):
@@ -383,7 +573,7 @@ def test_classifier_tick_budget_falls_back_without_aux_call(
     routing_cfg(tick_budget_s=1)
     profile_set({"dev-agent", "advisor", "ponytail"})
     client = _install_aux(monkeypatch)
-    times = iter([100.0, 102.0])
+    times = iter([100.0, 102.0, 102.0])
     monkeypatch.setattr(kb.time, "monotonic", lambda: next(times))
     spawned_profiles: list[tuple[str, str | None]] = []
     conn = kb.connect()
@@ -403,6 +593,7 @@ def test_classifier_model_field_sets_task_model_override_for_spawn(
 ):
     routing_cfg()
     profile_set({"dev-agent", "advisor", "ponytail"})
+    _install_model_catalog(monkeypatch, valid={VALID_MODEL})
     _install_aux(
         monkeypatch,
         {
@@ -410,7 +601,7 @@ def test_classifier_model_field_sets_task_model_override_for_spawn(
             "profile": "advisor",
             "confidence": 0.95,
             "rationale": "needs stronger model",
-            "model": "openai/gpt-5.5",
+            "model": VALID_MODEL,
         },
     )
     spawned_profiles: list[tuple[str, str | None]] = []
@@ -420,8 +611,84 @@ def test_classifier_model_field_sets_task_model_override_for_spawn(
         result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
 
         assert result.spawned and result.spawned[0][0] == tid
-        assert spawned_profiles == [("advisor", "openai/gpt-5.5")]
-        assert kb.get_task(conn, tid).model_override == "openai/gpt-5.5"
+        assert spawned_profiles == [("advisor", VALID_MODEL)]
+        assert kb.get_task(conn, tid).model_override == VALID_MODEL
+    finally:
+        conn.close()
+
+
+def test_classifier_invalid_model_is_rejected_without_blocking_profile_route(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    routing_cfg()
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    _install_model_catalog(monkeypatch, valid={VALID_MODEL})
+    _install_aux(
+        monkeypatch,
+        {
+            "tier": "expert",
+            "profile": "advisor",
+            "confidence": 0.95,
+            "rationale": "tries a typo model",
+            "model": "gtp-5-super",
+        },
+    )
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Hard card with typo model", assignee="auto")
+        result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("advisor", None)]
+        assert kb.get_task(conn, tid).model_override is None
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["route_reason"] == "classifier:expert"
+        assert payload["model_rejected"] == "gtp-5-super"
+        assert "not found" in payload["model_reject_reason"]
+    finally:
+        conn.close()
+
+
+def test_classifier_provider_scoped_model_field_is_validated_and_preserved(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    custom_model = "custom:local:qwen-local"
+    routing_cfg()
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    _install_model_catalog(monkeypatch, valid={custom_model})
+    _install_aux(
+        monkeypatch,
+        {
+            "tier": "expert",
+            "profile": "advisor",
+            "confidence": 0.95,
+            "rationale": "local model preferred",
+            "model": custom_model,
+        },
+    )
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Hard local card", assignee="auto")
+        result = kb.dispatch_once(conn, spawn_fn=_capture_spawn(spawned_profiles))
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("advisor", custom_model)]
+        assert kb.get_task(conn, tid).model_override == custom_model
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["model"] == custom_model
+        assert "model_rejected" not in payload
     finally:
         conn.close()
 
@@ -431,6 +698,7 @@ def test_existing_task_model_override_wins_over_classifier_model(
 ):
     routing_cfg()
     profile_set({"dev-agent", "advisor", "ponytail"})
+    _install_model_catalog(monkeypatch, valid={VALID_MODEL})
     _install_aux(
         monkeypatch,
         {
@@ -438,7 +706,7 @@ def test_existing_task_model_override_wins_over_classifier_model(
             "profile": "advisor",
             "confidence": 0.95,
             "rationale": "classifier suggests a stronger model",
-            "model": "openai/gpt-5.5",
+            "model": VALID_MODEL,
         },
     )
     spawned_profiles: list[tuple[str, str | None]] = []

@@ -1732,6 +1732,7 @@ DEFAULT_CONFIG = {
             "api_key": "",
             "timeout": 180,
             "extra_body": {},
+            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
@@ -2938,6 +2939,8 @@ DEFAULT_CONFIG = {
             "enabled": False,
             "mode": "classifier",
             "trigger_assignee": "auto",
+            "explicit_model_profile": "advisor",
+            "default_to_trigger": False,
             "min_confidence": 0.5,
             "min_signal_floor": 0.2,
             "classifier_timeout_s": 10,
@@ -5912,6 +5915,21 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                     "error",
                     "kanban.complexity_routing.trigger_assignee must be a non-empty profile sentinel",
                     "Use trigger_assignee: auto unless you have a different sentinel convention",
+                ))
+            explicit_model_profile = str(
+                routing_cfg.get("explicit_model_profile", "advisor") or ""
+            ).strip()
+            if not explicit_model_profile:
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.explicit_model_profile must name a profile",
+                    "Use explicit_model_profile: advisor to route explicit-model auto cards without invoking the classifier",
+                ))
+            if not isinstance(routing_cfg.get("default_to_trigger", False), bool):
+                issues.append(ConfigIssue(
+                    "error",
+                    "kanban.complexity_routing.default_to_trigger must be true or false",
+                    "Set default_to_trigger: true only when unassigned cards should enter classifier routing before default_assignee",
                 ))
             mode = str(routing_cfg.get("mode", "classifier") or "").strip().lower()
             if mode not in {"classifier", "tier-only"}:

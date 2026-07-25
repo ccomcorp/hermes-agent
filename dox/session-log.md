@@ -1,5 +1,13 @@
 # Session Log
 
+## 2026-07-25 — Kanban C+D deterministic overrides Slice 1
+
+- **Goal:** resume Kanban C+D implementation from the committed work spec, first closing deterministic override gaps before any brain-learned model-selection work.
+- **Fix:** added real `tasks.complexity_override` schema/migration/read support; explicit `complexity_override` on `assignee=auto` now maps directly through `kanban.complexity_routing.map` and skips the classifier; invalid stored tiers fall back safely with an assigned-event reason. Explicit `model_override` on `assignee=auto` now routes to `complexity_routing.explicit_model_profile`/fallback without invoking the classifier and preserves the pinned model. `default_to_trigger:true` now opts unassigned cards into the trigger sentinel before `kanban.default_assignee` can bypass C+D, while explicit assignees are never rerouted.
+- **Safety:** classifier-suggested optional `model` strings are now validated before storage/spawn. Invalid suggestions are dropped while the profile route still proceeds, and the assigned event records `model_rejected` / `model_reject_reason` for operator diagnosis.
+- **Config:** `kanban.complexity_routing` defaults/validation now include `explicit_model_profile` and `default_to_trigger`; `auxiliary.dispatch_classifier` now includes the same `reasoning_effort` key as the decomposer task so auxiliary-task defaults remain structurally aligned.
+- **Gates:** RED targeted tests failed for missing schema, classifier bypass, and validation; adversarial review then caught the initially-dead `default_to_trigger` knob; GREEN focused Slice 1 suite `34 passed`; `py_compile hermes_cli/kanban_db.py hermes_cli/kanban.py hermes_cli/config.py` passed; Ruff on edited files passed; `git diff --check` passed.
+
 ## 2026-07-24 — Non-primary agent-context memory fence
 
 - **Goal:** continue development by finishing the in-flight lifecycle-context slice that prevents non-primary agents from writing ordinary user memories.

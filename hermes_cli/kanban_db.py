@@ -907,6 +907,11 @@ class Task:
     # --skills). Stored as a JSON array of skill names. None = use only
     # the defaults; empty list = explicitly no extra skills.
     skills: Optional[list] = None
+    # Explicit deterministic routing tier. When set to one of
+    # trivial/simple/moderate/complex/expert and the task is assigned to the
+    # complexity-routing trigger sentinel, dispatch maps this tier directly to
+    # a profile and skips the classifier.
+    complexity_override: Optional[str] = None
     model_override: Optional[str] = None
     # Provider that ``model_override`` belongs to. When set, the dispatcher
     # passes ``--provider <name>`` alongside ``-m <model>`` so the worker
@@ -1012,6 +1017,11 @@ class Task:
                 row["current_step_key"] if "current_step_key" in keys else None
             ),
             skills=skills_value,
+            complexity_override=(
+                row["complexity_override"]
+                if "complexity_override" in keys and row["complexity_override"]
+                else None
+            ),
             model_override=row["model_override"] if "model_override" in keys and row["model_override"] else None,
             provider_override=(
                 row["provider_override"]
@@ -1177,6 +1187,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- Force-loaded skills for the worker on this task, stored as JSON.
     -- Passed to the worker via `--skills`. NULL or empty array = no extras.
     skills               TEXT,
+    -- Explicit deterministic complexity tier for routing. When set on a
+    -- task assigned to the complexity-routing trigger sentinel, the
+    -- dispatcher maps this tier directly to kanban.complexity_routing.map
+    -- and skips the classifier. NULL = infer/classify normally.
+    complexity_override  TEXT,
     -- Per-task model override. When set, the dispatcher passes -m <model>
     -- to the worker, overriding the profile's default model. NULL = use
     -- the profile default.
@@ -2320,6 +2335,13 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
         # JSON array of skill names the dispatcher force-loads into the
         # worker via --skills. NULL is fine for existing rows.
         _add_column_if_missing(conn, "tasks", "skills", "skills TEXT")
+
+    if "complexity_override" not in cols:
+        # Explicit deterministic routing tier for C+D. Existing rows keep
+        # NULL, which preserves classifier/default behavior.
+        _add_column_if_missing(
+            conn, "tasks", "complexity_override", "complexity_override TEXT"
+        )
 
     if "max_retries" not in cols:
         # Per-task override for the consecutive-failure circuit breaker.
@@ -6435,6 +6457,8 @@ _DEFAULT_COMPLEXITY_ROUTING = {
     "enabled": False,
     "mode": "classifier",
     "trigger_assignee": "auto",
+    "explicit_model_profile": "advisor",
+    "default_to_trigger": False,
     "min_confidence": 0.5,
     "min_signal_floor": 0.2,
     "classifier_timeout_s": 10,
@@ -8011,11 +8035,18 @@ def _normalise_complexity_routing(raw: Any) -> dict[str, Any]:
     if classifier_failure_limit < 0:
         classifier_failure_limit = int(defaults["classifier_consecutive_failure_limit"])
     trigger_assignee = str(raw.get("trigger_assignee", defaults["trigger_assignee"]) or "").strip()
+    explicit_model_profile = str(
+        raw.get("explicit_model_profile", defaults["explicit_model_profile"]) or ""
+    ).strip()
     fallback = str(raw.get("fallback", defaults["fallback"]) or "").strip()
     return {
         "enabled": raw.get("enabled") is True,
         "mode": mode,
         "trigger_assignee": trigger_assignee or defaults["trigger_assignee"],
+        "explicit_model_profile": (
+            explicit_model_profile or defaults["explicit_model_profile"]
+        ),
+        "default_to_trigger": raw.get("default_to_trigger") is True,
         "min_confidence": min_confidence,
         "min_signal_floor": min_signal_floor,
         "classifier_timeout_s": classifier_timeout_s,
@@ -8067,6 +8098,14 @@ def _validate_complexity_routing_profiles(snapshot: dict[str, Any]) -> None:
     fallback = str(snapshot.get("fallback") or "").strip()
     if fallback and fallback not in seen and not profile_exists(fallback):
         missing.append(f"fallback={fallback!r}")
+    explicit_model_profile = str(snapshot.get("explicit_model_profile") or "").strip()
+    if (
+        explicit_model_profile
+        and explicit_model_profile not in seen
+        and explicit_model_profile != fallback
+        and not profile_exists(explicit_model_profile)
+    ):
+        missing.append(f"explicit_model_profile={explicit_model_profile!r}")
     if missing:
         raise RuntimeError(
             "kanban.complexity_routing references missing profile(s): "
@@ -8223,6 +8262,56 @@ def _classifier_success(state: Optional[_ClassifierTickState]) -> None:
         state.consecutive_failures = 0
 
 
+def _row_text(row: sqlite3.Row, key: str) -> str:
+    """Return a trimmed string column from a sqlite row, tolerating old schemas."""
+
+    try:
+        if key not in row.keys():
+            return ""
+        return str(row[key] or "").strip()
+    except Exception:
+        return ""
+
+
+def _validate_classifier_model_override(raw_model: str) -> tuple[Optional[str], Optional[str]]:
+    """Validate a classifier-suggested model before it reaches worker spawn.
+
+    Classifier routing is advisory. A bad model suggestion should not block a
+    good profile route, so failures return ``(None, reason)`` instead of
+    raising. This mirrors ``kanban create --model`` validation but fails closed
+    for the optional classifier model only.
+    """
+
+    requested = str(raw_model or "").strip()
+    if not requested:
+        return None, None
+    try:
+        from hermes_cli import models as model_registry
+
+        provider, provider_model = model_registry.parse_model_input(requested, "openrouter")
+        provider_scoped = provider != "openrouter"
+        if not provider_scoped:
+            try:
+                catalog = list(model_registry.model_ids())
+            except Exception:
+                catalog = []
+            if catalog and requested not in set(catalog):
+                return None, f"model not found in catalog: {requested}"
+
+        result = model_registry.validate_requested_model(provider_model, provider)
+        if not result.get("accepted") or not result.get("persist"):
+            message = str(result.get("message") or "model was not accepted")
+            return None, message[:300]
+        corrected = result.get("corrected_model")
+        if corrected:
+            if provider_scoped:
+                return f"{provider}:{corrected}", None
+            return str(corrected), None
+        return requested, None
+    except Exception as exc:
+        return None, f"model validation failed: {type(exc).__name__}: {exc}"[:300]
+
+
 def _resolve_classifier_result(
     parsed: dict[str, Any],
     snapshot: dict[str, Any],
@@ -8232,7 +8321,8 @@ def _resolve_classifier_result(
 ) -> tuple[str, Optional[str]]:
     tier = str(parsed.get("tier") or "").strip().lower()
     profile = str(parsed.get("profile") or "").strip()
-    model = str(parsed.get("model") or "").strip() or None
+    raw_model = str(parsed.get("model") or "").strip() or None
+    model: Optional[str] = None
     reason["tier"] = tier or None
     reason["confidence"] = parsed.get("confidence")
     rationale = str(parsed.get("rationale") or "").strip()
@@ -8260,8 +8350,13 @@ def _resolve_classifier_result(
     if resolved == trigger:
         resolved = fallback
     reason["route_reason"] = f"classifier:{tier or 'unknown'}"
-    if model:
-        reason["model"] = model
+    if raw_model:
+        model, reject_reason = _validate_classifier_model_override(raw_model)
+        if model:
+            reason["model"] = model
+        else:
+            reason["model_rejected"] = raw_model
+            reason["model_reject_reason"] = reject_reason or "model was not accepted"
     _classifier_success(state)
     return resolved, model
 
@@ -8279,7 +8374,26 @@ def _resolve_complexity_route(
     reason: dict[str, Any] = {"source": "kanban.complexity_routing"}
     model_override: Optional[str] = None
 
-    if str(snapshot.get("mode") or "classifier").strip().lower() == "tier-only":
+    complexity_override = _row_text(row, "complexity_override").lower()
+    route_map = snapshot.get("map", {}) if isinstance(snapshot.get("map"), dict) else {}
+    if complexity_override:
+        reason["complexity_override"] = complexity_override
+        if complexity_override in _COMPLEXITY_LEVELS:
+            resolved = str(route_map.get(complexity_override) or fallback).strip() or fallback
+            reason["tier"] = complexity_override
+            reason["route_reason"] = f"explicit_complexity:{complexity_override}"
+        else:
+            resolved = fallback
+            reason["route_reason"] = "explicit_complexity_invalid_fallback"
+    elif _row_text(row, "model_override"):
+        resolved = str(snapshot.get("explicit_model_profile") or fallback).strip() or fallback
+        model_override = _row_text(row, "model_override")
+        reason["route_reason"] = "explicit_model"
+        reason["model"] = model_override
+
+    if reason.get("route_reason"):
+        pass
+    elif str(snapshot.get("mode") or "classifier").strip().lower() == "tier-only":
         resolved = fallback
         reason["route_reason"] = "tier_only_fallback"
     elif classifier_state is not None and classifier_state.breaker_open():
@@ -8391,12 +8505,12 @@ def _apply_complexity_route_if_needed(
             if model_override:
                 conn.execute(
                     "UPDATE tasks SET assignee = ?, model_override = COALESCE(NULLIF(model_override, ''), ?) "
-                    "WHERE id = ? AND assignee = ?",
+                    "WHERE id = ? AND (assignee = ? OR assignee IS NULL OR assignee = '')",
                     (resolved, model_override, row["id"], row_assignee),
                 )
             else:
                 conn.execute(
-                    "UPDATE tasks SET assignee = ? WHERE id = ? AND assignee = ?",
+                    "UPDATE tasks SET assignee = ? WHERE id = ? AND (assignee = ? OR assignee IS NULL OR assignee = '')",
                     (resolved, row["id"], row_assignee),
                 )
             _append_event(conn, row["id"], "assigned", route_payload)
@@ -8572,7 +8686,7 @@ def _dispatch_once_locked(
         )
 
     ready_rows = conn.execute(
-        "SELECT id, title, body, assignee FROM tasks "
+        "SELECT id, title, body, assignee, complexity_override, model_override FROM tasks "
         "WHERE status = 'ready' AND claim_lock IS NULL "
         "ORDER BY priority DESC, created_at ASC"
     ).fetchall()
@@ -8632,6 +8746,17 @@ def _dispatch_once_locked(
             break
         row_assignee = row["assignee"]
         if not row_assignee:
+            if complexity_routing.get("enabled") and complexity_routing.get("default_to_trigger"):
+                # Opt unassigned cards into C+D before the legacy
+                # kanban.default_assignee fallback can claim them. Do not persist
+                # the sentinel: _apply_complexity_route_if_needed persists the
+                # final concrete route, and dry-run stays mutation-free.
+                row_assignee = str(
+                    complexity_routing.get("trigger_assignee") or ""
+                ).strip()
+                if not row_assignee:
+                    result.skipped_unassigned.append(row["id"])
+                    continue
             # Honour kanban.default_assignee: when the dispatcher hits an
             # unassigned ready task and an operator-configured fallback
             # exists, persist the assignment and proceed. This removes the
@@ -8642,7 +8767,7 @@ def _dispatch_once_locked(
             # board state consistent: the task is now legitimately owned
             # by ``kanban.default_assignee``, not "unassigned but secretly
             # routed".
-            if _default_assignee and _default_assignee_resolved:
+            elif _default_assignee and _default_assignee_resolved:
                 # Dry-run: show what WOULD happen (auto-assign + spawn) without
                 # mutating the DB. Real run: mutate the row + emit the
                 # 'assigned' event so the board state matches what just happened.

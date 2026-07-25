@@ -12,6 +12,8 @@ from hermes_cli.config import (
 
 EXPECTED_CLASSIFIER_ROUTING_DEFAULTS = {
     "mode": "classifier",
+    "explicit_model_profile": "advisor",
+    "default_to_trigger": False,
     "min_confidence": 0.5,
     "classifier_timeout_s": 10,
     "classifier_tick_budget_s": 30,
@@ -68,6 +70,21 @@ def test_classifier_routing_validation_rejects_bad_mode():
         and "kanban.complexity_routing.mode" in issue.message
         for issue in issues
     )
+
+
+def test_classifier_routing_validation_rejects_bad_explicit_keys():
+    issues = validate_config_structure({
+        "kanban": {
+            "complexity_routing": {
+                "explicit_model_profile": "",
+                "default_to_trigger": "yes",
+            },
+        },
+    })
+    messages = "\n".join(issue.message for issue in issues)
+
+    assert "kanban.complexity_routing.explicit_model_profile" in messages
+    assert "kanban.complexity_routing.default_to_trigger" in messages
 
 
 def test_classifier_routing_validation_rejects_out_of_range_min_confidence():

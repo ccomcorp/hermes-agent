@@ -89,10 +89,6 @@ def test_create_model_flag_fail_soft_accepts_custom_catalog_failure(kanban_home,
 
 
 def test_create_complexity_flag_stores_explicit_tier_when_column_exists(kanban_home):
-    with kb.connect() as conn:
-        conn.execute("ALTER TABLE tasks ADD COLUMN complexity_override TEXT")
-        conn.commit()
-
     out = kc.run_slash("create 'expert task' --assignee auto --complexity expert")
 
     assert "Created" in out
