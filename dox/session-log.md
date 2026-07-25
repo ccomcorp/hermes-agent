@@ -1,5 +1,11 @@
 # Session Log
 
+## 2026-07-25 — Engineering-loop missed-spec-gate stop-work policy
+
+- **Trigger:** the user correctly identified that DYADOMORPH specification work had entered implementation without the mandatory advanced-elicitation gate being applied consistently.
+- **Correction:** the live engineering-loop skill now states that frozen, inherited, and partially implemented specifications are not grandfathered. If a missed gate is discovered after ACT begins, the orchestrator must stop or park implementation, preserve current edits, run independent fresh-context elicitation, verify external claims at source, reconcile the spec/ADR/eval set, and commit the design before resuming.
+- **Verification:** confirmed the running Desktop resolves to `D:\HeicH\hermes-agent`; `git diff --check` passed; Hermes DOX status remained active in hybrid mode with contract/ledger/publish layers present and no drift before the ledger update.
+
 ## 2026-07-25 — Kanban C+D deterministic overrides Slice 1
 
 - **Goal:** resume Kanban C+D implementation from the committed work spec, first closing deterministic override gaps before any brain-learned model-selection work.
