@@ -55,6 +55,11 @@ When active, the harness registers 10 tools:
 ```
 1. START  → engineering_loop_start(goal="...", acceptance_criteria=["..."])
 2. OBSERVE → Read files, inspect git, check existing tests
+   2a. CODEGRAPH-GATE (MANDATORY for code): use the repository CodeGraph first for
+       symbol discovery, definitions, references, callers/callees, control flow, and
+       blast radius before reading or editing implementation files. If `.codegraph/`
+       is absent, initialize it. Treat verbatim graph-returned source as already read;
+       use text search only for docs/non-code or a recorded graph limitation/failure.
 3. DECIDE  → engineering_loop_update(phase="decide", hypothesis="...")
    3a. SPEC-GATE (MANDATORY when the slice writes/changes a spec, plan, schema, or design):
        auto-run ADVANCE-ELICITATION before implementation — dispatch independent
@@ -85,8 +90,9 @@ These are non-optional parts of the loop, enforced at the steps above:
 
 1. **Advance-elicitation before implementation.** Any spec/plan/schema/design artifact is auto-evaluated by independent fresh-context adversarial reviewers (verify, validate, minimize gaps + dependency/interdependency issues + errors) BEFORE code is written or delegated. Reconcile into an elicitation log; resolve BLOCKERs first. (Step 3a.)
    **No grandfathering:** frozen, inherited, or already-partially-implemented specs are not exempt. Discovery of a missed gate is a stop-work condition until the spec is elicited, reconciled, versioned, and linked to testable evals.
-2. **DOX kept in-sync per slice.** When developing or writing, the DOX ledger (Contract + Ledger + Publish: `docops.yml`, `dox/CHANGELOG.md`, `dox/adr/`, session/execution-log, and LIVE-STATUS/report packs for ops work) is initialized up front (3b) and updated in the SAME commit as the work it describes (8a/9). Deferring DOX IS how drift happens — do not defer. Match the repo's existing ledger format exactly; never fabricate gate results/commit hashes/verdicts.
-3. **Orchestrator delegates; verifies at source.** Non-trivial build work is delegated through the routing harness (kanban/`delegate_task`), then personally verified at source before "done." Worker/board self-reports are not evidence.
+2. **CodeGraph-first code search.** Initialize and use the repository CodeGraph before implementation discovery or edits. Text search is a fallback for documentation/non-code or a documented graph limitation, not the default. (Step 2a.)
+3. **DOX kept in-sync per slice.** When developing or writing, the DOX ledger (Contract + Ledger + Publish: `docops.yml`, `dox/CHANGELOG.md`, `dox/adr/`, session/execution-log, and LIVE-STATUS/report packs for ops work) is initialized up front (3b) and updated in the SAME commit as the work it describes (8a/9). Deferring DOX IS how drift happens — do not defer. Match the repo's existing ledger format exactly; never fabricate gate results/commit hashes/verdicts.
+4. **Orchestrator delegates; verifies at source.** Non-trivial build work is delegated through the routing harness (kanban/`delegate_task`), then personally verified at source before "done." Worker/board self-reports are not evidence.
 
 ## State Storage
 
