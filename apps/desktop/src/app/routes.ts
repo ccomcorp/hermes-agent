@@ -9,77 +9,43 @@ export const SETTINGS_ROUTE = '/settings'
 export const COMMAND_CENTER_ROUTE = '/command-center'
 export const SKILLS_ROUTE = '/skills'
 export const MESSAGING_ROUTE = '/messaging'
+export const WEBHOOKS_ROUTE = '/webhooks'
 export const ARTIFACTS_ROUTE = '/artifacts'
 export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
-export const KANBAN_ROUTE = '/kanban'
-export const CANVAS_ROUTE = '/canvas' // AIOS: hermes-canvas plugin tab
-export const PAIRING_ROUTE = '/pairing'
-export const WEBHOOKS_ROUTE = '/webhooks'
-export const PLUGINS_ROUTE = '/plugins'
-export const FILES_ROUTE = '/files'
-export const CHANNELS_ROUTE = '/channels'
-export const WORKBENCH_ROUTE = '/workbench'
-export const SYSTEM_ROUTE = '/system'
-// AIOS Track-B panels (Wave 2b)
-export const CONFIG_ROUTE = '/config'
-export const LOGS_ROUTE = '/logs'
-export const MODELS_ROUTE = '/models'
 export const STARMAP_ROUTE = '/starmap'
-export const DOCOPS_ROUTE = '/docops'
 
 export type AppView =
   | 'agents'
   | 'artifacts'
-  | 'canvas'
-  | 'channels'
   | 'chat'
   | 'command-center'
-  | 'config'
   | 'cron'
-  | 'docops'
-  // A contributed (plugin) full page at its own route — NOT chat.
+  // A contributed (plugin) full page at its own route — NOT chat. Without this
+  // distinction contributed paths fell through appViewForPath's 'chat' default,
+  // so the sidebar kept a session highlighted and the titlebar kept the
+  // session-title dropdown while a plugin page was showing.
   | 'extension'
-  | 'files'
-  | 'kanban'
-  | 'logs'
   | 'messaging'
-  | 'models'
-  | 'pairing'
-  | 'plugins'
   | 'profiles'
   | 'settings'
   | 'skills'
-  | 'system'
-  | 'webhooks'
   | 'starmap'
-  | 'workbench'
+  | 'webhooks'
 
 export type AppRouteId =
   | 'agents'
   | 'artifacts'
-  | 'canvas'
-  | 'channels'
   | 'command-center'
-  | 'config'
   | 'cron'
-  | 'docops'
-  | 'files'
-  | 'kanban'
-  | 'logs'
   | 'messaging'
-  | 'models'
   | 'new'
-  | 'pairing'
-  | 'plugins'
   | 'profiles'
   | 'settings'
   | 'skills'
-  | 'system'
-  | 'webhooks'
   | 'starmap'
-  | 'workbench'
+  | 'webhooks'
 
 export interface AppRoute {
   id: AppRouteId
@@ -93,33 +59,28 @@ export const APP_ROUTES = [
   { id: 'command-center', path: COMMAND_CENTER_ROUTE, view: 'command-center' },
   { id: 'skills', path: SKILLS_ROUTE, view: 'skills' },
   { id: 'messaging', path: MESSAGING_ROUTE, view: 'messaging' },
+  { id: 'webhooks', path: WEBHOOKS_ROUTE, view: 'webhooks' },
   { id: 'artifacts', path: ARTIFACTS_ROUTE, view: 'artifacts' },
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
-  { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
-  { id: 'canvas', path: CANVAS_ROUTE, view: 'canvas' }, // AIOS: hermes-canvas
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },
-  { id: 'pairing', path: PAIRING_ROUTE, view: 'pairing' },
-  { id: 'webhooks', path: WEBHOOKS_ROUTE, view: 'webhooks' },
-  { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
-  { id: 'files', path: FILES_ROUTE, view: 'files' },
-  { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
-  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' },
-  { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
-  { id: 'config', path: CONFIG_ROUTE, view: 'config' },
-  { id: 'logs', path: LOGS_ROUTE, view: 'logs' },
-  { id: 'models', path: MODELS_ROUTE, view: 'models' },
-  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' },
-  { id: 'docops', path: DOCOPS_ROUTE, view: 'docops' }
+  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))
 const RESERVED_PATHS: ReadonlySet<string> = new Set(APP_ROUTES.map(route => route.path))
 
 // ── Contributed routes — the `routes` registry area ─────────────────────────
+// A contribution mounts a FULL PAGE in the workspace pane at `data.path`
+// (`render` on the contribution itself, like every other area). Contributed
+// paths are reserved exactly like APP_ROUTES so the session-id parser never
+// mistakes them for a session route. Navigate with `host.navigate(path)`.
+
 export const ROUTES_AREA = 'routes'
 
+/** Payload of a `routes` contribution's `data`. */
 export interface RouteContribution {
+  /** Absolute path, e.g. `/kanban`. One segment; no params. */
   path: string
 }
 
@@ -140,23 +101,32 @@ function isContributedPath(pathname: string): boolean {
 }
 
 // ── Contributed sidebar nav — the `sidebar.nav` registry area ────────────────
+// A DATA contribution adds a row to the sidebar's top nav (below Artifacts).
+// Pair with a ROUTES_AREA page: the row navigates to `path` and lights up
+// while the app is there.
+
 export const SIDEBAR_NAV_AREA = 'sidebar.nav'
 
+/** Payload of a `sidebar.nav` data contribution. */
 export interface SidebarNavContribution {
+  /** Codicon name, e.g. `'project'`. */
   codicon: string
   label: string
+  /** Route to navigate to (usually a contributed page's path). */
   path: string
 }
 
 // Views that render as a full-screen modal card (OverlayView) over the shell.
+// While one is open the app's titlebar control clusters must hide so they don't
+// bleed over the overlay (they sit at a higher z-index than the overlay card).
 export const OVERLAY_VIEWS: ReadonlySet<AppView> = new Set([
   'agents',
   'command-center',
   'cron',
-  'docops',
   'profiles',
   'settings',
-  'starmap'
+  'starmap',
+  'webhooks'
 ])
 
 export function isOverlayView(view: AppView): boolean {
@@ -177,6 +147,23 @@ export function routeSessionId(pathname: string): string | null {
   return id && !id.includes('/') ? decodeURIComponent(id) : null
 }
 
+/**
+ * The primary composer's durable scope key candidate: the route is the source
+ * of truth for which chat is on screen, so prefer its (stable) stored session
+ * id over a store selection that can be momentarily null/stale mid-switch
+ * (#59305). A genuine new-chat route always wins with `null`, never falling
+ * back to a leftover selection from the chat just left. A non-chat route
+ * (settings, an overlay) has no session opinion, so the store selection passes
+ * through unchanged.
+ */
+export function primaryRouteSelectedSessionId(pathname: string, storeSelectedSessionId: string | null): string | null {
+  if (isNewChatRoute(pathname)) {
+    return null
+  }
+
+  return routeSessionId(pathname) ?? storeSelectedSessionId
+}
+
 export function sessionRoute(sessionId: string): string {
   return `${SESSION_ROUTE_PREFIX}${encodeURIComponent(sessionId)}`
 }
@@ -193,7 +180,11 @@ export function appViewForPath(pathname: string): AppView {
   return APP_VIEW_BY_PATH.get(pathname) ?? 'chat'
 }
 
-/** True while the workspace pane shows a FULL PAGE instead of chat. */
+/** True while the workspace pane shows a FULL PAGE (skills/messaging/
+ *  artifacts/plugin routes) instead of the chat. Published by the wiring
+ *  (which owns the router location); the workspace pane contribution mirrors
+ *  it as `headerVeto` so the zone tab bar stands down on pages. Overlays
+ *  (settings/…) don't count — the chat stays beneath them. */
 export const $workspaceIsPage = atom(false)
 
 export function syncWorkspaceIsPage(pathname: string): void {

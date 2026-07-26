@@ -1,36 +1,35 @@
 import { DATA_IMAGE_URL_RE, dataUrlToBlob } from '@/lib/embedded-images'
 
 export interface TriggerState {
+  /** True for a `/` typed mid-message — an inline skill/command reference in
+   *  prose rather than a command invocation. Arg completion doesn't apply. */
+  inline?: boolean
   kind: '@' | '/'
   query: string
   tokenLength: number
 }
 
 // `@` triggers stop at the first whitespace — `@file:path` and `@diff` are
-// single tokens. `/` triggers keep going so the popover stays live while the
-// user types args (`/personality alic` → arg completer suggests `alice`).
-// Restricting the slash command name to `[a-zA-Z][\w-]*` avoids matching file
-// paths like `src/foo/bar`.
+// single tokens. Restricting the slash command name to `[a-zA-Z][\w-]*` avoids
+// matching file paths like `src/foo/bar`.
 //
-// A `/` trigger may appear anywhere in the draft — not only at position 0 —
-// so commands can be composed mid-message. To count, the `/` must start a
-// token (preceded by start-of-text or whitespace), which keeps file paths
-// (`src/foo/bar`, `/path/to/file`) and URLs from opening the popover. When a
-// draft holds several slash tokens, the LAST one wins so the popover tracks
-// the command currently being typed rather than an earlier one.
+// `/` triggers fire in two shapes, because a slash means two different things
+// depending on where it sits:
+//
+//  - At position 0 it's a COMMAND invocation the app executes (SLASH_COMMAND_RE
+//    is `^`-anchored, and so is the backend's). The popover stays live past the
+//    command name so arg completion works (`/personality alic` → `alice`).
+//  - After whitespace it's an inline REFERENCE the user is dropping into prose
+//    ("clean this up with /clean"). The text submits as an ordinary message, so
+//    there are no args to complete — the trigger is a single token that ends at
+//    the next space, exactly like `@`.
+//
+// The inline shape is what makes skills reachable anywhere in a prompt. Both
+// shapes need the trailing `$`: detection runs against the text BEFORE the
+// caret, so the match must end where the user is typing.
 const AT_TRIGGER_RE = /(?:^|[\s])(@)([^\s@/]*)$/
-const SLASH_TAIL_RE = /^(\/)((?:[a-zA-Z][\w-]*(?:\s+\S*)*)?)$/
-
-/** Index of the last `/` that starts a token (start-of-text or after whitespace), or -1. */
-function lastSlashTokenStart(text: string): number {
-  for (let i = text.length - 1; i >= 0; i -= 1) {
-    if (text[i] === '/' && (i === 0 || /\s/.test(text[i - 1]))) {
-      return i
-    }
-  }
-
-  return -1
-}
+const SLASH_COMMAND_TRIGGER_RE = /^(\/)((?:[a-zA-Z][\w-]*(?:\s+\S*)*)?)$/
+const SLASH_INLINE_TRIGGER_RE = /[\s](\/)([a-zA-Z][\w-]*)?$/
 
 /** Stable key for paste dedupe — `items` and `files` often mirror the same image as different objects. */
 export function blobDedupeKey(blob: Blob): string {
@@ -121,14 +120,20 @@ export function textBeforeCaret(editor: HTMLDivElement): string | null {
 }
 
 export function detectTrigger(textBefore: string): TriggerState | null {
-  const slashStart = lastSlashTokenStart(textBefore)
+  const command = SLASH_COMMAND_TRIGGER_RE.exec(textBefore)
 
-  if (slashStart >= 0) {
-    const slash = SLASH_TAIL_RE.exec(textBefore.slice(slashStart))
+  if (command) {
+    return { kind: '/', query: command[2], tokenLength: 1 + command[2].length }
+  }
 
-    if (slash) {
-      return { kind: '/', query: slash[2], tokenLength: 1 + slash[2].length }
-    }
+  // An inline `/skill` is a reference dropped into prose, so it carries no args
+  // and the whole match is the token the chip replaces.
+  const inline = SLASH_INLINE_TRIGGER_RE.exec(textBefore)
+
+  if (inline) {
+    const query = inline[2] ?? ''
+
+    return { inline: true, kind: '/', query, tokenLength: 1 + query.length }
   }
 
   const at = AT_TRIGGER_RE.exec(textBefore)

@@ -130,6 +130,7 @@ import { orderByIds, reconcileOrderIds, resolveManualSessionOrderIds, sameIds } 
 import { ProfileRail } from './profile-switcher'
 import { ProjectDialog } from './project-dialog'
 import {
+  orderProjectsByIds,
   overlayLiveLanes,
   overlayLivePreviews,
   PROJECT_PREVIEW_COUNT,
@@ -652,8 +653,9 @@ export function ChatSidebar({
     )
 
     // Layer the user's manual drag-order on top of the deterministic sort. Empty
-    // (default) returns `sorted` untouched; new projects surface on top.
-    return orderByIds(sorted, project => project.id, projectOrderIds)
+    // (default) returns `sorted` untouched; projects the user hasn't ordered yet
+    // keep their sorted position rather than jumping the hand-picked list.
+    return orderProjectsByIds(sorted, projectOrderIds)
   }, [showAllProfiles, projectTree, dismissedAutoProjects, orderRepos, activeProjectId, projectOrderIds])
 
   // The overview only renders in grouped mode; the model stays live regardless
@@ -748,6 +750,7 @@ export function ChatSidebar({
   // only the cheap per-repo `git worktree list`, never the heavy tree scan.
   const prevWorkingIdsRef = useRef<readonly string[]>(workingSessionIds)
 
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     const prev = prevWorkingIdsRef.current
     prevWorkingIdsRef.current = workingSessionIds
@@ -784,6 +787,7 @@ export function ChatSidebar({
     [currentCwd]
   )
 
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     if (!inProject || !enteredProject) {
       lastProjectCwdSyncRef.current = null
@@ -1269,7 +1273,7 @@ export function ChatSidebar({
             {!trimmedQuery && (
               <SidebarSessionsSection
                 activeSessionId={activeSidebarSessionId}
-                contentClassName={cn('flex max-h-44 flex-col gap-px rounded-lg pb-2 pt-1', GROUP_BODY)}
+                contentClassName={cn('flex max-h-[50vh] flex-col gap-px rounded-lg pb-2 pt-1', GROUP_BODY)}
                 dndSensors={dndSensors}
                 emptyState={<SidebarPinnedEmptyState />}
                 label={s.pinned}
@@ -1305,6 +1309,7 @@ export function ChatSidebar({
                   // virtualized long list, which must keep its own scroller.
                   !recentsVirtualizes && COMPACT_FLAT
                 )}
+                dateGrouped={inProject || !agentOrderManual}
                 dndSensors={dndSensors}
                 emptyState={
                   showSessionSkeletons ? (

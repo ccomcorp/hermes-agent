@@ -126,21 +126,35 @@ class TestOrphanRollbackOnCreateFailure:
         db.create_session(parent, source="cli")
         agent = _build_agent_with_db(db, parent)
 
-        # Make the CHILD create_session raise, but let the initial parent
-        # end_session/reopen work. We patch create_session to blow up.
-        real_create = db.create_session
+        # Atomic publication failure must leave the live parent and caller's
+        # original list untouched even when a plugin compressor mutates in place.
+        original = _msgs()
+
+        def _mutating_compress(live_messages, **_kwargs):
+            live_messages[:] = [
+                {"role": "user", "content": "mutated compacted snapshot"}
+            ]
+            return live_messages
+
+        agent.context_compressor.compress.side_effect = _mutating_compress
 
         def _boom(*a, **k):
-            raise RuntimeError("FOREIGN KEY constraint failed")
+            raise RuntimeError("simulated atomic publication failure")
 
-        with patch.object(db, "create_session", side_effect=_boom):
-            agent._compress_context(_msgs(), "sys", approx_tokens=120_000)
+        with patch.object(db, "publish_compression_child", side_effect=_boom):
+            returned, _system_prompt = agent._compress_context(
+                original, "sys", approx_tokens=120_000
+            )
 
-        # The live id must roll back to the still-indexed parent — NOT a
-        # phantom child id that has no row in state.db.
         assert agent.session_id == parent
-        assert db.get_session(parent) is not None
-        _ = real_create  # silence unused
+        assert [(m["role"], m["content"]) for m in returned] == [
+            (m["role"], m["content"]) for m in _msgs()
+        ]
+        assert returned is original
+        parent_row = db.get_session(parent)
+        assert parent_row is not None
+        assert parent_row["ended_at"] is None
+        assert db.find_live_compression_child(parent) is None
 
 
 class TestWorkspaceMetadataFollowsRotation:
@@ -618,24 +632,28 @@ class TestCooldownPersistFailureIsNotAClearedRow:
         assert compressor.get_active_compression_failure_cooldown(refresh=True) is None
         assert compressor._summary_failure_cooldown_until == 0.0
 
-    def test_ineffective_count_only_block_skips_durable_refresh(
+    def test_ineffective_count_block_honors_durable_clear_by_another_agent(
         self,
         refresh_state_db: SessionDB,
     ):
-        """A block owed solely to the in-memory ineffective counter (which is
-        not durable) must not re-read the DB on every gate check."""
+        """The ineffective-strike counter is durable (#54923): a block owed to
+        it must re-read the DB so another agent's clear (a real usage reading
+        that dipped below the threshold) unblocks this compressor too."""
         db = refresh_state_db
-        session_id = "INEFFECTIVE_ONLY_BLOCK"
+        session_id = "INEFFECTIVE_DURABLE_BLOCK"
         db.create_session(session_id, source="telegram")
+        db.set_compression_ineffective_count(session_id, 2)
         compressor = _bound_context_compressor(db, session_id)
-        compressor._ineffective_compression_count = 2
+        assert compressor._ineffective_compression_count == 2
 
-        with patch.object(
-            compressor,
-            "_refresh_durable_guards",
-            side_effect=AssertionError("nothing durable to refresh"),
-        ):
-            assert compressor._automatic_compression_blocked() is True
+        assert compressor._automatic_compression_blocked() is True
+
+        # Another agent's real prompt reading dipped below the threshold and
+        # zeroed the durable counter.
+        db.set_compression_ineffective_count(session_id, 0)
+
+        assert compressor._automatic_compression_blocked() is False
+        assert compressor._ineffective_compression_count == 0
 
 
 class TestTodoSnapshotMergedNotDuplicated:

@@ -44,29 +44,25 @@ describe('detectTrigger', () => {
   it('does not treat file-style paths as slash triggers', () => {
     expect(detectTrigger('src/foo/bar')).toBeNull()
     expect(detectTrigger('/path/to/file')).toBeNull()
+    // Mid-message paths stay excluded too: a path keeps going past the command
+    // token, so the trailing-anchored inline trigger never matches it.
+    expect(detectTrigger('check src/foo/bar')).toBeNull()
+    expect(detectTrigger('look at /usr/local/bin')).toBeNull()
+    expect(detectTrigger('and/or')).toBeNull()
   })
 
-  it('triggers the slash popover mid-message at a token boundary', () => {
-    expect(detectTrigger('hello /')).toEqual({ kind: '/', query: '', tokenLength: 1 })
-    expect(detectTrigger('hello /skill')).toEqual({ kind: '/', query: 'skill', tokenLength: 6 })
-    expect(detectTrigger('hello there /personality alic')).toEqual({
-      kind: '/',
-      query: 'personality alic',
-      tokenLength: 17
-    })
-    expect(detectTrigger('text\n/skill')).toEqual({ kind: '/', query: 'skill', tokenLength: 6 })
-    expect(detectTrigger('multi word message /')).toEqual({ kind: '/', query: '', tokenLength: 1 })
+  it('treats a mid-message slash as an inline reference', () => {
+    // Skills have to be reachable anywhere in a prompt, not just at position 0.
+    expect(detectTrigger('hello /')).toEqual({ kind: '/', inline: true, query: '', tokenLength: 1 })
+    expect(detectTrigger('hello /clean')).toEqual({ kind: '/', inline: true, query: 'clean', tokenLength: 6 })
+    expect(detectTrigger('text\n/skill')).toEqual({ kind: '/', inline: true, query: 'skill', tokenLength: 6 })
   })
 
-  it('tracks the last slash token when the draft holds several', () => {
-    expect(detectTrigger('/first arg /second')).toEqual({ kind: '/', query: 'second', tokenLength: 7 })
-  })
-
-  it('still ignores non-token slashes mid-message', () => {
-    expect(detectTrigger('see src/foo/bar')).toBeNull()
-    expect(detectTrigger('ratio 1/2')).toBeNull()
-    expect(detectTrigger('visit https://example.com/x')).toBeNull()
-    expect(detectTrigger('hello / world')).toBeNull()
+  it('does not carry arg completion into an inline slash reference', () => {
+    // Only a position-0 slash is a real invocation, so `/personality alic`
+    // mid-message is prose — the trigger ends at the command token.
+    expect(detectTrigger('hello there /personality alic')).toBeNull()
+    expect(detectTrigger('run /tools enable foo')).toBeNull()
   })
 
   it('still anchors at-mention triggers strictly at the token edge', () => {
