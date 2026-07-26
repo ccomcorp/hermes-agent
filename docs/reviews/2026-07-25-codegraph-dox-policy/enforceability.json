@@ -1,0 +1,75 @@
+{
+  "verdict": "BLOCKED",
+  "review_scope": {
+    "reviewed_only": "D:\\HeicH\\hermes-agent\\docs\\plans\\2026-07-25-codegraph-dox-milestone-policy-spec.md",
+    "files_created_or_modified": [],
+    "live_commands_run": []
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "where": "P1-P2; Injection and enforcement seams; EVAL-CG-01 through EVAL-CG-04",
+      "finding": "The universal CodeGraph-first rule is prompt guidance, not an enforceable protocol. The spec names prompt injection locations but no trusted runtime boundary, event record, or completion validator. An agent can use terminal/text search first, self-report a fallback, or claim graph freshness; prompt-content tests do not prove actual search ordering or evidence provenance.",
+      "required_spec_change": "Choose and specify an enforcement model: trusted tool-host policy events keyed by task and repository, with CodeGraph-query, freshness-verification, reindex, and bounded-fallback receipts. Define whether raw terminal code search is blocked, intercepted, or explicitly outside hard enforcement. Make task/termination completion reject missing or incorrectly ordered trusted receipts.",
+      "eval_ids": [
+        "REWRITE:EVAL-CG-01",
+        "REWRITE:EVAL-CG-02",
+        "REWRITE:EVAL-CG-03",
+        "REWRITE:EVAL-CG-04",
+        "ADD:EVAL-CG-05",
+        "ADD:EVAL-CG-06"
+      ]
+    },
+    {
+      "id": "F2",
+      "where": "P3; P2 delegated-child context exception; project-root seam",
+      "finding": "DOX applicability and closeout are underspecified. “declares Hermes DOX through docops.yml/dox/ and its root AGENTS.md,” “meaningful,” “nearest owning,” “configured changelog,” and “session/execution ledger” have no deterministic discovery, precedence, schema, or no-op/fail-closed behavior. Delegated children explicitly skip context files, yet the spec does not define a task-envelope contract hash or other authoritative way to give them the applicable DOX policy.",
+      "required_spec_change": "Define a versioned DOX policy manifest: repository-root resolution; opt-in predicate; required artifact paths and ownership algorithm; allowed exemptions; malformed/ambiguous-config behavior; and machine-readable status/check receipts including command version, policy/config hash, exit status, and output digest. Require the dispatcher to pass repository root and the resolved DOX-policy identity to children and Kanban workers.",
+      "eval_ids": [
+        "REWRITE:EVAL-DOX-01",
+        "ADD:EVAL-DOX-02",
+        "ADD:EVAL-DOX-03"
+      ]
+    },
+    {
+      "id": "F3",
+      "where": "P4",
+      "finding": "The validated-commit predicate is not mechanically decidable. “major milestone,” “declared acceptance tests,” “relevant” gates, “review verdict is accepted,” unrelated staged changes, secret detection, and “do not postpone indefinitely” lack authoritative inputs and evaluation rules. Therefore EVAL-COMMIT-01 can only test guidance wording, not whether a real commit is correctly blocked or admitted.",
+      "required_spec_change": "Specify a milestone state machine and machine-readable milestone record: milestone ID, allowed staged-path set, required commands and result digests, review/elicitation verdict ID plus acceptance actor, DOX receipts, and exact secret-scan/scope rules. Define working versus parked versus validated-versus-committed states and one authoritative commit-gate boundary (wrapper, hook, or server-side check), including its bypass policy. Preserve the explicit no-auto-commit rule.",
+      "eval_ids": [
+        "REWRITE:EVAL-COMMIT-01",
+        "REWRITE:EVAL-COMMIT-02",
+        "ADD:EVAL-COMMIT-03",
+        "ADD:EVAL-COMMIT-04"
+      ]
+    },
+    {
+      "id": "F4",
+      "where": "Testable evaluations",
+      "finding": "The listed evaluations are mostly assertions that prompts contain policy prose. They lack an execution-surface matrix, fixture definitions, observable trusted signals, and adversarial cases for stale graphs, missing/nonzero DOX checks, context-skipping children, malformed DOX configuration, unrelated staging, secret hits, process termination, retries, and concurrent workers.",
+      "required_spec_change": "Add a normative test matrix that runs primary, delegated-child, and Kanban-worker fixtures through the actual policy/termination/commit boundaries. Each evaluation must state setup, action trace, expected trusted receipt or rejection reason, and postcondition on task state and temporary Git history.",
+      "eval_ids": [
+        "EVAL-CG-05",
+        "EVAL-CG-06",
+        "EVAL-DOX-02",
+        "EVAL-DOX-03",
+        "EVAL-COMMIT-03",
+        "EVAL-COMMIT-04"
+      ]
+    }
+  ],
+  "required_spec_changes": [
+    "Replace prompt-only mandates with a named trusted enforcement and evidence protocol.",
+    "Define a canonical, versioned DOX opt-in/discovery/artifact/receipt contract that reaches delegated and Kanban execution surfaces.",
+    "Define a deterministic milestone manifest, state machine, and authoritative commit-gate boundary.",
+    "Expand prompt-golden evaluations into end-to-end behavioral fixtures with explicit failure and recovery assertions."
+  ],
+  "required_eval_ids": [
+    "EVAL-CG-05",
+    "EVAL-CG-06",
+    "EVAL-DOX-02",
+    "EVAL-DOX-03",
+    "EVAL-COMMIT-03",
+    "EVAL-COMMIT-04"
+  ]
+}

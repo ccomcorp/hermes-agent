@@ -1,0 +1,46 @@
+{
+  "verdict": "CHANGES_REQUIRED",
+  "lens": "safety-lifecycle-failure",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "HIGH",
+      "spec_location": "P1 lines 31-32",
+      "problem": "Staleness verification is algorithmically empty. The spec says 'verify the graph source reflects the current working tree' but provides no deterministic method — no hash comparison, no timestamp check, no explicit refresh-then-query protocol. Two agents can reach contradictory conclusions about staleness. A stale graph silently produces misleading structural answers during change-impact analysis, which is precisely the failure mode the policy is meant to prevent."
+    },
+    {
+      "id": "F2",
+      "severity": "HIGH",
+      "spec_location": "P4 lines 55-63 (tension between lines 63-64)",
+      "problem": "Commit-boundary deadlock risk. P4 mandates 'do not commit unvalidated partial work' AND 'do not postpone a validated major milestone indefinitely.' If a validation gate fails in a degraded environment (CodeGraph unavailable, DOX check broken, lint gates non-functional), the agent has no specified resolution path. The spec needs a degradation mode: after N failed gate attempts, park work with an explicit blocking-gate inventory and user notification rather than looping or blocking indefinitely."
+    },
+    {
+      "id": "F3",
+      "severity": "MEDIUM",
+      "spec_location": "Injection seams line 72; P1 staleness policy",
+      "problem": "Policy-provenance staleness. Line 72 acknowledges that delegated children skip context files, so relevant project policy 'must be passed or reproduced here.' If the canonical policy in AGENTS.md changes, the injected copy in `_build_child_system_prompt` can silently go stale. The same spec that mandates staleness verification for CodeGraph (P1) has no analogous staleness guard for its own reproduced text. Delegated children could operate on a superseded version of the DOX/CodeGraph/milestone policy indefinitely."
+    },
+    {
+      "id": "F4",
+      "severity": "MEDIUM",
+      "spec_location": "P1.3 lines 27-28",
+      "problem": "Auto-init without guard rails. P1.3 mandates `.codegraph/` initialization when the CLI is available but provides no timeout, no max-repo-size limit, no retry cap on failed init, and no explicit pre-init check for disk space or write permissions. An agent in a loop could repeatedly attempt and fail initialization, consuming tokens and resources, or silently hang on a very large repository."
+    }
+  ],
+  "required_spec_changes": [
+    "P1: Pin staleness verification to a specific deterministic algorithm (e.g., `codegraph status --check-last-indexed-commit` vs `git rev-parse HEAD`, or file-hash comparison of indexed set vs working tree). Explicit fallback: if staleness is detected AND re-index fails, record the limitation and use bounded textual search with an explicit staleness annotation in the response.",
+    "P4: Add degradation clause: if validation gates cannot pass after N attempts (N≥2), park the work with a blocking-gate inventory, notify the user, and do not loop. Distinguish transient failures (network, tool timeout) from structural failures (broken lint config, missing DOX tool) — structural failures block, transient failures retry.",
+    "Injection seams: Add policy-version staleness guard for reproduced text in `_build_child_system_prompt`. Either have the child re-read the canonical policy from disk when `skip_context_files` is false for the repo, or version-stamp the reproduced block and verify it matches the source at injection time.",
+    "P1.3: Add init guard rails: (a) timeout (e.g., 120s default, configurable), (b) skip init when the repo exceeds a configurable file count threshold, (c) cap retries at 2 with exponential backoff, (d) pre-check disk space and write permissions before attempting init."
+  ],
+  "eval_ids": [
+    "EVAL-CG-01",
+    "EVAL-CG-02",
+    "EVAL-CG-04",
+    "EVAL-COMMIT-01",
+    "EVAL-COMMIT-02",
+    "EVAL-CG-05 (new — staleness detection algorithm produces correct result on known-stale and known-fresh graphs)",
+    "EVAL-CG-06 (new — init guard rails: timeout enforced, oversized repo skipped gracefully, retry capped)",
+    "EVAL-COMMIT-03 (new — degradation mode: agent parks work with inventory after N failed gate attempts, does not loop)"
+  ]
+}
