@@ -1,11 +1,33 @@
 # Session Log
 
+## 2026-07-26 — Desktop queue drain stuck-forever fix
+
+- **Symptom:** On every Desktop restart, a "Queued message not sent" notification appeared alongside "image not found" errors for stale Snagit temp files. The stuck queue entry in localStorage kept retrying forever.
+- **Diagnosis:** Traced the full failure chain: `useBackgroundQueueDrain` exhausted `MAX_AUTO_DRAIN_ATTEMPTS` (4), showed the toast, but never called `removeQueuedPrompt()` to clean up the entry. On restart, the in-memory `drainFailuresRef` reset, so it retried 4 more times. Found the stuck entry in LevelDB at `%AppData%\Roaming\Hermes\Local Storage\leveldb\000005.ldb`.
+- **Fix:** One-line addition in `use-background-queue-drain.ts` — call `removeQueuedPrompt(sessionKey, entry.id)` after the terminal notification so the entry is cleaned up instead of retrying forever.
+- **Verification:** TypeScript typecheck green; `use-background-queue-drain.test.tsx` 6/6 passed.
+- **Debug logging:** Enabled `agent.verbose=true` and `logging.level=DEBUG` in config.yaml for future diagnostics.
+- **Immediate user action:** Run `localStorage.removeItem('hermes.desktop.composerQueue.v1')` in DevTools Console to clear the already-stuck entry (the code fix prevents future occurrences but can't retroactively clear existing localStorage).
+
 ## 2026-07-26 — Kanban C+D Slice 3 routing report
 
 - **Contract:** advanced-elicited the smallest operator-facing report defined by the committed C+D spec: `hermes kanban routing-report [--json]`, inheriting board scope and remaining read-only. It includes only `assigned` events whose decoded payload has `source=kanban.complexity_routing`; malformed/non-dict/non-routing events are skipped.
 - **Implementation:** added Python-side event aggregation with stable `total`, `by_route_reason`, `by_assignee`, `by_tier`, and `by_model` keys; human output reveals aggregates only, never raw titles, payloads, rationales, confidence, or event IDs. JSON1 is deliberately not required.
 - **Review correction:** initial fixtures and consumer used a guessed `reason` key. Source trace through `_resolve_complexity_route` proved the persisted producer uses `route_reason`; fixtures and consumer were corrected and a missing-key bucket test added before acceptance.
 - **Verification:** independent adversarial review **PASS**; focused C+D CLI/routing/config suite **86 passed**; Ruff, `py_compile`, and diff check green; isolated main-process empty-board smoke returned the expected human and JSON zero-state. The only smoke preamble is the pre-existing SQLite WAL-reset advisory.
+
+## 2026-07-25 — CodeGraph/DOX/milestone policy elicitation reconciliation
+
+- **Review:** three fresh-context reviewers returned two `CHANGES_REQUIRED` and one `BLOCKED` verdict across execution-surface inheritance, lifecycle safety, and enforceability. Durable strict-JSON outputs are under `docs/reviews/2026-07-25-codegraph-dox-policy/`.
+- **Findings:** undefined code-capable gating; discretionary child policy inheritance; missing child/Kanban closeout tests; wrong-root inherited MCP risk; no deterministic freshness algorithm; unbounded init/retry and commit deadlock; copied policy drift; prompt-only enforcement claims; underspecified DOX identity; undecidable milestone commit predicate; and prompt-golden rather than behavioral evals.
+- **Reconciliation:** revised the policy to require bounded refresh-before-query, exact `projectPath` root binding, structured fallback receipts, one canonical guidance identity, dispatch-time `ProjectPolicyEnvelope`, per-surface DOX receipts, a working/parked/validated/committed state machine extending the existing engineering-loop commit boundary, and event-trace behavioral fixtures. The spec now explicitly distinguishes mandatory agent policy from universal host interception of arbitrary shell/user Git.
+- **State:** runtime implementation is still blocked until a fresh artifact-only review approves the revised specification. The reconciliation record is `docs/plans/2026-07-25-codegraph-dox-milestone-policy-reconciliation.md`.
+
+## 2026-07-25 — Engineering-loop CodeGraph-first search policy
+
+- **Trigger:** the user made CodeGraph mandatory for code search so implementation discovery uses structural source/call-graph context instead of repeated text-search/read loops.
+- **Correction:** the live engineering-loop skill now initializes and queries a repository CodeGraph before code discovery or edits, treats graph-returned verbatim source as already read, and limits text search to documentation/non-code or a recorded graph failure/limitation.
+- **Verification:** initialized the OBSIDIAN-HERMES graph (205 files, 5,733 nodes, 13,164 edges) and used `codegraph_explore` to inspect the active Gate 0 benchmark flow and blast radius before further code analysis.
 
 ## 2026-07-25 — Engineering-loop missed-spec-gate stop-work policy
 
