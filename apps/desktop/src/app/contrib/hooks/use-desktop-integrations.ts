@@ -102,30 +102,41 @@ export function useDesktopIntegrations({
       return
     }
 
-    // HashRouter boot guard: if the real hash already points to a session or
-    // non-root route, let the normal route resume handle it — don't overwrite
-    // with a stale remembered route from a different profile or prior run.
+    restoredRef.current = true
+
+    const profile = $activeGatewayProfile.get()
+    const rememberedRoute = getRememberedRoute(profile)
+    const rememberedSessionId = getRememberedSessionId(profile)
+
+    // HashRouter boot guard: if the real hash already points to a DIFFERENT
+    // session or non-root route than what we'd restore, let the hash win —
+    // it's the user's explicit navigation (or a window reload). Overwriting
+    // it with a stale persisted route is how a relaunch lands on the WRONG
+    // conversation. When the hash route matches the remembered route (same
+    // session), proceed with restoration — the session router may fail to
+    // load an ended/invalid session, and this restore path is the safety net.
     if (typeof window !== 'undefined') {
       const rawHash = window.location.hash.replace(/^#/, '')
       if (rawHash && rawHash !== '/' && !rawHash.startsWith('/new')) {
-        restoredRef.current = true
-        return
+        // Hash has a real route. Only skip if it differs from what we'd restore.
+        const hashDiffers =
+          (!rememberedRoute || rawHash !== rememberedRoute) &&
+          (!rememberedSessionId || rawHash !== sessionRoute(rememberedSessionId))
+
+        if (hashDiffers) {
+          return
+        }
       }
     }
 
-    restoredRef.current = true
-    const route = getRememberedRoute($activeGatewayProfile.get())
-
-    if (route && route !== NEW_CHAT_ROUTE && !isOverlayView(appViewForPath(route))) {
-      navigate(route, { replace: true })
+    if (rememberedRoute && rememberedRoute !== NEW_CHAT_ROUTE && !isOverlayView(appViewForPath(rememberedRoute))) {
+      navigate(rememberedRoute, { replace: true })
 
       return
     }
 
-    const last = getRememberedSessionId($activeGatewayProfile.get())
-
-    if (last) {
-      navigate(sessionRoute(last), { replace: true })
+    if (rememberedSessionId) {
+      navigate(sessionRoute(rememberedSessionId), { replace: true })
     }
   }, [locationPathname, navigate])
 
