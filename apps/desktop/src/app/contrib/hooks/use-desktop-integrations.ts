@@ -67,8 +67,9 @@ export function useDesktopIntegrations({
 
   // Remember the open chat (session id for notifications/resume) AND the last
   // non-overlay route (a page like /skills, or a session route) so a relaunch
-  // lands where you were. Overlays (settings/command-center/…) aren't stored —
-  // you don't want to boot into a modal.
+  // lands where you were. Both are scoped to the active profile so switching
+  // profiles never restores the wrong project's last route. Overlays
+  // (settings/command-center/…) aren't stored — you don't want to boot into a modal.
   useEffect(() => {
     if (routedSessionId) {
       setRememberedSessionId(
@@ -78,7 +79,7 @@ export function useDesktopIntegrations({
     }
 
     if (!isOverlayView(appViewForPath(locationPathname))) {
-      setRememberedRoute(locationPathname)
+      setRememberedRoute(locationPathname, $activeGatewayProfile.get())
     }
   }, [locationPathname, routedSessionId])
 
@@ -87,6 +88,12 @@ export function useDesktopIntegrations({
   // Restore once on cold start — only when the renderer booted at the default
   // route (a hidden-then-shown window keeps its own route). Prefer the full
   // remembered route (covers pages); fall back to the last session id.
+  //
+  // HashRouter briefly reports "/" before parsing the hash. If the raw hash
+  // already references a real session, skip restoration — the session router
+  // picks it up; overwriting it with a stale persisted route is how a
+  // relaunch lands on the WRONG conversation (the "refresh restores last
+  // chat" bug).
   // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     if (restoredRef.current || locationPathname !== NEW_CHAT_ROUTE) {
@@ -95,8 +102,19 @@ export function useDesktopIntegrations({
       return
     }
 
+    // HashRouter boot guard: if the real hash already points to a session or
+    // non-root route, let the normal route resume handle it — don't overwrite
+    // with a stale remembered route from a different profile or prior run.
+    if (typeof window !== 'undefined') {
+      const rawHash = window.location.hash.replace(/^#/, '')
+      if (rawHash && rawHash !== '/' && !rawHash.startsWith('/new')) {
+        restoredRef.current = true
+        return
+      }
+    }
+
     restoredRef.current = true
-    const route = getRememberedRoute()
+    const route = getRememberedRoute($activeGatewayProfile.get())
 
     if (route && route !== NEW_CHAT_ROUTE && !isOverlayView(appViewForPath(route))) {
       navigate(route, { replace: true })
