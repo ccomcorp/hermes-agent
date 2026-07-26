@@ -832,6 +832,108 @@ describe('resumeSession failure recovery', () => {
     expect(renderedMessages).not.toContain('answer before compression')
   })
 
+  it('does not duplicate a persisted inflight user when the REST transcript already contains it', async () => {
+    // Regression: the delegation-completion / notification-injection path.
+    // The server injected a user row (like an async-delegation completion) and
+    // persisted it. The session is still running when the user returns.
+    // The inflight projection repeats the SAME persisted input — the
+    // renderer must suppress the synthetic copy and show it exactly once.
+    const delegationInput = '[ASYNC DELEGATION BATCH COMPLETE — deleg_9f2b6746]\nA background fan-out of 2 subagent(s) you dispatched earlier has finished.'
+
+    const storedMessages = [
+      { content: delegationInput, role: 'user', timestamp: 1 },
+      { content: 'assistant thinking…', role: 'assistant', timestamp: 2 }
+    ]
+
+    vi.mocked(getSessionMessages).mockResolvedValue({
+      messages: storedMessages,
+      session_id: 'stored-1'
+    } as never)
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.resume') {
+        return {
+          session_id: 'runtime-1',
+          session_key: 'stored-1',
+          resumed: 'stored-1',
+          message_count: storedMessages.length,
+          messages: storedMessages,
+          running: true,
+          inflight: { user: delegationInput, assistant: 'partial answer', streaming: true },
+          info: {}
+        } as never
+      }
+
+      return {} as never
+    })
+
+    let resumedState: ClientSessionState | undefined
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(
+      <ResumeHarness
+        onReady={ready => (resume = ready)}
+        onStateUpdate={(_sessionId, state) => (resumedState = state)}
+        requestGateway={requestGateway}
+      />
+    )
+    await waitFor(() => expect(resume).not.toBeNull())
+    await resume!('stored-1', true)
+
+    const renderedMessages = JSON.stringify(resumedState?.messages)
+    // The input must appear exactly once — no synthetic inflight duplicate.
+    const matches = renderedMessages.match(/ASYNC DELEGATION BATCH COMPLETE/g)
+    expect(matches).toHaveLength(1)
+    expect(renderedMessages).toContain('partial answer')
+  })
+
+  it('still projects an unpersisted inflight user through a matching REST transcript', async () => {
+    // Companion case: the REST transcript does NOT contain the currently
+    // inflight input (genuinely unpersisted). The live projection must still
+    // add it once after resume.
+    const storedMessages = [
+      { content: 'earlier question', role: 'user', timestamp: 1 },
+      { content: 'earlier answer', role: 'assistant', timestamp: 2 }
+    ]
+
+    vi.mocked(getSessionMessages).mockResolvedValue({
+      messages: storedMessages,
+      session_id: 'stored-1'
+    } as never)
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.resume') {
+        return {
+          session_id: 'runtime-1',
+          session_key: 'stored-1',
+          resumed: 'stored-1',
+          message_count: storedMessages.length,
+          messages: storedMessages,
+          running: true,
+          inflight: { user: 'unpersisted prompt', assistant: '', streaming: true },
+          info: {}
+        } as never
+      }
+
+      return {} as never
+    })
+
+    let resumedState: ClientSessionState | undefined
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(
+      <ResumeHarness
+        onReady={ready => (resume = ready)}
+        onStateUpdate={(_sessionId, state) => (resumedState = state)}
+        requestGateway={requestGateway}
+      />
+    )
+    await waitFor(() => expect(resume).not.toBeNull())
+    await resume!('stored-1', true)
+
+    const renderedMessages = JSON.stringify(resumedState?.messages)
+    expect(renderedMessages).toContain('unpersisted prompt')
+    expect(renderedMessages).toContain('earlier answer')
+  })
+
   it('does NOT throw out of the fallback when REST also fails (no unhandled rejection)', async () => {
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.resume') {

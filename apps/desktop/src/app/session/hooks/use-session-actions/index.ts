@@ -899,18 +899,35 @@ export function useSessionActions({
 
         const hasLiveProjection = Boolean(resumed.inflight || resumed.queued)
 
-        const preferredMessages =
-          prefetchApplied && prefetchMatchesResumedSession && !hasLiveProjection
-            ? localSnapshot
-            : (() => {
-                const previousMessages = resumedSameSelectedSession
-                  ? preserveLocalPendingTurnMessages(currentMessages, resumeStartMessages)
-                  : currentMessages
+        const preferredMessages = (() => {
+          if (prefetchApplied && prefetchMatchesResumedSession) {
+            // The REST transcript is the durable authority, even when the session
+            // is running. Apply the live projection onto it — appendLiveSessionProjection
+            // dedupes against the latest persisted user row, so an already-persisted
+            // inflight input (e.g. an async-delegation completion) won't duplicate.
+            const withLiveProjection = hasLiveProjection
+              ? appendLiveSessionProjection(localSnapshot, resumed)
+              : localSnapshot
 
-                const resumedMessages = reconcileAuthoritativeMessages(resumed.messages, previousMessages, resumed)
+            const previousMessages = resumedSameSelectedSession
+              ? preserveLocalPendingTurnMessages(currentMessages, resumeStartMessages)
+              : currentMessages
 
-                return chatMessageArraysEquivalent(currentMessages, resumedMessages) ? currentMessages : resumedMessages
-              })()
+            const reconciled = reconcileResumeMessages(withLiveProjection, previousMessages)
+            const withPendingTurn = preserveLocalPendingTurnMessages(reconciled, previousMessages)
+            const result = preserveLocalAssistantErrors(withPendingTurn, previousMessages)
+
+            return chatMessageArraysEquivalent(currentMessages, result) ? currentMessages : result
+          }
+
+          const previousMessages = resumedSameSelectedSession
+            ? preserveLocalPendingTurnMessages(currentMessages, resumeStartMessages)
+            : currentMessages
+
+          const resumedMessages = reconcileAuthoritativeMessages(resumed.messages, previousMessages, resumed)
+
+          return chatMessageArraysEquivalent(currentMessages, resumedMessages) ? currentMessages : resumedMessages
+        })()
 
         // Prefetch-hit fast path: `preferredMessages` IS the live `$messages`
         // array (already error-merged when `localSnapshot` was built), so reuse
