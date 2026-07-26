@@ -1596,6 +1596,84 @@ describe('resumeSession warm-cache mapping integrity', () => {
     expect(runtimeIdByStoredSessionIdRef.current.get('stored-A')).toBe('rt-A')
     expect(sessionStateByRuntimeIdRef.current.get('rt-A')?.messages[0]?.id).toBe('user-optimistic')
   })
+
+  it('suppresses inflight duplicate in warm cache when REST transcript already has the input', async () => {
+    // Regression: warm-cache path (session.activate). When the session is
+    // running and the REST transcript already contains the inflight input,
+    // the renderer must not duplicate it. Same pattern as the cold-path fix.
+    const delegationInput =
+      '[ASYNC DELEGATION BATCH COMPLETE — deleg_9f2b6746]\nA background fan-out of 2 subagent(s) you dispatched earlier has finished.'
+
+    const runtimeIdByStoredSessionIdRef: MutableRefObject<Map<string, string>> = {
+      current: new Map([['stored-A', 'rt-A']])
+    }
+
+    const state = clientState('stored-A')
+    state.messages = [
+      {
+        id: 'stored-user',
+        role: 'user',
+        parts: [{ type: 'text', text: delegationInput }]
+      },
+      {
+        id: 'cached-assistant',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'thinking…' }],
+        pending: true
+      }
+    ]
+
+    const sessionStateByRuntimeIdRef: MutableRefObject<Map<string, ClientSessionState>> = {
+      current: new Map([['rt-A', state]])
+    }
+
+    const storedMessages = [
+      { content: delegationInput, role: 'user', timestamp: 1 },
+      { content: 'thinking…', role: 'assistant', timestamp: 2 }
+    ]
+
+    vi.mocked(getSessionMessages).mockResolvedValue({
+      messages: storedMessages,
+      session_id: 'stored-A'
+    } as never)
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.activate') {
+        return {
+          session_id: 'rt-A',
+          session_key: 'stored-A',
+          resumed: 'stored-A',
+          message_count: storedMessages.length,
+          messages: storedMessages,
+          running: true,
+          inflight: { user: delegationInput, assistant: 'partial', streaming: true },
+          info: {}
+        } as never
+      }
+
+      return {} as never
+    })
+
+    let resumedState: ClientSessionState | undefined
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(
+      <ResumeHarness
+        onReady={r => (resume = r)}
+        onStateUpdate={(_sessionId, state) => (resumedState = state)}
+        requestGateway={requestGateway}
+        runtimeIdByStoredSessionIdRef={runtimeIdByStoredSessionIdRef}
+        sessionStateByRuntimeIdRef={sessionStateByRuntimeIdRef}
+      />
+    )
+    await waitFor(() => expect(resume).not.toBeNull())
+    await resume!('stored-A', true)
+
+    const renderedMessages = JSON.stringify(resumedState?.messages)
+    // Input must appear exactly once — no synthetic copy from warm cache inflight
+    const matches = renderedMessages.match(/ASYNC DELEGATION BATCH COMPLETE/g)
+    expect(matches).toHaveLength(1)
+    expect(renderedMessages).toContain('partial')
+  })
 })
 
 describe('createBackendSessionForSend workspace target', () => {

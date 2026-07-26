@@ -729,9 +729,11 @@ export function useSessionActions({
               // While idle, the persisted REST transcript is the display
               // authority: session.activate returns the runtime's compressed
               // context projection, not necessarily the complete conversation.
-              // During a live turn, keep the runtime/cache projection so an
-              // accepted but not-yet-persisted prompt or stream is never lost.
-              if (!running && persistedTranscriptPromise) {
+              // When running, still use the REST transcript as the durable base
+              // so a persisted server-injected row (e.g. async-delegation
+              // completion) dedupes against the live projection — same strategy
+              // as the cold-path fix in resumeStoredSession.
+              if (persistedTranscriptPromise) {
                 const persisted = await persistedTranscriptPromise
 
                 if (!isCurrentResume()) {
@@ -746,7 +748,18 @@ export function useSessionActions({
                   persisted.session_id === activatedStoredSessionId
 
                 if (persisted && persistedMatchesActivatedSession) {
-                  activatedMessages = reconcileAuthoritativeMessages(persisted.messages, activatedMessages)
+                  if (running) {
+                    // Reconcile the REST transcript + live projection against
+                    // the warm-cache view. appendLiveSessionProjection dedupes
+                    // the inflight row against the latest persisted user row.
+                    activatedMessages = reconcileAuthoritativeMessages(
+                      persisted.messages,
+                      cachedViewState.messages,
+                      activated
+                    )
+                  } else {
+                    activatedMessages = reconcileAuthoritativeMessages(persisted.messages, activatedMessages)
+                  }
                 }
               }
 
