@@ -15,37 +15,74 @@ export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
 export const STARMAP_ROUTE = '/starmap'
+// ── AIOS fork custom routes ──
+export const CANVAS_ROUTE = '/canvas'
+export const CHANNELS_ROUTE = '/channels'
+export const CONFIG_ROUTE = '/config'
+export const DOCOPS_ROUTE = '/docops'
+export const FILES_ROUTE = '/files'
+export const KANBAN_ROUTE = '/kanban'
+export const LOGS_ROUTE = '/logs'
+export const MODELS_ROUTE = '/models'
+export const PAIRING_ROUTE = '/pairing'
+export const PLUGINS_ROUTE = '/plugins'
+export const SYSTEM_ROUTE = '/system'
+export const WORKBENCH_ROUTE = '/workbench'
 
 export type AppView =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
+  | 'channels'
   | 'chat'
   | 'command-center'
+  | 'config'
   | 'cron'
+  | 'docops'
+  | 'files'
+  | 'kanban'
+  | 'logs'
+  | 'messaging'
+  | 'models'
+  | 'pairing'
+  | 'plugins'
+  | 'profiles'
+  | 'settings'
+  | 'skills'
+  | 'starmap'
+  | 'system'
+  | 'webhooks'
+  | 'workbench'
   // A contributed (plugin) full page at its own route — NOT chat. Without this
   // distinction contributed paths fell through appViewForPath's 'chat' default,
   // so the sidebar kept a session highlighted and the titlebar kept the
   // session-title dropdown while a plugin page was showing.
   | 'extension'
-  | 'messaging'
-  | 'profiles'
-  | 'settings'
-  | 'skills'
-  | 'starmap'
-  | 'webhooks'
 
 export type AppRouteId =
   | 'agents'
   | 'artifacts'
+  | 'canvas'
+  | 'channels'
   | 'command-center'
+  | 'config'
   | 'cron'
+  | 'docops'
+  | 'files'
+  | 'kanban'
+  | 'logs'
   | 'messaging'
+  | 'models'
   | 'new'
+  | 'pairing'
+  | 'plugins'
   | 'profiles'
   | 'settings'
   | 'skills'
   | 'starmap'
+  | 'system'
   | 'webhooks'
+  | 'workbench'
 
 export interface AppRoute {
   id: AppRouteId
@@ -64,7 +101,19 @@ export const APP_ROUTES = [
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },
-  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' }
+  { id: 'starmap', path: STARMAP_ROUTE, view: 'starmap' },
+  { id: 'canvas', path: CANVAS_ROUTE, view: 'canvas' },
+  { id: 'channels', path: CHANNELS_ROUTE, view: 'channels' },
+  { id: 'config', path: CONFIG_ROUTE, view: 'config' },
+  { id: 'docops', path: DOCOPS_ROUTE, view: 'docops' },
+  { id: 'files', path: FILES_ROUTE, view: 'files' },
+  { id: 'kanban', path: KANBAN_ROUTE, view: 'kanban' },
+  { id: 'logs', path: LOGS_ROUTE, view: 'logs' },
+  { id: 'models', path: MODELS_ROUTE, view: 'models' },
+  { id: 'pairing', path: PAIRING_ROUTE, view: 'pairing' },
+  { id: 'plugins', path: PLUGINS_ROUTE, view: 'plugins' },
+  { id: 'system', path: SYSTEM_ROUTE, view: 'system' },
+  { id: 'workbench', path: WORKBENCH_ROUTE, view: 'workbench' }
 ] as const satisfies readonly AppRoute[]
 
 const APP_VIEW_BY_PATH = new Map<string, AppView>(APP_ROUTES.map(route => [route.path, route.view]))

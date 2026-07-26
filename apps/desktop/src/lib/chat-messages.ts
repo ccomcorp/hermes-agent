@@ -25,6 +25,8 @@ export type ChatMessage = {
   interim?: boolean
   /** Composer attachment ref strings (`@file:...`, `@image:...`) sent with this user message. */
   attachmentRefs?: string[]
+  /** AIOS fork: voice-conversation spoken-reply tracking. */
+  spoken_reply?: string | null
 }
 
 export type GatewayEventPayload = {

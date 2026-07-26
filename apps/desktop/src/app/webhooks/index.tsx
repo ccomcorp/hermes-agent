@@ -75,7 +75,9 @@ function CopyValueRow({ copyLabel, mono = true, value }: { copyLabel: string; mo
 }
 
 interface WebhooksViewProps {
-  onClose: () => void
+  onClose?: () => void
+  /** AIOS fork compat — surfaces and route-tile pass this to every view. */
+  setStatusbarItemGroup?: (..._: never[]) => void
 }
 
 export function WebhooksView({ onClose }: WebhooksViewProps) {
@@ -347,7 +349,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
   )
 
   return (
-    <Panel onClose={onClose}>
+    <Panel onClose={onClose ?? (() => undefined)}>
       {loading ? (
         <PageLoader label={w.loading} />
       ) : subscriptions.length === 0 ? (
