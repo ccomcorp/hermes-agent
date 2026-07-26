@@ -101,6 +101,9 @@ export function useBackgroundQueueDrain({
             message: t.composer.queueStuckBody
           })
 
+          // Remove the stuck entry so it doesn't retry forever on every restart
+          removeQueuedPrompt(sessionKey, entry.id)
+
           return
         }
 
