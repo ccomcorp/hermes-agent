@@ -30,10 +30,23 @@ export function useRuntimeMessageRepository(messages: ChatMessage[]): ExportedMe
   return useMemo(() => {
     const items: { message: ThreadMessage; parentId: string | null }[] = []
     const branchParentByGroup = new Map<string, string | null>()
+    const seenIds = new Set<string>()
     let visibleParentId: string | null = null
     let headId: string | null = null
 
     for (const message of coalesceToolOnlyAssistants(messages, toolMergeCacheRef.current)) {
+      // Defensive: the upstream assistant-ui MessageRepository validates that
+      // no ancestor of a new parent has the same id as the child being linked.
+      // If the transcript carries a duplicate id (reconciliation edge case,
+      // compressed rotation, or an inflight projection that collides), the
+      // runtime crashes with "MessageRepository(performOp/link): A message
+      // with the same id already exists". Suppress the duplicate here so the
+      // runtime sees a canonical single copy.
+      if (seenIds.has(message.id)) {
+        continue
+      }
+
+      seenIds.add(message.id)
       let parentId = visibleParentId
 
       if (message.role === 'assistant' && message.branchGroupId) {
