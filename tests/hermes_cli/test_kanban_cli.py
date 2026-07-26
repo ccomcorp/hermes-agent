@@ -547,6 +547,166 @@ def test_run_slash_missing_required_arg_friendly_error(kanban_home):
     assert "task_id" in out
 
 
+# ---------------------------------------------------------------------------
+# /kanban routing-report — C+D complexity routing event report (Slice 3)
+# ---------------------------------------------------------------------------
+
+def test_routing_report_recognized_subcommand(kanban_home):
+    """The routing-report subcommand is registered and reaches its handler."""
+    out = kc.run_slash("routing-report")
+    # It must show the empty report, not an argparse unknown-subcommand error.
+    assert "usage error" not in out.lower()
+    assert "No C+D routing decisions recorded." in out
+
+
+def test_routing_report_empty_board(kanban_home):
+    """Empty board → human-friendly message, exit 0."""
+    out = kc.run_slash("routing-report")
+    assert "No C+D routing decisions recorded." in out
+    # Now test with --json too
+    out_json = kc.run_slash("routing-report --json")
+    data = json.loads(out_json)
+    assert data == {"total": 0, "by_route_reason": {}, "by_assignee": {},
+                    "by_tier": {}, "by_model": {}}
+
+
+def test_routing_report_seeded_events(kanban_home):
+    """Seed varied events; verify filtering, aggregates, ordering."""
+    import time
+    now = int(time.time())
+    with kb.connect() as conn:
+        # Valid C+D event — reason/assignee/tier/model
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t001", 1, "assigned",
+             '{"source":"kanban.complexity_routing","route_reason":"complexity.medium",'
+             '"assignee":"dev-agent","tier":"tier-2","model":"deepseek-v4"}',
+             now))
+        # Valid C+D event — different reason, assignee, tier, model
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t002", 2, "assigned",
+             '{"source":"kanban.complexity_routing","route_reason":"complexity.high",'
+             '"assignee":"senior-dev","tier":"tier-1","model":"claude-opus"}',
+             now + 1))
+        # Valid C+D event — same reason as first, but no assignee in payload
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t003", 3, "assigned",
+             '{"source":"kanban.complexity_routing","route_reason":"complexity.medium",'
+             '"tier":"tier-2"}',
+             now + 2))
+        # Valid C+D event — source correct, but no route_reason key → <missing>
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t003b", 4, "assigned",
+             '{"source":"kanban.complexity_routing","assignee":"temp-dev","tier":"tier-3"}',
+             now + 3))
+        # default-assignee event — should be EXCLUDED
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t004", 4, "assigned",
+             '{"source":"kanban.default_assignee","assignee":"dev-agent"}',
+             now + 3))
+        # Malformed JSON — should be SKIPPED
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t005", 5, "assigned", "not-json", now + 4))
+        # Valid JSON list — should be SKIPPED (not a dict)
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t006", 6, "assigned", '["not","a","dict"]', now + 5))
+        # Source-missing object — should be SKIPPED
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t007", 7, "assigned",
+             '{"route_reason":"some.reason","assignee":"ghost"}',
+             now + 6))
+        # NULL payload — should be SKIPPED
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t008", 8, "assigned", None, now + 7))
+        # Non-assigned event — should be SKIPPED
+        conn.execute(
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("t009", 9, "completed",
+             '{"source":"kanban.complexity_routing","route_reason":"complexity.low"}',
+             now + 8))
+        conn.commit()
+
+    # --- Human output ---
+    out = kc.run_slash("routing-report")
+    assert "C+D Routing Report" in out
+    assert "Total routing decisions: 4" in out
+    # by_route_reason: complexity.medium=2, complexity.high=1, <missing>=1
+    assert "complexity.medium" in out
+    assert "complexity.high" in out
+    # by_assignee: dev-agent=1, senior-dev=1, temp-dev=1, <missing>=1
+    assert "dev-agent" in out
+    assert "senior-dev" in out
+    assert "temp-dev" in out
+    assert "<missing>" in out
+    # by_tier: tier-1=1, tier-2=2, tier-3=1
+    assert "tier-1" in out
+    assert "tier-2" in out
+    assert "tier-3" in out
+    # by_model: claude-opus=1, deepseek-v4=1
+    assert "claude-opus" in out
+    assert "deepseek-v4" in out
+    # Excluded items must NOT appear
+    assert "default_assignee" not in out.lower()
+    assert "not-json" not in out
+    assert "ghost" not in out
+    assert "some.reason" not in out
+
+    # --- JSON output ---
+    out_json = kc.run_slash("routing-report --json")
+    data = json.loads(out_json)
+    assert data["total"] == 4
+    assert data["by_route_reason"] == {
+        "complexity.medium": 2,
+        "complexity.high": 1,
+        "<missing>": 1,
+    }
+    assert data["by_assignee"] == {
+        "dev-agent": 1,
+        "senior-dev": 1,
+        "temp-dev": 1,
+        "<missing>": 1,
+    }
+    assert data["by_tier"] == {
+        "tier-2": 2,
+        "tier-1": 1,
+        "tier-3": 1,
+    }
+    assert data["by_model"] == {
+        "claude-opus": 1,
+        "deepseek-v4": 1,
+    }
+    # Only expected keys
+    assert set(data.keys()) == {
+        "total", "by_route_reason", "by_assignee", "by_tier", "by_model",
+    }
+
+
+def test_routing_report_db_helper_direct(kanban_home):
+    """Direct DB helper returns correct shape even with empty board."""
+    with kb.connect_closing() as conn:
+        result = kb.routing_report_aggregate(conn)
+    assert result == {"total": 0, "by_route_reason": {}, "by_assignee": {},
+                      "by_tier": {}, "by_model": {}}
+
+
 def test_run_slash_board_override_restores_prior_env(kanban_home, monkeypatch):
     kb.create_board("alpha")
     kb.create_board("beta")

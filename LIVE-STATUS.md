@@ -3,7 +3,7 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-25 (Kanban C+D Slice 1 source-fixed/tested; non-primary memory fence source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
+**Updated:** 2026-07-26 (Kanban C+D Slices 1–3 source-fixed/tested; non-primary memory fence source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
 
 ## Scoreboard
 
@@ -24,7 +24,7 @@
 | CodeGraph | **PASS** | re-init 4650 files / 123667 nodes |
 | Open Notebook | **PASS** | :5055 healthy |
 | Delegation routes + Route Advisor | **SOURCE FIXED** | Routes live; route_advisor B1 lane-by-type + verify nudge committed source; runtime config opted in; restart gateway/Desktop to load |
-| Kanban C+D + brain model selection | **SLICE 1 SOURCE FIXED** | Deterministic overrides implemented/tested: `complexity_override` schema+migration, explicit complexity/model/default-to-trigger routes avoid classifier/default-assignee bypasses as intended, classifier model suggestions validate before spawn; brain-learned selection remains deferred pending route/outcome corpus |
+| Kanban C+D + brain model selection | **SLICES 1–3 SOURCE FIXED** | Deterministic overrides and default-assignee compatibility routes are tested; `routing-report [--json]` now exposes C+D `assigned`-event aggregates (route reason, assignee, tier, optional model) without leaking raw payloads. Brain-learned selection remains deferred pending a route/outcome corpus. |
 | Upstream/main merge | **LOCAL PASS** | Branch `merge/upstream-main-test-20260723-005006`; conflicts resolved; adversarial B1 dashboard-backup duplicate `-o` blocker fixed with regression; local gates green; push/promote still pending explicit final review/approval |
 
 ## Maintenance

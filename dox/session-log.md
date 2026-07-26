@@ -1,5 +1,12 @@
 # Session Log
 
+## 2026-07-26 — Kanban C+D Slice 3 routing report
+
+- **Contract:** advanced-elicited the smallest operator-facing report defined by the committed C+D spec: `hermes kanban routing-report [--json]`, inheriting board scope and remaining read-only. It includes only `assigned` events whose decoded payload has `source=kanban.complexity_routing`; malformed/non-dict/non-routing events are skipped.
+- **Implementation:** added Python-side event aggregation with stable `total`, `by_route_reason`, `by_assignee`, `by_tier`, and `by_model` keys; human output reveals aggregates only, never raw titles, payloads, rationales, confidence, or event IDs. JSON1 is deliberately not required.
+- **Review correction:** initial fixtures and consumer used a guessed `reason` key. Source trace through `_resolve_complexity_route` proved the persisted producer uses `route_reason`; fixtures and consumer were corrected and a missing-key bucket test added before acceptance.
+- **Verification:** independent adversarial review **PASS**; focused C+D CLI/routing/config suite **86 passed**; Ruff, `py_compile`, and diff check green; isolated main-process empty-board smoke returned the expected human and JSON zero-state. The only smoke preamble is the pre-existing SQLite WAL-reset advisory.
+
 ## 2026-07-25 — Engineering-loop missed-spec-gate stop-work policy
 
 - **Trigger:** the user correctly identified that DYADOMORPH specification work had entered implementation without the mandatory advanced-elicitation gate being applied consistently.

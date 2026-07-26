@@ -916,6 +916,13 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     )
     p_asg.add_argument("--json", action="store_true")
 
+    # --- routing-report ---
+    p_rr = sub.add_parser(
+        "routing-report",
+        help="Report C+D complexity routing decisions (read-only)",
+    )
+    p_rr.add_argument("--json", action="store_true")
+
     # --- context --- (for spawned workers)
     p_ctx = sub.add_parser(
         "context",
@@ -1152,6 +1159,7 @@ def kanban_command(args: argparse.Namespace) -> int:
             "runs":     _cmd_runs,
             "heartbeat": _cmd_heartbeat,
             "assignees": _cmd_assignees,
+            "routing-report": _cmd_routing_report,
             "notify-subscribe":   _cmd_notify_subscribe,
             "notify-list":        _cmd_notify_list,
             "notify-unsubscribe": _cmd_notify_unsubscribe,
@@ -1544,6 +1552,36 @@ def _cmd_assignees(args: argparse.Namespace) -> int:
         counts = entry["counts"] or {}
         count_str = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "(idle)"
         print(f"{entry['name']:20s}  {on_disk:8s}  {count_str}")
+    return 0
+
+
+def _cmd_routing_report(args: argparse.Namespace) -> int:
+    with kb.connect_closing() as conn:
+        data = kb.routing_report_aggregate(conn)
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+    if data["total"] == 0:
+        print("No C+D routing decisions recorded.")
+        return 0
+    print("C+D Routing Report")
+    print(f"Total routing decisions: {data['total']}")
+    if data["by_route_reason"]:
+        print("\nBy route reason:")
+        for reason, count in data["by_route_reason"].items():
+            print(f"  {reason}: {count}")
+    if data["by_assignee"]:
+        print("\nBy assignee:")
+        for assignee, count in data["by_assignee"].items():
+            print(f"  {assignee}: {count}")
+    if data["by_tier"]:
+        print("\nBy tier:")
+        for tier, count in data["by_tier"].items():
+            print(f"  {tier}: {count}")
+    if data["by_model"]:
+        print("\nBy model:")
+        for model, count in data["by_model"].items():
+            print(f"  {model}: {count}")
     return 0
 
 

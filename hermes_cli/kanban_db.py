@@ -3693,6 +3693,77 @@ def list_events(conn: sqlite3.Connection, task_id: str) -> list[Event]:
     return out
 
 
+def routing_report_aggregate(
+    conn: sqlite3.Connection,
+) -> dict:
+    """Aggregate C+D complexity routing ``assigned`` events into a
+    read-only report dict.
+
+    Returns a JSON-serializable dict with keys ``total``,
+    ``by_route_reason``, ``by_assignee``, ``by_tier``, ``by_model``.
+    Only includes ``task_events`` where ``kind='assigned'`` and the
+    payload (parsed via Python ``json.loads``) is a dict with an
+    exact ``source == 'kanban.complexity_routing'``.
+
+    NULL, invalid JSON, non-dict JSON, and missing/different source
+    are all silently skipped (no warnings, no failure).  Never uses
+    SQLite JSON1.
+    """
+    rows = conn.execute(
+        "SELECT payload FROM task_events WHERE kind = ?", ("assigned",)
+    ).fetchall()
+
+    # Counters — use plain dicts to match json.dumps key ordering
+    by_reason: dict[str, int] = {}
+    by_assignee: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    by_model: dict[str, int] = {}
+    total = 0
+
+    for (payload_text,) in rows:
+        if payload_text is None:
+            continue
+        try:
+            obj = json.loads(payload_text)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("source") != "kanban.complexity_routing":
+            continue
+        total += 1
+
+        reason = obj.get("route_reason")
+        if not isinstance(reason, str) or not reason:
+            reason = "<missing>"
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+
+        assignee = obj.get("assignee")
+        if not isinstance(assignee, str) or not assignee:
+            assignee = "<missing>"
+        by_assignee[assignee] = by_assignee.get(assignee, 0) + 1
+
+        tier = obj.get("tier")
+        if isinstance(tier, str) and tier:
+            by_tier[tier] = by_tier.get(tier, 0) + 1
+
+        model = obj.get("model")
+        if isinstance(model, str) and model:
+            by_model[model] = by_model.get(model, 0) + 1
+
+    def _ordered(d: dict[str, int]) -> dict[str, int]:
+        # count descending, then key ascending
+        return dict(sorted(d.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    return {
+        "total": total,
+        "by_route_reason": _ordered(by_reason),
+        "by_assignee": _ordered(by_assignee),
+        "by_tier": _ordered(by_tier),
+        "by_model": _ordered(by_model),
+    }
+
+
 def _append_event(
     conn: sqlite3.Connection,
     task_id: str,
