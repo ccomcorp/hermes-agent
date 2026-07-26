@@ -494,6 +494,42 @@ def test_default_to_trigger_routes_unassigned_before_default_assignee(
         payload = json.loads(event["payload"])
         assert payload["route_reason"] == "classifier:trivial"
         assert payload["assignee"] == "ponytail"
+        assert payload["source"] == "kanban.complexity_routing"
+    finally:
+        conn.close()
+
+
+def test_default_to_trigger_false_falls_through_to_default_assignee_without_classifier(
+    kanban_home, routing_cfg, profile_set, monkeypatch
+):
+    """Backwards-compatible branch: routing enabled, default_to_trigger=False,
+    unassigned card -> kanban.default_assignee without classifier call."""
+    routing_cfg(default_to_trigger=False)
+    profile_set({"dev-agent", "advisor", "ponytail"})
+    client = _install_aux(monkeypatch)
+    spawned_profiles: list[tuple[str, str | None]] = []
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="Unassigned fallthrough card", assignee=None)
+        result = kb.dispatch_once(
+            conn,
+            spawn_fn=_capture_spawn(spawned_profiles),
+            default_assignee="dev-agent",
+        )
+
+        assert result.spawned and result.spawned[0][0] == tid
+        assert spawned_profiles == [("dev-agent", None)]
+        assert tid in result.auto_assigned_default
+        assert kb.get_task(conn, tid).assignee == "dev-agent"
+        assert client.calls == []
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'assigned' "
+            "ORDER BY id DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["source"] == "kanban.default_assignee"
+        assert payload["assignee"] == "dev-agent"
     finally:
         conn.close()
 
