@@ -1,5 +1,11 @@
 # Session Log
 
+## 2026-07-27 — shutdown-safe handoff for delegation/compression landing
+
+- **Checkpoint:** saved a per-project checkpoint at `data/checkpoints/hermes-agent-17952f67/latest.json`, bound to `D:\HeicH\hermes-agent`; a source-controlled resume guide is `dox/HANDOFF-2026-07-27.md`.
+- **Committed before handoff:** `e346faa5c` restores async batch progress/identity events for the Desktop Spawn tree; `e8ec818c7` avoids timeline-only compression rotation aborts and removes the false cumulative worker block; `ba04bf3a7` removes legacy composite test path injection. Focused Python and Desktop store gates passed before each commit.
+- **Resume boundary:** Desktop shutdown terminates in-process agents, so the next session must first remove the unlocked, untracked `apps/desktop/release-next*` package directories, then restart and live-probe a two-child delegation batch. The terminal-overflow replacement for worker compression exhaustion remains explicitly unimplemented.
+
 ## 2026-07-26 — Upstream/main merge (158 commits)
 
 - **Pre-merge:** Committed WAL + venv + LSP fixes (`4c3e38f17`). Pushed backup branch to origin. Gap: 158 commits behind upstream/main.
