@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider, TOOL_SIGNAL, TOOL_FORGET
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
@@ -23,7 +23,7 @@ def _lesson(lesson="A lesson worth signalling.", **over):
 
 @pytest.fixture
 def comp_store():
-    s = ExperienceStore(":memory:")
+    s = FakeStore(":memory:")
     comp = CompositeMemoryProvider(s, brain=MockBrain(), vault=MockVault())
     yield comp, s
     s.close()

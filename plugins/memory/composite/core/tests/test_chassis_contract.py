@@ -10,7 +10,7 @@ import inspect
 import pytest
 
 from agent.memory_provider import MemoryProvider as RealABC
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider, TOOL_SIGNAL
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
@@ -26,7 +26,7 @@ def test_real_abc_is_synchronous():
 def test_composite_subclasses_and_satisfies_the_real_abc():
     assert issubclass(CompositeMemoryProvider, RealABC), \
         "CompositeMemoryProvider is not bound to the real chassis ABC"
-    store = ExperienceStore(":memory:")
+    store = FakeStore(":memory:")
     comp = CompositeMemoryProvider(store, brain=MockBrain(), vault=MockVault())
     assert isinstance(comp, RealABC)
     assert RealABC.__abstractmethods__ <= set(dir(comp))
@@ -34,7 +34,7 @@ def test_composite_subclasses_and_satisfies_the_real_abc():
 
 
 def test_lifecycle_round_trip_against_the_real_abc():
-    store = ExperienceStore(":memory:")
+    store = FakeStore(":memory:")
     ref = store.append({
         "lesson": "Contract-test lesson about chassis binding.",
         "task_type": "test-methodology", "tags": ["contract"],

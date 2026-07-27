@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
@@ -24,7 +24,7 @@ def _lesson(lesson, **over):
 
 @pytest.fixture
 def store():
-    s = ExperienceStore(":memory:")
+    s = FakeStore(":memory:")
     yield s
     s.close()
 
@@ -48,7 +48,7 @@ def test_ack_shape_on_delegation(store):
 
 
 def test_concurrent_composite_access_no_corruption():
-    store = ExperienceStore(":memory:")
+    store = FakeStore(":memory:")
     comp = CompositeMemoryProvider(store, brain=MockBrain(), vault=MockVault())
     comp.initialize("s")
     refs = [store.append(_lesson(f"Concurrency lesson number {i}")) for i in range(5)]
@@ -88,7 +88,7 @@ def test_concurrent_composite_access_no_corruption():
 
 
 def test_concurrent_appends_all_persist():
-    store = ExperienceStore(":memory:")
+    store = FakeStore(":memory:")
     comp = CompositeMemoryProvider(store, brain=None, vault=None)
     comp.initialize("s")
     with ThreadPoolExecutor(max_workers=8) as clients:

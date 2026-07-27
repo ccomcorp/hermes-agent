@@ -2,14 +2,14 @@
 
 import pytest
 
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
 
 @pytest.fixture
 def store():
-    s = ExperienceStore(":memory:")
+    s = FakeStore(":memory:")
     yield s
     s.close()
 

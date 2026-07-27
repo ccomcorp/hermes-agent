@@ -5,7 +5,7 @@ Ported from AIOS composite-provider/tests/test_prefetch.py.
 
 import pytest
 
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider, SESSION_START_CALL_SITE
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
@@ -24,7 +24,7 @@ def _lesson(lesson, **over):
 
 @pytest.fixture
 def store():
-    s = ExperienceStore(":memory:")
+    s = FakeStore(":memory:")
     yield s
     s.close()
 

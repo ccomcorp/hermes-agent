@@ -2,7 +2,7 @@
 
 import json
 
-from store import ExperienceStore
+from plugins.memory.composite.core.tests.fake_store import FakeStore
 from plugins.memory.composite.core import CompositeMemoryProvider
 from plugins.memory.composite.core.tests.mocks import MockBrain, MockVault
 
@@ -29,7 +29,7 @@ def _seed(store):
 
 
 def test_realdata_multi_turn_inversion_and_circulation():
-    store = ExperienceStore(":memory:")
+    store = FakeStore(":memory:")
     refs = _seed(store)
     brain = MockBrain(prefetch_items=[{"content": "brain note: serialize sqlite writes", "score": 0.7}])
     vault = MockVault(items=[{"content": "vault note: WAL mode and locking", "score": 0.6}])
