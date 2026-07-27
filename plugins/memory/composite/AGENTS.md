@@ -2,57 +2,32 @@
 
 > Hand-maintained dir guide. This is **hermes-agent**, NOT AIOS — it is outside the AIOS
 > DOX index (the AIOS root index does not scan this repo) and needs no index registration.
-> The portable core it binds (the experience-store + composite-provider engines) lives in
-> the sibling AIOS checkout and is unit-tested there; nothing here re-implements it.
 
-The chassis-side binding of the AIOS experience-store composite (M1). It puts the two
-AIOS packages (`experience-store`, `composite-provider`) on `sys.path`, subclasses the
-real `CompositeMemoryProvider`, and exposes it to the chassis plugin loader. Activated by
+The chassis-side binding of the experience-store composite. Activated by
 `memory.provider: composite` in `config.yaml` — the package merely existing does not
 register anything; the config key does.
 
-## Files
+## Directory map
 
-- **`provider.py`** — `HermesCompositeProvider(CompositeMemoryProvider)`, the dev-instance
-  subclass. Adds:
-  - **fork-append seam** (`record_fork_lesson`): writes deliberately-reviewed,
-    fork-authored lessons (`source='reviewed'`, `migrated=False`) — the AC1-eligible band.
-    `sync_turn` deliberately does NO store append (dev-instance corpus is authored-only).
-  - **D4-A prefetch** (`prefetch` + `confirm_prefetch_consumed`): session-start recall that
-    marks the receipt consumed only AFTER the chassis confirms the block reached the
-    dispatched prompt — an assembled-but-dropped block never counts toward circulation.
-  - **D3b recall** (`recall_for` + `confirm_consumed`): pre-delegation knowledge-gate recall;
-    always emits a receipt (a miss writes `kind='miss'` — never silent).
-  - **brain staging** (`brain_stage` 0/1/2): stage 1 = observe (`sync_turn` fires a
-    fire-and-forget observation, capturing the `observation_id` for pairing) + recall;
-    stage 2 = the paired reward leg in `handle_tool_call`, SUBMITTED to a background worker
-    (off the turn thread, R4), outcome-gated, C3-preserving, with one-shot observation pop.
-  - **`brain_health()`**: an honest, deterministic snapshot of the reward leg
-    (`disabled`/`observe-only`/`pending`/`live`/`degraded`/`fail`) plus local and
-    brain-authoritative dW totals — no hardcoded label.
-  - `build_provider(hermes_home)`: env-staged constructor (see Activation below).
-
-- **`brain_http.py`** — `HttpBrainClient`, the blocking-HTTP `BrainClient` adapter (stdlib
-  `urllib` only, no new dependency, `close()` is a no-op). Speaks the NeuroLinked brain
-  HTTP contract, best-effort with a single attempt and a ~2.5s timeout (a slow/offline
-  brain degrades, never stalls a turn):
-  - `GET /api/claude/recall` — cache-only recall (`prefetch`); items clamped to
-    `recall_limit` and `max_item_chars` before reaching context; brain scores squashed
-    so they never outrank the store's authoritative 1.0 band.
-  - `POST /api/claude/observe` — returns the brain `observation_id` (UUID string, not the
-    int rowid; the feedback endpoint 422s on an int) for paired reward.
-  - `POST /api/claude/feedback` — `reward`; sends the SIGNED `outcome` float (failures
-    punish) plus `was_helpful`. `ok` ONLY for a paired HTTP-200 with non-zero dW; the
-    legacy no-id path / dW=0 / 422-stale are `degraded`; transport error is `fail`.
-  - `GET /api/claude/summary` (`brain_dW_total`) — authoritative running dW total.
-  - `GET /api/brain/learning-delta` (`learning_delta`) — diagnostic snapshot (no dW total).
-  - `GET /api/claude/status` (`ping`) — liveness, logged at build.
-
-- **`__init__.py`** — plugin entry point. `register(ctx)` builds the provider over the
-  active `HERMES_HOME` and calls `ctx.register_memory_provider`.
-
-- **`tests/`** — `test_brain_http.py`, `test_brain_http_live.py` (gated live `.31` checks),
-  `test_brain_staging.py`, `conftest.py`.
+- **`provider.py`** — chassis-side binding (sys.path hack to AIOS packages, subclasses
+  `CompositeMemoryProvider`). Adds fork-append seam (`record_fork_lesson`), D4-A prefetch,
+  D3b recall, brain staging (0/1/2), `brain_health()`, and `build_provider(hermes_home)`.
+  WILL be refactored to use `core/` in a follow-up.
+- **`core/`** — M0-B1: vendor-native composite engine, ported from AIOS
+  `packages/memory/composite-provider/`. Zero `sys.path` hacks, zero AIOS dependency
+  for the engine itself (the store is still injected; B2 ports that).
+  - `core/composite_provider.py` — `CompositeMemoryProvider` with fan-out across three
+    backends (store, brain, vault), prefetch/queue_prefetch inversion, defer-consume,
+    tool routing (experience_signal/experience_forget). Binds to the real chassis
+    `agent.memory_provider.MemoryProvider` ABC — no `_base_shim` fallback.
+  - `core/backends.py` — `BrainClient` + `VaultCache` Protocol interfaces, plus
+    `BRAIN_OK`/`BRAIN_DEGRADED`/`BRAIN_FAIL` status constants.
+  - `core/__init__.py` — public re-exports.
+  - `core/tests/` — 29 B1 tests (ported from AIOS), all green. Store leg is still
+    the AIOS experience-store (B2-to-port).
+- **`brain_http.py`** — `HttpBrainClient`, blocking-HTTP brain adapter.
+- **`__init__.py`** — plugin entry point.
+- **`tests/`** — chassis-side integration tests (brain staging, outcome signals, etc.).
 
 ## Activation (M1 brain add-on)
 
