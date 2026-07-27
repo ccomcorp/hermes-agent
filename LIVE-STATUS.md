@@ -5,6 +5,7 @@
 **Home:** `D:\HeicH\hermes-home`  
 **Updated:** 2026-07-26 (Kanban C+D Slices 1–3 source-fixed/tested; non-primary memory fence source-fixed/tested; Desktop backend/LSP recovery source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
 **Updated:** 2026-07-26 — WAL checkpoint close-path fix landed; Python venv resolution hardened; LSP diagnostic latch verified. All focused gates green (Python 41/41 + Desktop 24/24). Desktop repackaged; restart pending.
+**Updated:** 2026-07-26 — Upstream/main merged (158 commits). 9 conflicts resolved: preload.ts (findInPage), clarify_tool.py (multi_select + cancel semantics), async_delegation.py (progress_fn), gateway/run.py (multi_select), plus 5 additive/type conflicts. 32 LOOP-SEAM + 3 SAFE-UPDATE-GUARD survived. Focused gates: Python 41/41 green. Pushed to origin/hermes-agent.
 
 ## Scoreboard
 

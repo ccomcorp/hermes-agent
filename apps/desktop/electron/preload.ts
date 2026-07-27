@@ -340,7 +340,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
         delete: payload => ipcRenderer.invoke('hermes:workbench:plugin-tester:environments:delete', payload)
       }
     }
-  }
+  },
 
   // Find-in-page (Ctrl/Cmd+F): delegates to Electron's
   // webContents.findInPage on the IPC sender's window so a Cmd+F pressed

@@ -1,5 +1,17 @@
 # Session Log
 
+## 2026-07-26 — Upstream/main merge (158 commits)
+
+- **Pre-merge:** Committed WAL + venv + LSP fixes (`4c3e38f17`). Pushed backup branch to origin. Gap: 158 commits behind upstream/main.
+- **Conflict surface:** 9 files conflicted out of 332 changed. Pre-merge shared-file analysis showed ~158 in intersection, but additive seam pattern auto-resolved all but 9.
+- **Resolutions by class:**
+  - **Additive** (`.gitignore`, `config-settings.tsx`): kept both sides.
+  - **Fork-heavy + upstream addition** (`preload.ts`, `global.d.ts`): kept fork workbench IPC/types, patched in upstream findInPage bridge.
+  - **Signature merge** (`clarify_tool.py`, `gateway/run.py`, `async_delegation.py`): kept fork cancel semantics/route param, added upstream multi_select/progress_fn.
+  - **Test files** (`test_clarify_gateway.py`, `test_clarify_tool.py`): accepted upstream (95+ new tests); 2 gateway tests adapted for fork's CANCEL_SENTINEL.
+- **Gates:** Python focused suite 41/41 green (WAL 16 + LSP 49 + clarify 95 + message storage). py_compile clean. 32 LOOP-SEAM + 3 SAFE-UPDATE-GUARD survived. CodeGraph re-indexed (5,629 files, 147k nodes).
+- **Promotion:** Clean fast-forward `hermes-agent` → `8ce90a695`. Pushed to origin. DOX updated.
+
 ## 2026-07-26 — WAL checkpoint close-path mitigation + venv resolution hardening
 
 - **Root cause:** SQLite 3.51.0 ships with a known WAL-reset bug (documented at sqlite.org/wal.html#walresetbug) that causes `PRAGMA wal_checkpoint(TRUNCATE)` to fail with `disk I/O error` when another connection is resetting the WAL concurrently. The Desktop backend's crash-restart cycle on the blank-page bug triggered this race repeatedly, producing thousands of errors in agent.log.

@@ -4,6 +4,10 @@ Keep entries short. Detailed pre-hotfix ledger entries from this active update c
 
 ## Unreleased
 
+### Upstream sync
+
+- **2026-07-26** — Merged upstream/main (158 commits). Resolved 9 conflicts: kept fork workbench IPC + added findInPage bridge (`preload.ts`), merged fork cancel semantics with upstream multi_select support (`clarify_tool.py`), kept fork route param + added progress_fn (`async_delegation.py`), kept fork cancel sentinel + added multi_select callback param (`gateway/run.py`), plus additive resolutions in `.gitignore`, `config-settings.tsx`, `global.d.ts`, and test files. All 32 LOOP-SEAM + 3 SAFE-UPDATE-GUARD sentinels survived. Focused gates green (41/41). Pushed to origin.
+
 ### Chassis / persistence
 
 - **2026-07-26** — Mitigated SQLite 3.51.0 WAL-reset bug on `SessionDB.close()`. The bug causes `PRAGMA wal_checkpoint(TRUNCATE)` to fail with `disk I/O error` when another connection resets the WAL between checkpoint steps. `SessionDB.close()` now detects vulnerable SQLite versions (3.51.0–3.51.2) and skips the TRUNCATE checkpoint entirely, closing the connection cleanly. Periodic `_try_wal_checkpoint()` on the commit path continues to use PASSIVE mode to bound WAL growth. The connection-level `_try_wal_checkpoint` and `vacuum` TRUNCATE sites were also audited and judged safe. Hardened the Python venv resolution in the Electron main process so the Desktop first probes `.venv/` before falling back to `venv/` when locating the backend interpreter; the same resolved root feeds `isActiveRuntimeUsable`, `ensureRuntime`, `createPythonBackend`, and `uninstallVenvPython`. Gates: WAL strategy 7/7 + gate 9/9 + message storage + LSP e2e/protocol/diagnostics/lifecycle **41 passed**; Desktop venv tests **24/24**; Desktop typecheck + changed-file ESLint green; Desktop staged at `release-next2/win-unpacked` with swap helper at `scripts/apply-staged-desktop-build.cmd`. Restart pending.
