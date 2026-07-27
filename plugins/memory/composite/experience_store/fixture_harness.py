@@ -262,11 +262,13 @@ def write_manifest(bundle_dir: str | Path, source_commit: str = "", source_sha25
     # Guard: refuse any path that is not under a disposable temp directory.
     # This prevents operator misuse against production/live state.
     bundle_resolved = bundle.resolve()
+    import tempfile
+
     for temp_root in (
         _Path("/tmp"), _Path("/var/tmp"),
-        # Windows temp directories
-        _Path(os.environ.get("TMP", "")),
-        _Path(os.environ.get("TEMP", "")),
+        # Platform-authoritative stdlib temp root — correct even when
+        # TMP/TEMP are MSYS-translated POSIX values on Windows.
+        _Path(tempfile.gettempdir()),
     ):
         try:
             bundle_resolved.relative_to(temp_root.resolve())

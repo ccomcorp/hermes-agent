@@ -389,3 +389,76 @@ def test_write_manifest_not_exported_for_operator_use() -> None:
     if hasattr(fh, "write_manifest"):
         with pytest.raises((RuntimeError, NotImplementedError, AssertionError)):
             fh.write_manifest("/nonexistent/path")
+
+
+# ============================================================================
+# Regression — B2W: Windows temp-root mismatch via MSYS TMP/TEMP translation
+# ============================================================================
+
+def test_write_manifest_trusts_stdlib_temp_root_regardless_of_env(tmp_path: Path,
+                                                                   monkeypatch) -> None:
+    """write_manifest accepts a bundle under tempfile.gettempdir() even when
+    TMP and TEMP are set to values that do not describe the real temp root.
+
+    On Windows under MSYS/git-bash, TMP/TEMP are translated to POSIX paths
+    (/tmp, /c/Users/...) while pytest tmp_path resolves under the Windows
+    stdlib temp root (C:\\Users\\...\\AppData\\Local\\Temp). The guard must
+    trust the platform-authoritative tempfile.gettempdir(), rather than
+    env-var roots.
+    """
+    import tempfile
+
+    bundle = _make_minimal_bundle(tmp_path)
+
+    # Force TMP/TEMP to values that cannot describe the real temp root.
+    monkeypatch.setenv("TMP", "/tmp")
+    monkeypatch.setenv("TEMP", "/tmp")
+
+    # Prove: write_manifest succeeds against the real stdlib temp root.
+    manifest_path = write_manifest(
+        bundle_dir=str(bundle),
+        source_commit="089213f",
+        source_sha256="352bd22a5703cdbff93777524c1667fa440e29e8f2c5ac1f905612ec82e7a06f",
+    )
+    assert Path(manifest_path).exists()
+
+    # Prove: a clearly non-temp path is still rejected (fail-closed intact).
+    real_temp = tempfile.gettempdir()
+    non_temp = str(bundle).replace(real_temp, "/home/user/docs")
+    with pytest.raises(RuntimeError, match="Refusing path"):
+        write_manifest(bundle_dir=non_temp)
+
+
+# ============================================================================
+# Regression — B2WR: hostile TMP/TEMP must NOT authorize arbitrary directory
+# ============================================================================
+
+def test_write_manifest_rejects_hostile_env_temp_roots(tmp_path, monkeypatch) -> None:
+    """write_manifest rejects a path whose only claim to temp-root legitimacy
+    is that TMP or TEMP points to it.
+
+    Before B2WR the trusted-roots guard included os.environ["TMP"] and
+    os.environ["TEMP"], allowing an attacker to set TMP=/arbitrary/parent
+    and call write_manifest on a child path.  After the fix, only fixed
+    system roots (/tmp, /var/tmp) plus tempfile.gettempdir() are trusted;
+    env-variable roots are removed.
+    """
+    # --- Arrange: set TMP and TEMP to a path that is NOT any trusted root ---
+    # Use a path that is clearly not /tmp, /var/tmp, or the stdlib temp dir.
+    hostile_root = "/hostile/temp"
+    monkeypatch.setenv("TMP", hostile_root)
+    monkeypatch.setenv("TEMP", hostile_root)
+
+    # --- Assert: hostile-child path is REJECTED ---
+    # The path "/hostile/temp/bundle" is a child of the hostile TMP root.
+    # After B2WR, no trusted root authorises it → RuntimeError.
+    with pytest.raises(RuntimeError, match="Refusing path"):
+        write_manifest(bundle_dir=hostile_root + "/bundle")
+
+    # --- Assert: stdlib temp root is still trusted (EVAL-B2WR-03) ---
+    # tmp_path lives under tempfile.gettempdir(), which remains a trusted root.
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest_path = write_manifest(bundle_dir=str(bundle),
+                                   source_commit="089213f",
+                                   source_sha256="352bd22a57")
+    assert Path(manifest_path).exists()
