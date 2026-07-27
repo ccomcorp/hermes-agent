@@ -1881,3 +1881,93 @@ def test_new_same_role_row_after_repair_still_aborts(tmp_path: Path) -> None:
     assert agent.session_id == parent_sid
     assert db.find_live_compression_child(parent_sid) is None
     agent.context_compressor.compress.assert_not_called()
+
+
+def test_model_switch_display_only_row_does_not_abort_rotation(
+    tmp_path: Path,
+) -> None:
+    """display_kind=model_switch rows must not trigger the drift guard.
+
+    model_switch rows are display-only markers (persisted by the model-switch
+    flow so the resume display can render a model-change event).  They are
+    NOT part of the model-fed runtime history, and a concurrent model-switch
+    insert between snapshot and drift-check must not cause a false abort.
+
+    Two assertions drive this:
+    1. get_latest_active_message_row_id ignores model_switch rows
+       (the drift guard sees the same high-water mark as the snapshot).
+    2. A durable model_switch insert after the snapshot does not block
+       compression — the guard proceeds and a child session is created.
+    """
+    from agent.agent_runtime_helpers import repair_message_sequence
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    parent_sid = "MODEL_SWITCH_DISPLAY_ONLY"
+    db.create_session(parent_sid, source="webui")
+
+    # Build alternating base.
+    db.append_message(parent_sid, "user", "q1", timestamp=1.0)
+    db.append_message(parent_sid, "assistant", "a1", timestamp=2.0)
+    db.append_message(parent_sid, "user", "q2", timestamp=3.0)
+    db.append_message(parent_sid, "assistant", "a2", timestamp=4.0)
+
+    # Snapshot the model-fed history BEFORE injecting model_switch.
+    snapshot = db.get_messages_as_conversation(
+        parent_sid, repair_alternation=True, include_internal_row_ids=True
+    )
+    assert [m["_db_row_id"] for m in snapshot] == [1, 2, 3, 4]
+
+    # A concurrent model switch inserts a display-only row AFTER the snapshot.
+    # This row must NOT inflate get_latest_active_message_row_id.
+    db.append_message(
+        parent_sid,
+        "user",
+        "[Switched to model X]",
+        display_kind="model_switch",
+        timestamp=5.0,
+    )
+
+    # ---- Assertion 1: get_latest_active_message_row_id ignores it ----
+    snapshot_max_id = max(
+        m["_db_row_id"]
+        for m in snapshot
+        if isinstance(m.get("_db_row_id"), int) and m["_db_row_id"] > 0
+    )
+    latest_row_id = db.get_latest_active_message_row_id(parent_sid)
+    assert latest_row_id == snapshot_max_id, (
+        f"get_latest_active_message_row_id returned {latest_row_id} "
+        f"but snapshot max row id is {snapshot_max_id} — "
+        f"model_switch row should be ignored"
+    )
+
+    # But it remains in the display projection.
+    display_all = db.get_messages_as_conversation(parent_sid)
+    assert any(
+        m.get("display_kind") == "model_switch" for m in display_all
+    ), "model_switch row missing from display projection"
+
+    # The model_switch row IS visible in the raw model-fed projection
+    # (it has role="user"), but the drift guard ignores it via
+    # get_latest_active_message_row_id — which we already proved above.
+
+    # ---- Assertion 2: model_switch insert after snapshot does not block ----
+    snapshot_max_id = max(
+        m["_db_row_id"]
+        for m in snapshot
+        if isinstance(m.get("_db_row_id"), int) and m["_db_row_id"] > 0
+    )
+
+    agent = _build_agent_with_db(db, parent_sid)
+    returned, _system_prompt = agent._compress_context(
+        snapshot, "sys", approx_tokens=120_000
+    )
+
+    # Compression must proceed — not abort.
+    assert returned is not snapshot, (
+        "compression should proceed when only a display-only row was added"
+    )
+    child = db.find_live_compression_child(parent_sid)
+    assert child is not None, (
+        "no compression child — rotation was blocked by display-only row"
+    )
+    agent.context_compressor.compress.assert_called_once()

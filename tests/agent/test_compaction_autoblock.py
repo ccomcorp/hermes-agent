@@ -5,8 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
-
 from agent.conversation_compression import compress_context
 
 
@@ -56,12 +54,8 @@ def _compress(agent):
     )
 
 
-def test_worker_at_limit_blocks_once_and_latches(monkeypatch):
-    calls = []
-
-    def fake_block(**kwargs):
-        calls.append(kwargs)
-        return True
+def test_worker_successful_compressions_do_not_block(monkeypatch):
+    block = Mock()
 
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_big")
     monkeypatch.setattr(
@@ -70,17 +64,17 @@ def test_worker_at_limit_blocks_once_and_latches(monkeypatch):
     )
     monkeypatch.setattr(
         "tools.kanban_tools.block_current_worker_for_decomposition",
-        fake_block,
+        block,
         raising=False,
     )
 
     agent = _agent_with_compression_count(3)
     _compress(agent)
-    agent.context_compressor.compression_count = 4
-    _compress(agent)
 
-    assert calls == [{"task_id": "t_big", "compression_count": 3, "limit": 3}]
-    assert agent._compaction_autoblock_fired is True
+    # A completed compression has made real progress. Cumulative session count
+    # is a quality warning only; it is not evidence this worker is stuck.
+    block.assert_not_called()
+    assert not getattr(agent, "_compaction_autoblock_fired", False)
 
 
 def test_non_worker_never_blocks(monkeypatch):
@@ -97,50 +91,22 @@ def test_non_worker_never_blocks(monkeypatch):
     block.assert_not_called()
 
 
-@pytest.mark.parametrize("config", [
-    {"kanban": {"compaction_block_limit": 0}},
-    {"kanban": {}},
-])
-def test_limit_zero_disables_and_missing_limit_defaults_to_three(monkeypatch, config):
-    calls = []
-    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_big")
-    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: config)
-    monkeypatch.setattr(
-        "tools.kanban_tools.block_current_worker_for_decomposition",
-        lambda **kwargs: calls.append(kwargs) or True,
-        raising=False,
-    )
-
-    _compress(_agent_with_compression_count(2))
-    assert calls == []
-
-    _compress(_agent_with_compression_count(3))
-    expected = [] if config["kanban"].get("compaction_block_limit") == 0 else [
-        {"task_id": "t_big", "compression_count": 3, "limit": 3}
-    ]
-    assert calls == expected
-
-
-def test_helper_failure_is_swallowed(monkeypatch):
+def test_compaction_block_config_does_not_reintroduce_cumulative_worker_blocks(monkeypatch):
+    block = Mock()
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_big")
     monkeypatch.setattr(
         "hermes_cli.config.load_config_readonly",
         lambda: {"kanban": {"compaction_block_limit": 3}},
     )
-
-    def boom(**_kwargs):
-        raise RuntimeError("db locked")
-
     monkeypatch.setattr(
         "tools.kanban_tools.block_current_worker_for_decomposition",
-        boom,
+        block,
         raising=False,
     )
 
-    compressed, prompt = _compress(_agent_with_compression_count(3))
-
-    assert compressed
-    assert prompt == "rebuilt system prompt"
+    _compress(_agent_with_compression_count(2))
+    _compress(_agent_with_compression_count(3))
+    block.assert_not_called()
 
 
 def test_block_helper_reason_contract(monkeypatch):

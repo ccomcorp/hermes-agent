@@ -1582,7 +1582,9 @@ class TestMessageStorage:
             ],
         )
 
-        model_expected = db.get_messages_as_conversation("child", repair_alternation=True)
+        model_expected = db.get_messages_as_conversation(
+            "child", repair_alternation=True, include_internal_row_ids=True
+        )
         display_expected = db.get_messages_as_conversation("child", include_ancestors=True)
 
         model_history, display_history = db.get_resume_conversations("child")
@@ -1597,12 +1599,61 @@ class TestMessageStorage:
         db.append_message("solo", role="user", content="hi")
         db.append_message("solo", role="assistant", content="hello")
 
-        model_expected = db.get_messages_as_conversation("solo", repair_alternation=True)
+        model_expected = db.get_messages_as_conversation(
+            "solo", repair_alternation=True, include_internal_row_ids=True
+        )
         display_expected = db.get_messages_as_conversation("solo", include_ancestors=True)
         model_history, display_history = db.get_resume_conversations("solo")
 
         assert model_history == model_expected
         assert display_history == display_expected
+
+    def test_get_resume_conversations_excludes_model_switch_from_model_history(self, db):
+        """Model-switch timeline events stay visible but never enter model context."""
+        db.create_session("switch-event", "tui")
+        db.append_message("switch-event", role="user", content="hi")
+        db.append_message(
+            "switch-event",
+            role="user",
+            content="Switched model",
+            display_kind="model_switch",
+        )
+        db.append_message("switch-event", role="assistant", content="hello")
+
+        model_history, display_history = db.get_resume_conversations("switch-event")
+
+        assert [message["content"] for message in model_history] == ["hi", "hello"]
+        assert db.get_latest_active_message_row_id("switch-event") == max(
+            message["_db_row_id"] for message in model_history
+        )
+        assert [message.get("display_kind") for message in display_history] == [
+            None,
+            "model_switch",
+            None,
+        ]
+
+    @pytest.mark.parametrize(
+        "display_kind",
+        ["hidden", "async_delegation_complete", "auto_continue"],
+    )
+    def test_latest_active_row_counts_model_fed_display_kinds(self, db, display_kind):
+        """Display styling does not imply a row is absent from model context."""
+        db.create_session("model-fed-display-kind", "tui")
+        first_id = db.append_message(
+            "model-fed-display-kind", role="user", content="first"
+        )
+        latest_id = db.append_message(
+            "model-fed-display-kind",
+            role="assistant",
+            content="still model context",
+            display_kind=display_kind,
+        )
+
+        assert latest_id > first_id
+        assert (
+            db.get_latest_active_message_row_id("model-fed-display-kind")
+            == latest_id
+        )
 
     def test_get_resume_conversations_dedupes_replayed_ancestor_user(self, db):
         db.create_session("root", "tui")
@@ -1612,7 +1663,9 @@ class TestMessageStorage:
         db.create_session("child", "tui", parent_session_id="root")
         db.append_message("child", role="user", content="next prompt")
 
-        model_expected = db.get_messages_as_conversation("child", repair_alternation=True)
+        model_expected = db.get_messages_as_conversation(
+            "child", repair_alternation=True, include_internal_row_ids=True
+        )
         display_expected = db.get_messages_as_conversation("child", include_ancestors=True)
         model_history, display_history = db.get_resume_conversations("child")
 

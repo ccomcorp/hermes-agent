@@ -7193,11 +7193,23 @@ class SessionDB:
 
             return best if best is not None else session_id
 
+    @staticmethod
+    def _is_model_fed_message_row(row) -> bool:
+        """Return whether a durable row belongs in live model history.
+
+        Model-switch markers are client timeline events only. Other display
+        kinds (for example hidden compression context, async delegation
+        completions, and auto-continue turns) still carry model input.
+        """
+        return row["display_kind"] != "model_switch"
+
     def get_latest_active_message_row_id(self, session_id: str) -> int:
-        """Return the monotonic SQLite id of the newest active row for a session."""
+        """Return the newest active model-fed SQLite row id for a session."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT MAX(id) AS row_id FROM messages WHERE session_id = ? AND active = 1",
+                "SELECT MAX(id) AS row_id FROM messages "
+                "WHERE session_id = ? AND active = 1 "
+                "AND (display_kind IS NULL OR display_kind != 'model_switch')",
                 (session_id,),
             ).fetchone()
         value = row["row_id"] if row is not None else None
@@ -7426,10 +7438,14 @@ class SessionDB:
                 tuple(session_ids),
             ).fetchall()
 
-        # Tip rows are exactly the model-fed set (get_messages_as_conversation
-        # with session_ids=[session_id]); filtering the lineage fetch preserves
-        # their relative id order.
-        tip_rows = [r for r in rows if r["session_id"] == session_id]
+        # Only the tip session feeds the model. Timeline-only rows remain in
+        # display_history but are deliberately absent from live model context.
+        tip_rows = [
+            row
+            for row in rows
+            if row["session_id"] == session_id
+            and self._is_model_fed_message_row(row)
+        ]
         model_history = self._rows_to_conversation(
             tip_rows,
             session_id=session_id,

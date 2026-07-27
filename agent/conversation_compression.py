@@ -1735,11 +1735,14 @@ def compress_context(
                 durable_newer = isinstance(durable_row_id, int) and durable_row_id > snapshot_row_id
 
             durable_loader = getattr(type(_lock_db), "get_messages_as_conversation", None)
-            if not durable_newer and callable(durable_loader):
+            if not snapshot_row_id and callable(durable_loader):
+                # Older restoration paths lack the private row-id watermark.
+                # Only fall back to repaired-length comparison when watermarks
+                # are absent; when they exist the row-id check above is
+                # authoritative (it already excludes display-only rows via
+                # get_latest_active_message_row_id).
                 durable_parent = durable_loader(_lock_db, _lock_sid)
                 if isinstance(durable_parent, list):
-                    # Older restoration paths lack the private row-id watermark.
-                    # Preserve their existing repaired-length fallback.
                     import copy as _copy
                     from agent.agent_runtime_helpers import repair_message_sequence
                     durable_repaired = _copy.deepcopy(durable_parent)
@@ -2314,32 +2317,6 @@ def compress_context(
             )
             agent._compression_warning = _cc_msg
             agent._emit_status(_cc_msg)
-
-        # Kanban worker backpressure: if one card forces repeated lossy
-        # compactions, stop burning runs on a summary-of-summary context and
-        # hand it back to the orchestrator for decomposition. Worker-only,
-        # once per run, fail-open so compression itself is never endangered.
-        try:
-            _task_id = os.environ.get("HERMES_KANBAN_TASK")
-            if _task_id and not getattr(agent, "_compaction_autoblock_fired", False):
-                from hermes_cli.config import load_config_readonly
-
-                _limit = int(
-                    (load_config_readonly().get("kanban") or {}).get(
-                        "compaction_block_limit", 3
-                    ) or 0
-                )
-                if _limit and _cc >= _limit:
-                    agent._compaction_autoblock_fired = True
-                    from tools.kanban_tools import block_current_worker_for_decomposition
-
-                    block_current_worker_for_decomposition(
-                        task_id=_task_id,
-                        compression_count=_cc,
-                        limit=_limit,
-                    )
-        except Exception:
-            logger.debug("compaction auto-block bridge failed", exc_info=True)
 
         # Emit session:compress event so hooks (e.g. MemPalace sync) can ingest
         # the completed old session before its details are lost. In in-place mode
