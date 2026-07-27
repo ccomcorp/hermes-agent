@@ -85,6 +85,18 @@ _MAX_DURABLE_PENDING = 1000
 _MAX_DELIVERY_ATTEMPTS = 8
 _DB_LOCK = threading.Lock()
 
+# A detached worker is only unhealthy when it stops making progress, not when
+# it merely runs for a long time.  The monitor samples delegate_tool's activity
+# token and gives a stalled worker an interrupt/grace window before finalizing.
+_STALE_CHECK_INTERVAL = 30.0
+_STALE_IDLE_SECONDS = 450.0
+_STALE_IN_TOOL_SECONDS = 1200.0
+_STALL_GRACE_SECONDS = 120.0
+
+_monitor_lock = threading.Lock()
+_monitor_thread: Optional[threading.Thread] = None
+_monitor_stop = threading.Event()
+
 
 def _db_path():
     return get_hermes_home() / "state.db"
@@ -505,7 +517,11 @@ def _get_executor(max_workers: int) -> ThreadPoolExecutor:
 def active_count() -> int:
     """Number of async delegations currently running."""
     with _records_lock:
-        return sum(1 for r in _records.values() if r.get("status") in {"running", "finalizing"})
+        return sum(
+            1
+            for r in _records.values()
+            if r.get("status") in {"running", "stalling", "finalizing"}
+        )
 
 
 def _new_delegation_id() -> str:
@@ -627,13 +643,19 @@ def dispatch_async_delegation(
         "dispatched_at": dispatched_at,
         "completed_at": None,
         "interrupt_fn": interrupt_fn,
+        "progress_fn": progress_fn,
+        "_progress_token": None,
+        "_progress_ts": dispatched_at,
+        "_interrupted_at": None,
     }
     # Capacity check and record insert under ONE lock hold — checking
     # active_count() separately would let two concurrent dispatches (e.g.
     # from different gateway sessions) both pass the check and exceed the cap.
     with _records_lock:
         running = sum(
-            1 for r in _records.values() if r.get("status") == "running"
+            1
+            for r in _records.values()
+            if r.get("status") in {"running", "stalling"}
         )
         if running >= max_async_children:
             return {
@@ -682,6 +704,8 @@ def dispatch_async_delegation(
             "status": "rejected",
             "error": f"Failed to schedule async delegation: {exc}",
         }
+    if progress_fn is not None:
+        _ensure_stale_monitor()
 
     logger.info(
         "Dispatched async delegation %s (session_key=%s): %s",
@@ -692,19 +716,31 @@ def dispatch_async_delegation(
 
 def _finalize(delegation_id: str, result: Dict[str, Any], status: str) -> None:
     """Mark a record complete and push the completion event onto the queue."""
+    claimed = _begin_finalization(delegation_id)
+    if claimed is None:
+        return
+    event_record, _interrupt_fn = claimed
+    _push_completion_event(event_record, result, status)
+    _finish_finalization(delegation_id, status)
+
+
+def _begin_finalization(
+    delegation_id: str,
+) -> Optional[tuple[Dict[str, Any], Optional[Callable[[], None]]]]:
+    """Atomically claim terminal delivery against worker/monitor races."""
     with _records_lock:
         record = _records.get(delegation_id)
-        if record is None:
-            return
-        # Stay active until durable persistence and queue publication finish;
-        # otherwise process shutdown can kill this daemon worker in the narrow
-        # gap after status flips but before SQLite is committed.
+        if record is None or record.get("status") not in {"running", "stalling"}:
+            return None
         record["status"] = "finalizing"
         record["completed_at"] = time.time()
-        record["interrupt_fn"] = None  # drop the closure; child is done
-        event_record = dict(record)
+        interrupt_fn = record.get("interrupt_fn")
+        record["interrupt_fn"] = None
+        record["progress_fn"] = None
+        return dict(record), interrupt_fn
 
-    _push_completion_event(event_record, result, status)
+
+def _finish_finalization(delegation_id: str, status: str) -> None:
     with _records_lock:
         record = _records.get(delegation_id)
         if record is not None:
@@ -761,6 +797,14 @@ def _push_completion_event(
         "completed_at": completed_at,
         "exit_reason": result.get("exit_reason"),
     }
+    for key in (
+        "stalled_after_quiet_seconds",
+        "stall_threshold_seconds",
+        "stall_phase",
+        "stall_grace_seconds",
+    ):
+        if key in result:
+            evt[key] = result[key]
     _persist_completion(evt, result)
     try:
         process_registry.completion_queue.put(evt)
@@ -788,6 +832,7 @@ def dispatch_async_delegation_batch(
     max_async_children: int = _DEFAULT_MAX_ASYNC_CHILDREN,
     route: Optional[Any] = None,
     delegation_id: Optional[str] = None,
+    progress_fn: Optional[Callable[[], tuple]] = None,
 ) -> Dict[str, Any]:
     """Dispatch a WHOLE fan-out batch as ONE background unit.
 
@@ -834,10 +879,16 @@ def dispatch_async_delegation_batch(
         "completed_at": None,
         "interrupt_fn": interrupt_fn,
         "is_batch": True,
+        "progress_fn": progress_fn,
+        "_progress_token": None,
+        "_progress_ts": dispatched_at,
+        "_interrupted_at": None,
     }
     with _records_lock:
         running = sum(
-            1 for r in _records.values() if r.get("status") == "running"
+            1
+            for r in _records.values()
+            if r.get("status") in {"running", "stalling"}
         )
         if running >= max_async_children:
             return {
@@ -890,6 +941,8 @@ def dispatch_async_delegation_batch(
             "status": "rejected",
             "error": f"Failed to schedule async delegation batch: {exc}",
         }
+    if progress_fn is not None:
+        _ensure_stale_monitor()
 
     logger.info(
         "Dispatched async delegation batch %s (%d task(s), session_key=%s)",
@@ -902,14 +955,18 @@ def _finalize_batch(
     delegation_id: str, combined: Dict[str, Any], status: str
 ) -> None:
     """Mark a batch record complete and push ONE combined completion event."""
-    with _records_lock:
-        record = _records.get(delegation_id)
-        if record is None:
-            return
-        record["status"] = "finalizing"
-        record["completed_at"] = time.time()
-        record["interrupt_fn"] = None
-        event_record = dict(record)
+    claimed = _begin_finalization(delegation_id)
+    if claimed is None:
+        return
+    event_record, _interrupt_fn = claimed
+    _push_batch_completion_event(event_record, combined, status)
+    _finish_finalization(delegation_id, status)
+
+
+def _push_batch_completion_event(
+    event_record: Dict[str, Any], combined: Dict[str, Any], status: str
+) -> None:
+    """Push a combined async-delegation batch completion event."""
 
     try:
         from tools.process_registry import process_registry
@@ -917,7 +974,7 @@ def _finalize_batch(
         logger.error(
             "Async delegation batch %s finished but process_registry import "
             "failed; result lost: %s",
-            delegation_id, exc,
+            event_record.get("delegation_id"), exc,
         )
         return
 
@@ -925,7 +982,7 @@ def _finalize_batch(
     completed_at = event_record.get("completed_at") or time.time()
     evt = {
         "type": "async_delegation",
-        "delegation_id": delegation_id,
+        "delegation_id": event_record.get("delegation_id"),
         "session_key": event_record.get("session_key", ""),
         "origin_ui_session_id": event_record.get("origin_ui_session_id", ""),
         "origin_session_id": event_record.get("origin_session_id", ""),
@@ -951,6 +1008,14 @@ def _finalize_batch(
         "dispatched_at": dispatched_at,
         "completed_at": completed_at,
     }
+    for key in (
+        "stalled_after_quiet_seconds",
+        "stall_threshold_seconds",
+        "stall_phase",
+        "stall_grace_seconds",
+    ):
+        if key in combined:
+            evt[key] = combined[key]
     _persist_completion(evt, combined)
     try:
         process_registry.completion_queue.put(evt)
@@ -958,26 +1023,171 @@ def _finalize_batch(
         logger.error(
             "Async delegation batch %s: failed to enqueue completion event; "
             "result lost: %s",
-            delegation_id, exc,
+            event_record.get("delegation_id"), exc,
         )
-    finally:
-        with _records_lock:
-            record = _records.get(delegation_id)
-            if record is not None:
-                record["status"] = status
-            _prune_completed_locked()
+
+
+def _ensure_stale_monitor() -> None:
+   """Start the one shared progress monitor when a dispatch supplies a sampler."""
+   global _monitor_thread
+   with _monitor_lock:
+       if _monitor_thread is not None and _monitor_thread.is_alive():
+           return
+       _monitor_stop.clear()
+       _monitor_thread = threading.Thread(
+           target=_stale_monitor_loop,
+           name="async-delegate-stale-monitor",
+           daemon=True,
+       )
+       _monitor_thread.start()
+
+
+def _stale_monitor_loop() -> None:
+   """Interrupt frozen work, then publish one terminal stalled event on expiry."""
+   while not _monitor_stop.wait(_STALE_CHECK_INTERVAL):
+       now = time.time()
+       interrupt_ids: list[str] = []
+       expire_ids: list[str] = []
+       monitorable = False
+       with _records_lock:
+           for record in _records.values():
+               status = record.get("status")
+               if status == "stalling":
+                   monitorable = True
+                   if now - (record.get("_interrupted_at") or now) >= _STALL_GRACE_SECONDS:
+                       expire_ids.append(record["delegation_id"])
+                   continue
+               if status != "running" or not callable(record.get("progress_fn")):
+                   continue
+               monitorable = True
+               try:
+                   token, in_tool = record["progress_fn"]()
+               except Exception:
+                   token, in_tool = record.get("_progress_token"), False
+               if token != record.get("_progress_token"):
+                   record["_progress_token"] = token
+                   record["_progress_ts"] = now
+                   continue
+               quiet_seconds = now - (record.get("_progress_ts") or now)
+               threshold = _STALE_IN_TOOL_SECONDS if in_tool else _STALE_IDLE_SECONDS
+               if quiet_seconds >= threshold:
+                   record["status"] = "stalling"
+                   record["_interrupted_at"] = now
+                   record["_stall_quiet_seconds"] = round(quiet_seconds, 2)
+                   record["_stall_threshold_seconds"] = threshold
+                   record["_stall_in_tool"] = bool(in_tool)
+                   interrupt_ids.append(record["delegation_id"])
+       for delegation_id in interrupt_ids:
+           with _records_lock:
+               interrupt = (_records.get(delegation_id) or {}).get("interrupt_fn")
+           if callable(interrupt):
+               try:
+                   interrupt()
+               except Exception:
+                   logger.debug("Async delegation %s stall interrupt failed", delegation_id, exc_info=True)
+       for delegation_id in expire_ids:
+           _finalize_stalled(delegation_id)
+       if not monitorable:
+           return
+
+
+def _finalize_stalled(delegation_id: str) -> None:
+   """Release a wedged async slot and deliver the structured failure once."""
+   claimed = _begin_finalization(delegation_id)
+   if claimed is None:
+       return
+   record, _interrupt = claimed
+   completed_at = record.get("completed_at") or time.time()
+   duration = round(completed_at - (record.get("dispatched_at") or completed_at), 2)
+   metadata = {
+       "stalled_after_quiet_seconds": record.get("_stall_quiet_seconds"),
+       "stall_threshold_seconds": record.get("_stall_threshold_seconds"),
+       "stall_phase": "in_tool" if record.get("_stall_in_tool") else "idle",
+       "stall_grace_seconds": _STALL_GRACE_SECONDS,
+   }
+   error = (
+       f"Async delegation {delegation_id} stalled: no model, streamed-token, "
+       "or tool progress was observed and the child did not unwind after interruption."
+   )
+   if record.get("is_batch"):
+       _push_batch_completion_event(
+           record,
+           {"results": [], "error": error, "total_duration_seconds": duration, **metadata},
+           "stalled",
+       )
+   else:
+       _push_completion_event(
+           record,
+           {"status": "stalled", "summary": None, "error": error,
+            "api_calls": 0, "duration_seconds": duration, "exit_reason": "stalled", **metadata},
+           "stalled",
+       )
+   _finish_finalization(delegation_id, "stalled")
+
+
+def _children_activity_from_token(token: Any, now: float) -> Optional[List]:
+   try:
+       parts = list(token)
+   except TypeError:
+       return None
+   activity: List[Optional[Dict[str, Any]]] = []
+   for part in parts:
+       if not isinstance(part, (list, tuple)) or len(part) < 2:
+           activity.append(None)
+           continue
+       item: Dict[str, Any] = {"api_calls": part[0], "current_tool": part[1]}
+       if len(part) >= 3 and isinstance(part[2], (int, float)):
+           item["seconds_since_activity"] = round(max(0.0, now - float(part[2])), 1)
+       activity.append(item)
+   return activity
 
 
 def list_async_delegations() -> List[Dict[str, Any]]:
     """Snapshot of async delegations (running + recently completed).
 
-    Safe to call from any thread. Excludes the non-serialisable interrupt_fn.
+    Safe to call from any thread. Excludes private callbacks, while exposing
+    sampled live child activity for the Spawn tree and /agents surfaces.
     """
+    now = time.time()
+    samplers: Dict[str, Callable] = {}
     with _records_lock:
-        return [
-            {k: v for k, v in r.items() if k != "interrupt_fn"}
-            for r in _records.values()
-        ]
+        items = []
+        for record in _records.values():
+            item = {
+                key: value
+                for key, value in record.items()
+                if key not in {"interrupt_fn", "progress_fn"} and not key.startswith("_")
+            }
+            if record.get("status") in {"running", "stalling"}:
+                progress_at = record.get("_progress_ts")
+                if progress_at:
+                    item["seconds_since_progress"] = round(now - progress_at, 1)
+                sampler = record.get("progress_fn")
+                if callable(sampler):
+                    samplers[record["delegation_id"]] = sampler
+            if record.get("status") in {"stalling", "stalled"}:
+                for source, target in (
+                    ("_stall_quiet_seconds", "stalled_after_quiet_seconds"),
+                    ("_stall_threshold_seconds", "stall_threshold_seconds"),
+                    ("_stall_in_tool", "stall_in_tool"),
+                ):
+                    if record.get(source) is not None:
+                        item[target] = record[source]
+            items.append(item)
+
+    for item in items:
+        sampler = samplers.get(item.get("delegation_id"))
+        if sampler is None:
+            continue
+        try:
+            token, in_tool = sampler()
+        except Exception:
+            continue
+        activity = _children_activity_from_token(token, now)
+        if activity is not None:
+            item["children_activity"] = activity
+        item["in_tool"] = bool(in_tool)
+    return items
 
 
 def interrupt_all(reason: str = "shutdown") -> int:
@@ -990,7 +1200,7 @@ def interrupt_all(reason: str = "shutdown") -> int:
     count = 0
     with _records_lock:
         targets = [
-            r for r in _records.values() if r.get("status") == "running"
+            r for r in _records.values() if r.get("status") in {"running", "stalling"}
         ]
     for r in targets:
         fn = r.get("interrupt_fn")
@@ -1038,7 +1248,7 @@ def interrupt_for_session(
     with _records_lock:
         targets = [
             r for r in _records.values()
-            if r.get("status") == "running"
+            if r.get("status") in {"running", "stalling"}
             and (
                 (origin_ui_session_id and str(r.get("origin_ui_session_id") or "") == origin_ui_session_id)
                 or (session_key and str(r.get("session_key") or "") == session_key)
@@ -1065,12 +1275,18 @@ def interrupt_for_session(
 
 
 def _reset_for_tests() -> None:
-    """Test-only: clear all state and tear down the executor."""
-    global _executor, _executor_max_workers
+    """Test-only: clear all state and tear down the executor and monitor."""
+    global _executor, _executor_max_workers, _monitor_thread
     with _executor_lock:
         if _executor is not None:
             _executor.shutdown(wait=False)
         _executor = None
         _executor_max_workers = 0
+    _monitor_stop.set()
+    with _monitor_lock:
+        thread = _monitor_thread
+        _monitor_thread = None
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2)
     with _records_lock:
         _records.clear()
