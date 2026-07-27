@@ -9,10 +9,12 @@ register anything; the config key does.
 
 ## Directory map
 
-- **`provider.py`** — chassis-side binding (sys.path hack to AIOS packages, subclasses
-  `CompositeMemoryProvider`). Adds fork-append seam (`record_fork_lesson`), D4-A prefetch,
+- **`provider.py`** — chassis-side binding (M0-B3: native imports from `.core` and
+  `.experience_store` — zero `sys.path` hacks, zero AIOS dependency). Subclasses
+  `CompositeMemoryProvider` with fork-append seam (`record_fork_lesson`), D4-A prefetch,
   D3b recall, brain staging (0/1/2), `brain_health()`, and `build_provider(hermes_home)`.
-  WILL be refactored to use `core/` in a follow-up.
+  `loop_self_check` now uses the native store's `circulation()` + `aggregate()` APIs
+  directly.
 - **`core/`** — M0-B1: vendor-native composite engine, ported from AIOS
   `packages/memory/composite-provider/`. Zero `sys.path` hacks, zero AIOS dependency
   for the engine itself (the store is still injected; B2 ports that).
@@ -58,10 +60,9 @@ provider the brain leg is never constructed regardless of env.
   `1` (observe + recall) / `2` (+ backgrounded paired reward, the learning leg).
   Garbage clamps to `0`.
 - `HERMES_BRAIN_URL` overrides the endpoint (default `http://1.1.11.31:8000`).
-- `AIOS_PACKAGES_DIR` overrides the sibling-checkout path to the two AIOS packages.
-- Canonical instance home: `HERMES_HOME=I:\PROJECTS\AIOS\hermes-home` (where
-  `experience.db` lives) — NOT the stale `%LOCALAPPDATA%\hermes` home.
 
-Stage 1 verified live 2026-06-13 on the canonical desktop. Full design lives AIOS-side in
-`docs/architecture/SPEC-m1-experience-store.md`; operator quick-reference in the AIOS root
-`AGENTS.md` ("Brain activation (M1 add-on)") and `docs/architecture/REF-brain-activation-settings.md`.
+The provider has no `AIOS_PACKAGES_DIR` or `AIOS_HEALTH_DIR` dependency — it imports
+natively from `.core` and `.experience_store` (relative, zero `sys.path` hacks). The
+experience store lives at `{hermes_home}/experience.db` (resolved in `build_provider` via
+`os.path.join(hermes_home, "experience.db")`); the canonical home is whatever
+`get_hermes_home()` returns at process start, not a hardcoded path.
