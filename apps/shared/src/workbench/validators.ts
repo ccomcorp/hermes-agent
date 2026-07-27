@@ -3,19 +3,19 @@
 // Validate artifact requests at every boundary — IPC handlers, backend APIs,
 // and UI actions should all pass through these before filesystem writes.
 
+import { isSafeWorkbenchRelativePath } from './paths'
 import type {
+  CreateWorkbenchChangeSetRequest,
+  CreateWorkbenchPlanRequest,
   CreateWorkbenchRequirementRequest,
   UpdateWorkbenchRequirementRequest,
-  CreateWorkbenchPlanRequest,
-  CreateWorkbenchChangeSetRequest,
-  WriteWorkbenchDesignSettingsRequest,
-  WorkbenchRequirementStatus,
   WorkbenchChangeSetStatus,
   WorkbenchChangeSource,
+  WorkbenchDesignSettings,
   WorkbenchPlanOperation,
-  WorkbenchDesignSettings
+  WorkbenchRequirementStatus,
+  WriteWorkbenchDesignSettingsRequest
 } from './types'
-import { isSafeWorkbenchRelativePath } from './paths'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,9 +92,11 @@ function validateWorkspaceRoot(value: string): ValidationResult {
   if (!value || typeof value !== 'string') {
     return fail('workspaceRoot is required', 'MISSING_WORKSPACE_ROOT')
   }
+
   if (value.length > MAX_FILE_PATH_LENGTH) {
     return fail('workspaceRoot is too long', 'WORKSPACE_ROOT_TOO_LONG')
   }
+
   return ok()
 }
 
@@ -102,9 +104,11 @@ function validateTitle(value: string): ValidationResult {
   if (!value || typeof value !== 'string' || !value.trim()) {
     return fail('title is required', 'MISSING_TITLE')
   }
+
   if (value.length > MAX_TITLE_LENGTH) {
     return fail('title is too long', 'TITLE_TOO_LONG')
   }
+
   return ok()
 }
 
@@ -112,9 +116,11 @@ function validateMarkdown(value: string | undefined, required: boolean): Validat
   if (required && (!value || !value.trim())) {
     return fail('markdown is required', 'MISSING_MARKDOWN')
   }
+
   if (value && value.length > MAX_MARKDOWN_LENGTH) {
     return fail('markdown exceeds size limit', 'MARKDOWN_TOO_LARGE')
   }
+
   return ok()
 }
 
@@ -126,13 +132,16 @@ export function validateCreateRequirementRequest(
   input: CreateWorkbenchRequirementRequest
 ): ValidationResult {
   const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
-  if (!rootCheck.ok) return rootCheck
+
+  if (!rootCheck.ok) {return rootCheck}
 
   const titleCheck = validateTitle(input.title)
-  if (!titleCheck.ok) return titleCheck
+
+  if (!titleCheck.ok) {return titleCheck}
 
   const mdCheck = validateMarkdown(input.markdown, false)
-  if (!mdCheck.ok) return mdCheck
+
+  if (!mdCheck.ok) {return mdCheck}
 
   if (input.source && !['user', 'chat', 'import'].includes(input.source)) {
     return fail('invalid source', 'INVALID_SOURCE')
@@ -149,18 +158,21 @@ export function validateUpdateRequirementRequest(
   input: UpdateWorkbenchRequirementRequest
 ): ValidationResult {
   const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
-  if (!rootCheck.ok) return rootCheck
+
+  if (!rootCheck.ok) {return rootCheck}
 
   if (!input.requirementId || !input.requirementId.trim()) {
     return fail('requirementId is required', 'MISSING_REQUIREMENT_ID')
   }
 
   const mdCheck = validateMarkdown(input.markdown, true)
-  if (!mdCheck.ok) return mdCheck
+
+  if (!mdCheck.ok) {return mdCheck}
 
   if (input.title) {
     const titleCheck = validateTitle(input.title)
-    if (!titleCheck.ok) return titleCheck
+
+    if (!titleCheck.ok) {return titleCheck}
   }
 
   if (input.status && !VALID_REQUIREMENT_STATUSES.includes(input.status)) {
@@ -178,14 +190,17 @@ export function validateCreatePlanRequest(
   input: CreateWorkbenchPlanRequest
 ): ValidationResult {
   const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
-  if (!rootCheck.ok) return rootCheck
+
+  if (!rootCheck.ok) {return rootCheck}
 
   const mdCheck = validateMarkdown(input.markdown, true)
-  if (!mdCheck.ok) return mdCheck
+
+  if (!mdCheck.ok) {return mdCheck}
 
   if (input.title) {
     const titleCheck = validateTitle(input.title)
-    if (!titleCheck.ok) return titleCheck
+
+    if (!titleCheck.ok) {return titleCheck}
   }
 
   if (input.sourceRequest && input.sourceRequest.length > MAX_SOURCE_REQUEST_LENGTH) {
@@ -215,10 +230,12 @@ export function validateCreateChangeSetRequest(
   input: CreateWorkbenchChangeSetRequest
 ): ValidationResult {
   const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
-  if (!rootCheck.ok) return rootCheck
+
+  if (!rootCheck.ok) {return rootCheck}
 
   const titleCheck = validateTitle(input.title)
-  if (!titleCheck.ok) return titleCheck
+
+  if (!titleCheck.ok) {return titleCheck}
 
   if (input.summary && input.summary.length > MAX_SUMMARY_LENGTH) {
     return fail('summary is too long', 'SUMMARY_TOO_LONG')
@@ -244,9 +261,11 @@ export function validateCreateChangeSetRequest(
     if (!file.path || typeof file.path !== 'string') {
       return fail('file.path is required', 'MISSING_FILE_PATH')
     }
+
     if (file.path.length > MAX_FILE_PATH_LENGTH) {
       return fail('file.path is too long', 'FILE_PATH_TOO_LONG')
     }
+
     if (file.diff && file.diff.length > MAX_MARKDOWN_LENGTH) {
       return fail('file.diff exceeds size limit', 'DIFF_TOO_LARGE')
     }
@@ -271,7 +290,8 @@ export function validateWriteDesignSettingsRequest(
   input: WriteWorkbenchDesignSettingsRequest
 ): ValidationResult {
   const rootCheck = validateWorkspaceRoot(input.workspaceRoot)
-  if (!rootCheck.ok) return rootCheck
+
+  if (!rootCheck.ok) {return rootCheck}
 
   const settings = input.settings
 

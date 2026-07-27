@@ -19,6 +19,7 @@ type MockAtom<T> = {
 function makeMockAtom<T>(initial: T): MockAtom<T> {
   let value = initial
   const listeners = new Set<(v: T) => void>()
+
   return {
     get: () => value,
     set: (v: T) => {
@@ -27,12 +28,14 @@ function makeMockAtom<T>(initial: T): MockAtom<T> {
     },
     subscribe: (fn: (v: T) => void) => {
       listeners.add(fn)
+
       return () => {
         listeners.delete(fn)
       }
     },
     listen: (fn: (v: T) => void) => {
       listeners.add(fn)
+
       return () => {
         listeners.delete(fn)
       }
@@ -138,6 +141,7 @@ describe('useAutoSpeakReplies', () => {
 
   it('EVAL-VDP-005b: uses spoken_reply when speakMode is "conversational" and spoken_reply is present', async () => {
     $sm.set('conversational')
+
     const reply: Reply = {
       id: 'resp-1',
       pending: false,
@@ -162,6 +166,7 @@ describe('useAutoSpeakReplies', () => {
 
   it('EVAL-VDP-005b-fallback: short synthesis when spoken_reply is null (conversational mode)', async () => {
     $sm.set('conversational')
+
     const reply: Reply = {
       id: 'resp-2',
       pending: false,
@@ -186,6 +191,7 @@ describe('useAutoSpeakReplies', () => {
 
   it('EVAL-VDP-005b-fallback: synthesizes short take when spoken_reply is empty (never essay dump)', async () => {
     $sm.set('conversational')
+
     const reply: Reply = {
       id: 'resp-3',
       pending: false,
@@ -214,6 +220,7 @@ describe('useAutoSpeakReplies', () => {
 
   it('EVAL-VDP-005b: uses full text when speakMode is "all" regardless of spoken_reply', async () => {
     $sm.set('full')
+
     const reply: Reply = {
       id: 'resp-4',
       pending: false,
@@ -332,8 +339,10 @@ describe('useAutoSpeakReplies', () => {
       pendingReply: () => {
         if (callCount === 0) {
           callCount++
+
           return reply
         }
+
         return null
       }
     })

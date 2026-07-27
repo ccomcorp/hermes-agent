@@ -1,5 +1,4 @@
 import type { GatewayWsUrlResult } from '@hermes/shared'
-
 import type {
   PluginTesterCollection,
   PluginTesterEnvironment,

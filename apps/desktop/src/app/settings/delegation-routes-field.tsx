@@ -1,5 +1,6 @@
-import type { ChangeEvent, ReactNode } from 'react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import type { ChangeEvent } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -18,7 +19,6 @@ import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { useQuery } from '@tanstack/react-query'
 import { CONTROL_TEXT, EMPTY_SELECT_VALUE, FIELD_LABELS } from './constants'
 import { getNested } from './helpers'
 
@@ -53,17 +53,24 @@ const API_KEY_RE = /^\$\{[A-Z_][A-Z0-9_]*\}$/
 const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 function validateLaneName(name: string, existing: RoutesMap, editingName?: string): string | null {
-  if (!name.trim()) return 'Name is required'
-  if (!LANE_NAME_RE.test(name)) return 'Must start with a lowercase letter, then only a-z, 0-9, _, -, max 32 chars'
-  if (RESERVED_NAMES.has(name.toLowerCase())) return `"${name}" is a reserved name`
-  if (name !== editingName && name in existing) return `"${name}" already exists`
+  if (!name.trim()) {return 'Name is required'}
+
+  if (!LANE_NAME_RE.test(name)) {return 'Must start with a lowercase letter, then only a-z, 0-9, _, -, max 32 chars'}
+
+  if (RESERVED_NAMES.has(name.toLowerCase())) {return `"${name}" is a reserved name`}
+
+  if (name !== editingName && name in existing) {return `"${name}" already exists`}
+
   return null
 }
 
 function validateApiKey(key: string): string | null {
-  if (!key) return null
-  if (!key.startsWith('${') || !key.endsWith('}')) return 'Must be an env-var reference like ${VAR_NAME}'
-  if (!API_KEY_RE.test(key)) return 'Invalid env-var format — use ${VAR_NAME}'
+  if (!key) {return null}
+
+  if (!key.startsWith('${') || !key.endsWith('}')) {return 'Must be an env-var reference like ${VAR_NAME}'}
+
+  if (!API_KEY_RE.test(key)) {return 'Invalid env-var format — use ${VAR_NAME}'}
+
   return null
 }
 
@@ -93,6 +100,7 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
       const obj = value as Record<string, unknown>
       const out: RoutesMap = {}
+
       for (const [k, v] of Object.entries(obj)) {
         if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
           const lane = v as Record<string, unknown>
@@ -107,8 +115,10 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           }
         }
       }
+
       return out
     }
+
     return {}
   }, [value])
 
@@ -131,8 +141,9 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
   // Suggest models for a given provider.
   const modelsForProvider = useCallback(
     (provider: string) => {
-      if (!provider || !modelOptions) return []
+      if (!provider || !modelOptions) {return []}
       const providerData = providers.find(p => p.slug === provider)
+
       return providerData?.models ?? []
     },
     [modelOptions, providers]
@@ -189,33 +200,41 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
     const { name, lane } = form
     const editingName = editing === '__new__' ? undefined : editing ?? undefined
     const err = validateLaneName(name, routes, editingName)
+
     if (err) {
       setNameError(err)
+
       return
     }
+
     const keyErr = validateApiKey(lane.api_key ?? '')
+
     if (keyErr) {
       setKeyError(keyErr)
+
       return
     }
 
     const next = { ...routes }
+
     // If renaming, delete old key first.
     if (editingName && editingName !== name) {
       delete next[editingName]
     }
+
     next[name] = { ...lane }
     commit(next)
     cancelEdit()
   }, [form, editing, routes, commit, cancelEdit])
 
   const deleteLane = useCallback(() => {
-    if (!deleteTarget) return
+    if (!deleteTarget) {return}
     const next = { ...routes }
     delete next[deleteTarget]
     commit(next)
     setDeleteTarget(null)
-    if (editing === deleteTarget) cancelEdit()
+
+    if (editing === deleteTarget) {cancelEdit()}
   }, [deleteTarget, routes, commit, editing, cancelEdit])
 
   // -----------------------------------------------------------------------
@@ -223,8 +242,9 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
   // -----------------------------------------------------------------------
 
   const seedSuggested = useCallback(async () => {
-    if (!config) return
+    if (!config) {return}
     setSeeding(true)
+
     try {
       const mainProvider = String(getNested(config, 'model.provider') ?? getNested(config, 'provider') ?? '')
       const mainModel = String(getNested(config, 'model.model') ?? getNested(config, 'model') ?? '')
@@ -288,8 +308,9 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
 
   const effortLabel = useCallback(
     (effort: string | undefined) => {
-      if (!effort) return '—'
+      if (!effort) {return '—'}
       const m = t.shell.modelOptions as Record<string, string>
+
       return m[effort] ?? effort
     },
     [t]
@@ -299,7 +320,7 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
   const isEmpty = laneNames.length === 0 && editing !== '__new__'
 
   const renderEditDialog = () => (
-    <Dialog open={editing !== null} onOpenChange={open => { if (!open) cancelEdit() }}>
+    <Dialog onOpenChange={open => { if (!open) {cancelEdit()} }} open={editing !== null}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
@@ -315,13 +336,13 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           <div>
             <label className="text-sm font-medium">{t.settings.delegation.laneName}</label>
             <Input
-              value={form.name}
+              className="mt-1"
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
                 setForm(prev => ({ ...prev, name: e.target.value }))
                 setNameError(null)
               }}
               placeholder="e.g. coding, review"
-              className="mt-1"
+              value={form.name}
             />
             {nameError && <p className="text-xs text-destructive mt-1">{nameError}</p>}
           </div>
@@ -330,11 +351,11 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           <div>
             <label className="text-sm font-medium">{t.settings.delegation.laneProvider}</label>
             <Select
-              value={form.lane.provider || EMPTY_SELECT_VALUE}
               onValueChange={v => {
                 setLaneField('provider', v === EMPTY_SELECT_VALUE ? '' : v)
                 setLaneField('model', '') // reset model on provider change
               }}
+              value={form.lane.provider || EMPTY_SELECT_VALUE}
             >
               <SelectTrigger className={`${CONTROL_TEXT} mt-1`}>
                 <SelectValue placeholder={t.settings.delegation.selectProvider} />
@@ -355,8 +376,8 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
             <label className="text-sm font-medium">{t.settings.delegation.laneModel}</label>
             {form.lane.provider && modelsForProvider(form.lane.provider).length > 0 ? (
               <Select
-                value={form.lane.model || EMPTY_SELECT_VALUE}
                 onValueChange={v => setLaneField('model', v === EMPTY_SELECT_VALUE ? '' : v)}
+                value={form.lane.model || EMPTY_SELECT_VALUE}
               >
                 <SelectTrigger className={`${CONTROL_TEXT} mt-1`}>
                   <SelectValue placeholder={t.settings.delegation.selectModel} />
@@ -372,10 +393,10 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
               </Select>
             ) : (
               <Input
-                value={form.lane.model}
+                className="mt-1"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setLaneField('model', e.target.value)}
                 placeholder={form.lane.provider ? t.settings.delegation.typeModel : t.settings.delegation.pickProviderFirst}
-                className="mt-1"
+                value={form.lane.model}
               />
             )}
           </div>
@@ -384,8 +405,8 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           <div>
             <label className="text-sm font-medium">{FIELD_LABELS['delegation.reasoning_effort'] ?? t.settings.delegation.laneEffort}</label>
             <Select
-              value={form.lane.reasoning_effort ?? ''}
               onValueChange={v => setLaneField('reasoning_effort', v === EMPTY_SELECT_VALUE ? '' : v)}
+              value={form.lane.reasoning_effort ?? ''}
             >
               <SelectTrigger className={`${CONTROL_TEXT} mt-1`}>
                 <SelectValue placeholder={t.settings.config.none} />
@@ -405,11 +426,11 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           <div>
             <label className="text-sm font-medium">{t.settings.delegation.laneDescription}</label>
             <Textarea
-              value={form.lane.description}
+              className="mt-1"
               onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setLaneField('description', e.target.value)}
               placeholder={t.settings.delegation.laneDescriptionPlaceholder}
-              className="mt-1"
               rows={2}
+              value={form.lane.description}
             />
           </div>
 
@@ -417,13 +438,13 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           <div>
             <label className="text-sm font-medium">{t.settings.delegation.laneApiKey}</label>
             <Input
-              value={form.lane.api_key ?? ''}
+              className="mt-1 font-mono"
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
                 setLaneField('api_key', e.target.value)
                 setKeyError(null)
               }}
               placeholder={'${PROVIDER_API_KEY}'}
-              className="mt-1 font-mono"
+              value={form.lane.api_key ?? ''}
             />
             {keyError ? (
               <p className="text-xs text-destructive mt-1">{keyError}</p>
@@ -435,9 +456,9 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
           {/* Advanced toggle */}
           <div>
             <button
-              type="button"
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setShowAdvanced(v => !v)}
+              type="button"
             >
               {showAdvanced ? '▾' : '▸'} {t.settings.delegation.advanced}
             </button>
@@ -449,10 +470,10 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
               <div>
                 <label className="text-sm font-medium">{t.settings.delegation.laneBaseUrl}</label>
                 <Input
-                  value={form.lane.base_url ?? ''}
+                  className="mt-1"
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setLaneField('base_url', e.target.value)}
                   placeholder="https://api.example.com/v1"
-                  className="mt-1"
+                  value={form.lane.base_url ?? ''}
                 />
               </div>
 
@@ -460,8 +481,8 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
               <div>
                 <label className="text-sm font-medium">{t.settings.delegation.laneApiMode}</label>
                 <Select
-                  value={form.lane.api_mode ?? ''}
                   onValueChange={v => setLaneField('api_mode', v === EMPTY_SELECT_VALUE ? '' : v)}
+                  value={form.lane.api_mode ?? ''}
                 >
                   <SelectTrigger className={`${CONTROL_TEXT} mt-1`}>
                     <SelectValue placeholder={t.settings.config.none} />
@@ -479,7 +500,7 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={cancelEdit}>
+          <Button onClick={cancelEdit} variant="outline">
             {t.settings.delegation.cancel}
           </Button>
           <Button onClick={saveEdit}>
@@ -506,15 +527,15 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
         <div className="flex gap-2">
           {isEmpty && (
             <Button
-              variant="outline"
-              size="sm"
-              onClick={seedSuggested}
               disabled={!config || seeding}
+              onClick={seedSuggested}
+              size="sm"
+              variant="outline"
             >
               {seeding ? t.settings.delegation.seeding : t.settings.delegation.seedButton}
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={openAdd}>
+          <Button onClick={openAdd} size="sm" variant="outline">
             {t.settings.delegation.addLane}
           </Button>
         </div>
@@ -544,8 +565,9 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
               {laneNames.map((name, i) => {
                 const lane = routes[name]
                 const isLast = i === laneNames.length - 1
+
                 return (
-                  <tr key={name} className={isLast ? '' : 'border-b'}>
+                  <tr className={isLast ? '' : 'border-b'} key={name}>
                     <td className="px-3 py-2 font-mono text-xs">{name}</td>
                     <td className="px-3 py-2">{lane.provider || '—'}</td>
                     <td className="px-3 py-2">{lane.model || '—'}</td>
@@ -554,18 +576,18 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
                     <td className="px-3 py-2">
                       <div className="flex gap-1">
                         <Button
-                          variant="ghost"
-                          size="sm"
                           className="h-7 px-2 text-xs"
                           onClick={() => openEdit(name)}
+                          size="sm"
+                          variant="ghost"
                         >
                           {t.settings.delegation.edit}
                         </Button>
                         <Button
-                          variant="ghost"
-                          size="sm"
                           className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                           onClick={() => setDeleteTarget(name)}
+                          size="sm"
+                          variant="ghost"
                         >
                           {t.settings.delegation.delete}
                         </Button>
@@ -583,7 +605,7 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
       {renderEditDialog()}
 
       {/* Delete confirm dialog */}
-      <Dialog open={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null) }}>
+      <Dialog onOpenChange={open => { if (!open) {setDeleteTarget(null)} }} open={deleteTarget !== null}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>{t.settings.delegation.deleteTitle}</DialogTitle>
@@ -592,10 +614,10 @@ export function DelegationRoutesField({ onChange, value, config }: Props) {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+            <Button onClick={() => setDeleteTarget(null)} variant="outline">
               {t.settings.delegation.cancel}
             </Button>
-            <Button variant="destructive" onClick={deleteLane}>
+            <Button onClick={deleteLane} variant="destructive">
               {t.settings.delegation.deleteConfirm}
             </Button>
           </DialogFooter>

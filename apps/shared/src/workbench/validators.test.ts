@@ -1,18 +1,19 @@
-import { describe, it, expect } from 'vitest'
-import {
-  validateCreateRequirementRequest,
-  validateUpdateRequirementRequest,
-  validateCreatePlanRequest,
-  validateCreateChangeSetRequest,
-  validateWriteDesignSettingsRequest
-} from './validators'
+import { describe, expect, it } from 'vitest'
+
 import type {
+  CreateWorkbenchChangeSetRequest,
+  CreateWorkbenchPlanRequest,
   CreateWorkbenchRequirementRequest,
   UpdateWorkbenchRequirementRequest,
-  CreateWorkbenchPlanRequest,
-  CreateWorkbenchChangeSetRequest,
   WriteWorkbenchDesignSettingsRequest
 } from './types'
+import {
+  validateCreateChangeSetRequest,
+  validateCreatePlanRequest,
+  validateCreateRequirementRequest,
+  validateUpdateRequirementRequest,
+  validateWriteDesignSettingsRequest
+} from './validators'
 
 // ---------------------------------------------------------------------------
 // Requirement validators
@@ -35,13 +36,15 @@ describe('validateCreateRequirementRequest', () => {
   it('rejects missing workspaceRoot', () => {
     const result = validateCreateRequirementRequest({ ...valid, workspaceRoot: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_WORKSPACE_ROOT')}
   })
 
   it('rejects missing title', () => {
     const result = validateCreateRequirementRequest({ ...valid, title: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_TITLE')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_TITLE')}
   })
 
   it('rejects title that is only whitespace', () => {
@@ -52,19 +55,22 @@ describe('validateCreateRequirementRequest', () => {
   it('rejects invalid source', () => {
     const result = validateCreateRequirementRequest({ ...valid, source: 'invalid' as never })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_SOURCE')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_SOURCE')}
   })
 
   it('rejects an oversized title', () => {
     const result = validateCreateRequirementRequest({ ...valid, title: 'a'.repeat(501) })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('TITLE_TOO_LONG')
+
+    if (!result.ok) {expect(result.code).toBe('TITLE_TOO_LONG')}
   })
 
   it('rejects oversized markdown', () => {
     const result = validateCreateRequirementRequest({ ...valid, markdown: 'a'.repeat(1_000_001) })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MARKDOWN_TOO_LARGE')
+
+    if (!result.ok) {expect(result.code).toBe('MARKDOWN_TOO_LARGE')}
   })
 })
 
@@ -82,13 +88,15 @@ describe('validateUpdateRequirementRequest', () => {
   it('rejects missing requirementId', () => {
     const result = validateUpdateRequirementRequest({ ...valid, requirementId: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_REQUIREMENT_ID')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_REQUIREMENT_ID')}
   })
 
   it('rejects missing markdown', () => {
     const result = validateUpdateRequirementRequest({ ...valid, markdown: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_MARKDOWN')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_MARKDOWN')}
   })
 
   it('rejects invalid status', () => {
@@ -96,8 +104,10 @@ describe('validateUpdateRequirementRequest', () => {
       ...valid,
       status: 'invalid' as never
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_STATUS')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_STATUS')}
   })
 })
 
@@ -119,13 +129,15 @@ describe('validateCreatePlanRequest', () => {
   it('rejects missing markdown', () => {
     const result = validateCreatePlanRequest({ ...valid, markdown: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_MARKDOWN')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_MARKDOWN')}
   })
 
   it('rejects invalid operation', () => {
     const result = validateCreatePlanRequest({ ...valid, operation: 'invalid' as never })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_OPERATION')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_OPERATION')}
   })
 
   it('rejects unsafe planRelativePath', () => {
@@ -133,8 +145,10 @@ describe('validateCreatePlanRequest', () => {
       ...valid,
       planRelativePath: '../escape.md'
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('UNSAFE_PATH')
+
+    if (!result.ok) {expect(result.code).toBe('UNSAFE_PATH')}
   })
 })
 
@@ -158,19 +172,22 @@ describe('validateCreateChangeSetRequest', () => {
   it('rejects missing files array', () => {
     const result = validateCreateChangeSetRequest({ ...valid, files: undefined as never })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_FILES')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_FILES')}
   })
 
   it('rejects empty files array', () => {
     const result = validateCreateChangeSetRequest({ ...valid, files: [] })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('EMPTY_CHANGESET')
+
+    if (!result.ok) {expect(result.code).toBe('EMPTY_CHANGESET')}
   })
 
   it('rejects invalid source', () => {
     const result = validateCreateChangeSetRequest({ ...valid, source: 'invalid' as never })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_SOURCE')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_SOURCE')}
   })
 
   it('rejects missing file path', () => {
@@ -178,8 +195,10 @@ describe('validateCreateChangeSetRequest', () => {
       ...valid,
       files: [{ path: '', status: 'pending' }]
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_FILE_PATH')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_FILE_PATH')}
   })
 })
 
@@ -219,13 +238,15 @@ describe('validateWriteDesignSettingsRequest', () => {
         sandboxHtmlPreview: false
       }
     })
+
     expect(result.ok).toBe(true)
   })
 
   it('rejects missing workspaceRoot', () => {
     const result = validateWriteDesignSettingsRequest({ ...valid, workspaceRoot: '' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_WORKSPACE_ROOT')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_WORKSPACE_ROOT')}
   })
 
   it('rejects a missing settings object', () => {
@@ -233,8 +254,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       workspaceRoot: 'C:/proj',
       settings: undefined as never
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('MISSING_SETTINGS')
+
+    if (!result.ok) {expect(result.code).toBe('MISSING_SETTINGS')}
   })
 
   it('rejects a non-boolean enabled flag', () => {
@@ -242,8 +265,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, enabled: 'yes' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_ENABLED')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_ENABLED')}
   })
 
   it('rejects an invalid defaultViewport', () => {
@@ -251,8 +276,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, defaultViewport: 'ultrawide' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_VIEWPORT')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_VIEWPORT')}
   })
 
   it('rejects an invalid designSystemPreset', () => {
@@ -260,8 +287,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, designSystemPreset: 'bogus' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_PRESET')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_PRESET')}
   })
 
   it('rejects an oversized brandColor', () => {
@@ -269,8 +298,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, brandColor: 'a'.repeat(65) }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_BRAND_COLOR')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_BRAND_COLOR')}
   })
 
   it('rejects a non-array tone', () => {
@@ -278,8 +309,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, tone: 'minimal' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_TONE')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_TONE')}
   })
 
   it('rejects too many tone entries', () => {
@@ -287,8 +320,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, tone: Array.from({ length: 21 }, (_, i) => `tone-${i}`) }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_TONE')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_TONE')}
   })
 
   it('rejects an invalid radius', () => {
@@ -296,8 +331,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, radius: 'square' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_RADIUS')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_RADIUS')}
   })
 
   it('rejects an invalid density', () => {
@@ -305,8 +342,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, density: 'roomy' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_DENSITY')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_DENSITY')}
   })
 
   it('rejects an invalid fontStyle', () => {
@@ -314,8 +353,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, fontStyle: 'comic-sans' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_FONT_STYLE')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_FONT_STYLE')}
   })
 
   it('rejects an oversized stackHint', () => {
@@ -323,8 +364,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, stackHint: 'a'.repeat(201) }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_STACK_HINT')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_STACK_HINT')}
   })
 
   it('rejects a non-boolean sandboxHtmlPreview flag', () => {
@@ -332,8 +375,10 @@ describe('validateWriteDesignSettingsRequest', () => {
       ...valid,
       settings: { ...valid.settings, sandboxHtmlPreview: 'true' as never }
     })
+
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('INVALID_SANDBOX_FLAG')
+
+    if (!result.ok) {expect(result.code).toBe('INVALID_SANDBOX_FLAG')}
   })
 })
 

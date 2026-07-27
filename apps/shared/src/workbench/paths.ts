@@ -6,12 +6,12 @@
 // come from duplicated normalization logic across UI and backend.
 
 import {
-  HERMES_REQUIREMENTS_DIR,
-  HERMES_PLANS_DIR,
   HERMES_CHANGESETS_DIR,
   HERMES_DESIGNS_DIR,
-  HERMES_WRITE_DIR,
-  HERMES_WORKFLOWS_DIR
+  HERMES_PLANS_DIR,
+  HERMES_REQUIREMENTS_DIR,
+  HERMES_WORKFLOWS_DIR,
+  HERMES_WRITE_DIR
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ import {
  * - Returns empty string for empty/whitespace input
  */
 export function normalizeWorkbenchRelativePath(value: string): string {
-  if (!value || typeof value !== 'string') return ''
+  if (!value || typeof value !== 'string') {return ''}
 
   let path = value.trim()
 
@@ -57,15 +57,16 @@ export function normalizeWorkbenchRelativePath(value: string): string {
  * - Empty strings
  */
 export function isSafeWorkbenchRelativePath(value: string): boolean {
-  if (!value || typeof value !== 'string') return false
+  if (!value || typeof value !== 'string') {return false}
 
   const normalized = normalizeWorkbenchRelativePath(value)
 
-  if (!normalized) return false
+  if (!normalized) {return false}
 
   // Reject absolute paths (Windows drive letter or UNC)
-  if (/^[a-zA-Z]:/.test(value)) return false
-  if (value.startsWith('\\\\')) return false
+  if (/^[a-zA-Z]:/.test(value)) {return false}
+
+  if (value.startsWith('\\\\')) {return false}
 
   // Reject POSIX-absolute paths (leading `/`) on the ORIGINAL input.
   // normalizeWorkbenchRelativePath() strips a leading `/` to make the
@@ -74,18 +75,21 @@ export function isSafeWorkbenchRelativePath(value: string): boolean {
   // `/etc/passwd` would otherwise be silently rewritten into a "safe"
   // relative path instead of being rejected. Fail closed: absolute input
   // is invalid input, not something to coerce into relative.
-  if (/^\/+/.test(value.trim())) return false
+  if (/^\/+/.test(value.trim())) {return false}
 
   // Reject path traversal — check both the original and normalized
   const segments = normalized.split('/')
-  if (segments.includes('..')) return false
+
+  if (segments.includes('..')) {return false}
 
   // Reject paths that resolve above root after normalization
   let depth = 0
+
   for (const seg of segments) {
-    if (seg === '..') depth--
-    else if (seg !== '.') depth++
-    if (depth < 0) return false
+    if (seg === '..') {depth--}
+    else if (seg !== '.') {depth++}
+
+    if (depth < 0) {return false}
   }
 
   return true
@@ -97,16 +101,19 @@ export function isSafeWorkbenchRelativePath(value: string): boolean {
 
 export function buildRequirementRelativeDir(requirementId: string): string {
   const safeId = sanitizeId(requirementId)
+
   return `${HERMES_REQUIREMENTS_DIR}/${safeId}`
 }
 
 export function buildRequirementDraftRelativePath(requirementId: string): string {
   const safeId = sanitizeId(requirementId)
+
   return `${HERMES_REQUIREMENTS_DIR}/${safeId}/requirement.md`
 }
 
 export function buildRequirementTraceRelativePath(requirementId: string): string {
   const safeId = sanitizeId(requirementId)
+
   return `${HERMES_REQUIREMENTS_DIR}/${safeId}/trace.json`
 }
 
@@ -116,6 +123,7 @@ export function buildRequirementTraceRelativePath(requirementId: string): string
 
 export function buildPlanRelativePath(planSlugOrId: string): string {
   const safeId = sanitizeId(planSlugOrId)
+
   return `${HERMES_PLANS_DIR}/${safeId}.md`
 }
 
@@ -125,6 +133,7 @@ export function buildPlanRelativePath(planSlugOrId: string): string {
 
 export function buildChangeSetRelativePath(changesetId: string): string {
   const safeId = sanitizeId(changesetId)
+
   return `${HERMES_CHANGESETS_DIR}/${safeId}.json`
 }
 
@@ -149,16 +158,19 @@ export function buildDesignSettingsRelativePath(): string {
 
 export function buildWriteProjectRelativeDir(writeProjectId: string): string {
   const safeId = sanitizeId(writeProjectId)
+
   return `${HERMES_WRITE_DIR}/${safeId}`
 }
 
 export function buildWriteProjectDocumentRelativePath(writeProjectId: string): string {
   const safeId = sanitizeId(writeProjectId)
+
   return `${HERMES_WRITE_DIR}/${safeId}/document.md`
 }
 
 export function buildWriteProjectMetaRelativePath(writeProjectId: string): string {
   const safeId = sanitizeId(writeProjectId)
+
   return `${HERMES_WRITE_DIR}/${safeId}/project.json`
 }
 
@@ -172,6 +184,7 @@ export function buildWriteProjectMetaRelativePath(writeProjectId: string): strin
 
 export function buildWorkflowRelativePath(workflowId: string): string {
   const safeId = sanitizeId(workflowId)
+
   return `${HERMES_WORKFLOWS_DIR}/${safeId}.json`
 }
 
@@ -184,7 +197,8 @@ export function buildWorkflowRelativePath(workflowId: string): string {
  * Allows alphanumeric, hyphens, underscores. Trims and lowercases.
  */
 export function sanitizeId(id: string): string {
-  if (!id || typeof id !== 'string') return ''
+  if (!id || typeof id !== 'string') {return ''}
+
   return id
     .trim()
     .toLowerCase()
@@ -204,5 +218,6 @@ export function sanitizeId(id: string): string {
 export function resolveWorkbenchPath(workspaceRoot: string, relativePath: string): string {
   const root = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '')
   const rel = normalizeWorkbenchRelativePath(relativePath)
+
   return `${root}/${rel}`
 }

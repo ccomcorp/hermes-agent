@@ -826,6 +826,7 @@ describe('overlayLiveLanes', () => {
     }
 
     const overlaid = overlayLiveLanes(project, [session])
+
     const placements = overlaid.repos.flatMap(repo =>
       repo.groups.flatMap(group => group.sessions.map(s => ({ repo: repo.id, session: s.id })))
     )

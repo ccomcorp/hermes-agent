@@ -32,9 +32,13 @@ export function sanitizeTextForSpeech(text: string): string {
     .split('\n')
     .filter(line => {
       const s = line.trim()
-      if (!s) return true
-      if (s.startsWith('|') && s.endsWith('|')) return false
-      if ((s.match(/\|/g) || []).length >= 2) return false
+
+      if (!s) {return true}
+
+      if (s.startsWith('|') && s.endsWith('|')) {return false}
+
+      if ((s.match(/\|/g) || []).length >= 2) {return false}
+
       return true
     })
     .join('\n')
@@ -60,19 +64,25 @@ export function firstSpeakableSentences(
   maxSentences = CONVERSATIONAL_SPEAK_MAX_SENTENCES
 ): string {
   const clean = sanitizeTextForSpeech(text)
-  if (!clean) return ''
+
+  if (!clean) {return ''}
 
   const parts = clean.split(/(?<=[.!?])\s+/).filter(Boolean)
   let out = ''
+
   for (const part of parts.slice(0, maxSentences)) {
     const next = out ? `${out} ${part}` : part
-    if (next.length > maxChars) break
+
+    if (next.length > maxChars) {break}
     out = next
   }
+
   if (!out) {
     out = clean.slice(0, Math.max(0, maxChars - 1)).trim()
-    if (clean.length > maxChars) out = `${out}…`
+
+    if (clean.length > maxChars) {out = `${out}…`}
   }
+
   return out
 }
 
@@ -99,7 +109,9 @@ export function resolveSpeakText(options: {
 
   if (spoken) {
     const s = sanitizeTextForSpeech(spoken)
-    if (s.length <= maxChars) return s
+
+    if (s.length <= maxChars) {return s}
+
     return firstSpeakableSentences(s, maxChars, maxSentences)
   }
 

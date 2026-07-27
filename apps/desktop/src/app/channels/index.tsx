@@ -613,7 +613,7 @@ function TelegramPairingPanel({
         clearTimeout(timeout)
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [phase, setup])
 
   // Drive the countdown clock once a pairing is active.

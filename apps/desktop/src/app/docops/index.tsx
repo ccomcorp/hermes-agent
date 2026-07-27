@@ -38,20 +38,26 @@ const MODE_LABELS: Record<string, string> = {
 }
 
 function modeTone(mode: string | null | undefined): PanelPillTone {
-  if (!mode) return 'muted'
-  if (mode === 'code') return 'good'
-  if (mode === 'hybrid') return 'warn'
+  if (!mode) {return 'muted'}
+
+  if (mode === 'code') {return 'good'}
+
+  if (mode === 'hybrid') {return 'warn'}
+
   return 'muted'
 }
 
 function tierTone(tier: string): PanelPillTone {
-  if (tier === 'A') return 'warn'
-  if (tier === 'B' || tier === 'C') return 'bad'
+  if (tier === 'A') {return 'warn'}
+
+  if (tier === 'B' || tier === 'C') {return 'bad'}
+
   return 'muted'
 }
 
 function shortPath(path: string, max = 64): string {
-  if (path.length <= max) return path
+  if (path.length <= max) {return path}
+
   return `…${path.slice(-(max - 1))}`
 }
 
@@ -166,8 +172,8 @@ function ActiveDocOpsBody({
           <ul className="space-y-1.5">
             {status.drift.map((item, i) => (
               <li
-                key={`${item.path}-${item.kind}-${i}`}
                 className="flex items-start gap-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-xs"
+                key={`${item.path}-${item.kind}-${i}`}
               >
                 <PanelPill tone={tierTone(item.tier)}>Tier {item.tier}</PanelPill>
                 <div className="min-w-0">
@@ -259,23 +265,29 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   // default selection still mirrors the scoped project (or cwd) so it "just
   // works" when the ambient guess is right, but you can override.
   const cwd = currentCwd?.trim() || ''
+
   const projectOptions = useMemo(() => {
     const opts: Array<{ id: string; label: string; path: string }> = []
     const seen = new Set<string>()
+
     for (const proj of projects) {
       const treeNode = projectTree.find(node => node.id === proj.id)
+
       const path = (
         treeNode?.path
         || treeNode?.repos.find(repo => repo.path)?.path
         || projectWorkspacePath(proj)
         || ''
       ).trim()
+
       if (path && !seen.has(proj.id)) {
         seen.add(proj.id)
         opts.push({ id: proj.id, label: proj.name || path, path })
       }
     }
+
     opts.sort((a, b) => a.label.localeCompare(b.label))
+
     return opts
   }, [projects, projectTree])
 
@@ -283,8 +295,10 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   const scopedPath = useMemo(() => {
     if (projectScope && projectScope !== ALL_PROJECTS) {
       const match = projectOptions.find(o => o.id === projectScope)
-      if (match) return match.path
+
+      if (match) {return match.path}
     }
+
     return cwd
   }, [projectScope, projectOptions, cwd])
 
@@ -315,10 +329,11 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   })
 
   const handleRunCheck = async () => {
-    if (!projectPath) return
+    if (!projectPath) {return}
     setCheckRunning(true)
     setCheckError(null)
     setCheckResult(null)
+
     try {
       const report = await runDoxCheck(projectPath)
       const driftCount = Array.isArray(report?.drift) ? report.drift.length : 0
@@ -339,13 +354,16 @@ export function DocOpsView({ onClose }: { onClose: () => void }) {
   }
 
   const subtitle = projectPath ? shortPath(projectPath) : 'No project selected'
+
   // Current value for the picker: explicit override, else the scoped project id
   // (so the dropdown reflects the ambient default), else the cwd sentinel.
   const scopedId =
     projectScope && projectScope !== ALL_PROJECTS && projectOptions.some(o => o.id === projectScope)
       ? projectScope
       : '__cwd__'
+
   const pickerValue = selectedId ?? scopedId
+
   const projectPicker =
     projectOptions.length > 0 ? (
       <Select onValueChange={setSelectedId} value={pickerValue}>

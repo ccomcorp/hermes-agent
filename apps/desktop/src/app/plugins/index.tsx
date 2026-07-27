@@ -169,6 +169,7 @@ export function PluginsView({ setStatusbarItemGroup, ...props }: PluginsViewProp
         force: installForce,
         enable: installEnable
       })
+
       notify({ kind: 'success', title: s.install, message: s.installed(res.plugin_name ?? identifier) })
 
       if ((res.warnings?.length ?? 0) > 0) {

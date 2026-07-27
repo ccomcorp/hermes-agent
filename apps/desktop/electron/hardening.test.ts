@@ -7,11 +7,11 @@ import { pathToFileURL } from 'node:url'
 import { test } from 'vitest'
 
 import {
-  DEFAULT_FETCH_TIMEOUT_MS,
   assertSafeOutboundUrl,
   assertTerminalOwner,
   buildDesktopContentSecurityPolicy,
   canExecuteGatewayPluginScript,
+  DEFAULT_FETCH_TIMEOUT_MS,
   encryptDesktopSecret,
   isPackagedDevToolsAllowed,
   isPrivateOrReservedIp,
@@ -389,6 +389,7 @@ test('assertSafeOutboundUrl rejects private hosts and non-https by default', asy
   const ok = await assertSafeOutboundUrl('https://example.com/a', {
     lookup: async () => [{ address: '93.184.216.34', family: 4 }]
   })
+
   assert.equal(ok.hostname, 'example.com')
 })
 

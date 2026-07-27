@@ -7,10 +7,10 @@ import { $activeGatewayProfile } from '@/store/profile'
 
 import {
   $activeProjectId,
-  $projectScope,
-  $projectTree,
   $projects,
+  $projectScope,
   $projectsRpcAvailable,
+  $projectTree,
   $removedSessionIds,
   $sessionMutationsInFlight,
   $worktreeRefreshToken,
@@ -23,12 +23,11 @@ import {
   openProjectCreate,
   pickCwdUnderProjectScope,
   pickProjectFolder,
-  rehomeBlankChatDraftToEnteredProject,
+  projectNameForCwd,
   refreshProjects,
+  refreshProjectTree,
   refreshWorktrees,
   resolveNewSessionCwd,
-  projectNameForCwd,
-  refreshProjectTree,
   scanAndRecordRepos,
   tombstoneSessions
 } from './projects'
@@ -263,6 +262,7 @@ describe('createProject', () => {
       name: 'Hermes Agent',
       primary_path: '/old/hermes-agent'
     }
+
     const created = {
       folders: [{ path: '/ws/Tech-Stack', is_primary: true }],
       id: 'p_tech',
@@ -294,6 +294,7 @@ describe('createProject', () => {
 
       return { active_id: 'p_tech', projects: [previous, created], scoped_session_ids: [] }
     })
+
     activeGateway.mockReturnValue({ connectionState: 'open', request } as never)
 
     await createProject({ folders: ['/ws/Tech-Stack'], name: 'Tech Stack', primaryPath: '/ws/Tech-Stack', use: true })
@@ -322,6 +323,7 @@ describe('createProject', () => {
 
       return { active_id: 'p_security', projects: [created], scoped_session_ids: [] }
     })
+
     activeGateway.mockReturnValue({ connectionState: 'open', request } as never)
 
     await createProject({

@@ -100,12 +100,12 @@ import { $focusedStoredSessionId, $workingSessionIds, type SplitDir } from '@/st
 import {
   type AppView,
   ARTIFACTS_ROUTE,
+  CANVAS_ROUTE,
   CHANNELS_ROUTE,
   CONFIG_ROUTE,
   DOCOPS_ROUTE,
   FILES_ROUTE,
   KANBAN_ROUTE,
-  CANVAS_ROUTE,
   LOGS_ROUTE,
   MESSAGING_ROUTE,
   MODELS_ROUTE,
@@ -119,7 +119,6 @@ import {
   WEBHOOKS_ROUTE,
   WORKBENCH_ROUTE
 } from '../../routes'
-import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import type { SidebarNavItem } from '../../types'
 
 import { SidebarCronJobsSection } from './cron-jobs-section'

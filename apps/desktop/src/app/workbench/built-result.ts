@@ -26,6 +26,7 @@
 export function builtEntryCandidates(workspaceRoot: string): string[] {
   const root = workspaceRoot.replace(/[\\/]+$/, '')
   const sep = root.includes('\\') ? '\\' : '/'
+
   return ['index.html', `dist${sep}index.html`, `build${sep}index.html`, `public${sep}index.html`].map(
     rel => `${root}${sep}${rel}`
   )
@@ -36,6 +37,7 @@ export function builtEntryCandidates(workspaceRoot: string): string[] {
 // `file:///` triple-slash; a POSIX absolute path keeps its leading slash.
 export function toFileUrl(absPath: string): string {
   const p = absPath.replace(/\\/g, '/')
+
   return p.startsWith('/') ? `file://${p}` : `file:///${p}`
 }
 
@@ -52,13 +54,15 @@ const LOCAL_HOST =
  * `127.0.0.1` so the returned URL is actually openable.
  */
 export function extractDevPreviewUrl(text: string): string | null {
-  if (!text) return null
+  if (!text) {return null}
   const re = /https?:\/\/([^\s/:"'<>]+)(?::(\d{2,5}))?(\/[^\s"'<>]*)?/gi
   let m: RegExpExecArray | null
+
   while ((m = re.exec(text)) !== null) {
     if (LOCAL_HOST.test(m[1])) {
       return m[0].replace('0.0.0.0', '127.0.0.1')
     }
   }
+
   return null
 }

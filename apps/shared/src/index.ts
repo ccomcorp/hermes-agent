@@ -70,6 +70,6 @@ export {
 // Workbench shared contracts
 // ---------------------------------------------------------------------------
 
-export * from './workbench/types'
 export * from './workbench/paths'
+export * from './workbench/types'
 export * from './workbench/validators'

@@ -1,17 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
+
 import {
-  normalizeWorkbenchRelativePath,
-  isSafeWorkbenchRelativePath,
-  buildRequirementRelativeDir,
-  buildRequirementDraftRelativePath,
-  buildRequirementTraceRelativePath,
-  buildPlanRelativePath,
   buildChangeSetRelativePath,
-  buildWriteProjectRelativeDir,
+  buildPlanRelativePath,
+  buildRequirementDraftRelativePath,
+  buildRequirementRelativeDir,
+  buildRequirementTraceRelativePath,
   buildWriteProjectDocumentRelativePath,
   buildWriteProjectMetaRelativePath,
-  sanitizeId,
-  resolveWorkbenchPath
+  buildWriteProjectRelativeDir,
+  isSafeWorkbenchRelativePath,
+  normalizeWorkbenchRelativePath,
+  resolveWorkbenchPath,
+  sanitizeId
 } from './paths'
 
 describe('normalizeWorkbenchRelativePath', () => {

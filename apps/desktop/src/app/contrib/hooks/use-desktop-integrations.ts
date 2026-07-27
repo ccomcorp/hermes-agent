@@ -117,6 +117,7 @@ export function useDesktopIntegrations({
     // load an ended/invalid session, and this restore path is the safety net.
     if (typeof window !== 'undefined') {
       const rawHash = window.location.hash.replace(/^#/, '')
+
       if (rawHash && rawHash !== '/' && !rawHash.startsWith('/new')) {
         // Hash has a real route. Only skip if it differs from what we'd restore.
         const hashDiffers =

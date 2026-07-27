@@ -10,7 +10,8 @@ export function canExecuteGatewayPluginScript(baseUrl: string | null | undefined
   // An empty/nullish baseUrl is the default local backend: the renderer's plugin
   // fetch falls back to http://127.0.0.1:9120 (loopback), so this is safe to run.
   // Without this, Canvas/Kanban plugins never load on the default local install.
-  if (!baseUrl) return true
+  if (!baseUrl) {return true}
+
   try {
     const u = new URL(String(baseUrl))
     const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase()

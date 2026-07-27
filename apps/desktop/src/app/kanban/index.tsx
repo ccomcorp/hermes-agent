@@ -1,9 +1,9 @@
+import { useStore } from '@nanostores/react'
 /**
  * Kanban — Multi-agent collaboration board.
  * Loads the dashboard plugin via the SDK bridge pattern.
  */
 import * as React from 'react'
-import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
@@ -22,25 +22,36 @@ const Badge = (props: any) =>
     className: cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', props.className),
     ...props
   })
+
 const Card = (props: any) =>
   React.createElement('div', { className: cn('rounded-lg border bg-card text-card-foreground', props.className), ...props })
+
 const CardContent = (props: any) => React.createElement('div', { className: 'p-4', ...props })
+
 const Label = (props: any) =>
   React.createElement('label', { className: cn('text-sm font-medium', props.className), ...props })
+
 const Input = (props: any) =>
   React.createElement('input', { className: cn('flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm', props.className), ...props })
+
 const Button = (props: any) =>
   React.createElement('button', { className: cn('inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium', props.className), ...props })
+
 const Select = (props: any) =>
   React.createElement('select', { className: cn('h-9 rounded-md border bg-transparent px-3 text-sm', props.className), ...props })
+
 const SelectOption = (props: any) => React.createElement('option', props)
 
 function timeAgo(ts: number): string {
-  if (!ts) return ''
+  if (!ts) {return ''}
   const diff = Date.now() / 1000 - ts
-  if (diff < 60) return 'just now'
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+
+  if (diff < 60) {return 'just now'}
+
+  if (diff < 3600) {return `${Math.floor(diff / 60)}m ago`}
+
+  if (diff < 86400) {return `${Math.floor(diff / 3600)}h ago`}
+
   return `${Math.floor(diff / 86400)}d ago`
 }
 
@@ -57,7 +68,7 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
   const [error, setError] = useState<string | null>(null)
 
   const loadKanban = useCallback(async () => {
-    if (!containerRef.current) return
+    if (!containerRef.current) {return}
     const token = connection?.token || ''
     const apiBase = connection?.baseUrl || 'http://127.0.0.1:9120'
 
@@ -73,13 +84,18 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const currentBase = $connection.get()?.baseUrl || 'http://127.0.0.1:9120'
           const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
           const headers: Record<string, string> = { Accept: 'application/json' }
-          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+
+          if (currentToken) {headers['Authorization'] = `Bearer ${currentToken}`}
+
           if (opts?.body && typeof opts.body !== 'string') {
             headers['Content-Type'] = 'application/json'
             opts = { ...opts, body: JSON.stringify(opts.body) }
           }
+
           const res = await fetch(resolvedUrl, { ...opts, headers: { ...headers, ...(opts?.headers || {}) } })
+
           if (!res.ok) { const text = await res.text(); throw new Error(`HTTP ${res.status}: ${text}`) }
+
           return res.json()
         },
         buildWsUrl: async (path: string, params?: Record<string, string>) => {
@@ -89,6 +105,7 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
           const searchParams = new URLSearchParams(params || {})
           searchParams.set('token', currentToken)
+
           return `${protocol}//${url.host}/api/plugins/kanban${path}?${searchParams}`
         },
         authedFetch: async (url: string, opts?: any) => {
@@ -96,20 +113,25 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const currentBase = $connection.get()?.baseUrl || 'http://127.0.0.1:9120'
           const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
           const headers: Record<string, string> = {}
-          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+
+          if (currentToken) {headers['Authorization'] = `Bearer ${currentToken}`}
+
           // Don't set Content-Type for FormData — browser sets it with boundary
           if (opts?.body && !(opts.body instanceof FormData)) {
             headers['Content-Type'] = 'application/json'
             opts = { ...opts, body: JSON.stringify(opts.body) }
           }
+
           const res = await fetch(resolvedUrl, {
             ...opts,
             headers: { ...headers, ...(opts?.headers || {}) },
           })
+
           if (!res.ok) {
             const text = await res.text()
             throw new Error(`HTTP ${res.status}: ${text}`)
           }
+
           return res.json()
         }
       }
@@ -120,6 +142,7 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
     }
 
     const registry = win.__HERMES_PLUGINS__
+
     if (!registry._components['kanban']) {
       try {
         if (!document.querySelector('link[data-hermes-plugin="kanban"]')) {
@@ -129,6 +152,7 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           link.dataset.hermesPlugin = 'kanban'
           document.head.appendChild(link)
           }
+
         const resp = await fetch(kanbanUrl(connection, '/dashboard-plugins/kanban/dist/index.js'))
         const code = await resp.text()
         assertCanExecuteGatewayPluginScript(connection?.baseUrl)
@@ -137,15 +161,18 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
         console.error('[kanban] Plugin script failed:', err)
         setError('Failed to load kanban plugin. Check that the gateway is running.')
         setLoading(false)
+
         return
       }
     }
 
     const KanbanPage = registry._components['kanban']
+
     if (!KanbanPage) {
       console.error('[kanban] Plugin loaded but failed to register. Registry:', Object.keys(registry._components))
       setError('Kanban plugin loaded but failed to register its component.')
       setLoading(false)
+
       return
     }
 
@@ -155,7 +182,9 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
   }, [connection])
 
   useEffect(() => { void loadKanban() }, [loadKanban])
-  useEffect(() => { setStatusbarItemGroup('kanban', []); return () => setStatusbarItemGroup('kanban', []) }, [setStatusbarItemGroup])
+  useEffect(() => { setStatusbarItemGroup('kanban', []);
+
+ return () => setStatusbarItemGroup('kanban', []) }, [setStatusbarItemGroup])
 
   return (
     <div
@@ -192,7 +221,7 @@ export function KanbanView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           <div><p className="text-lg font-medium text-destructive">Kanban unavailable</p><p className="mt-2 text-sm">{error}</p></div>
         </div>
       )}
-      <div ref={containerRef} className={cn('flex-1 overflow-auto', loading && 'hidden')} />
+      <div className={cn('flex-1 overflow-auto', loading && 'hidden')} ref={containerRef} />
     </div>
   )
 }

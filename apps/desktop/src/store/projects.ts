@@ -356,16 +356,19 @@ export async function followActiveSessionCwd(cwd: string): Promise<void> {
 /** Primary workspace path for a project (explicit folders only). */
 export function projectWorkspacePath(project: ProjectInfo): null | string {
   const primary = (project.primary_path || '').trim()
+
   if (primary) {
     return primary
   }
 
   const marked = project.folders?.find(folder => folder.is_primary)?.path?.trim()
+
   if (marked) {
     return marked
   }
 
   const first = project.folders?.[0]?.path?.trim()
+
   return first || null
 }
 
@@ -380,14 +383,17 @@ export async function moveSessionToProject(opts: {
   profile?: string
 }): Promise<{ cwd: string; branch?: string }> {
   const path = projectWorkspacePath(opts.project)
+
   if (!path) {
     throw new Error(translateNow('sidebar.row.moveNoFolder') || 'This project has no folder yet')
   }
 
   let gateway = activeGateway()
+
   if (!gateway || gateway.connectionState !== 'open') {
     gateway = await ensureActiveGatewayOpen()
   }
+
   if (!gateway) {
     throw new Error(translateNow('sidebar.row.moveNoGateway') || 'Gateway not connected')
   }
@@ -460,14 +466,17 @@ export async function createProjectAndMoveSession(opts: {
     primaryPath: opts.folder,
     use: true
   })
+
   if (!created) {
     throw new Error(translateNow('sidebar.row.moveCreateFailed') || 'Could not create project')
   }
+
   await moveSessionToProject({
     sessionId: opts.sessionId,
     project: created,
     profile: opts.profile
   })
+
   return created
 }
 

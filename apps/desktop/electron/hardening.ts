@@ -368,6 +368,7 @@ async function resolveWritableFileForIpc(
     Number.isFinite(options.contentLength) && Number(options.contentLength) >= 0
       ? Number(options.contentLength)
       : null
+
   const maxBytes =
     Number.isFinite(options.maxBytes) && Number(options.maxBytes) > 0 ? Number(options.maxBytes) : 1_000_000
 
@@ -528,6 +529,7 @@ async function assertSafeOutboundUrl(
 
   // Block obvious local names before DNS (TOCTOU still exists for rebinding — pin later if needed)
   const hostLower = hostname.toLowerCase()
+
   const looksLocal =
     hostLower === 'localhost' ||
     hostLower.endsWith('.localhost') ||
@@ -651,7 +653,8 @@ function isPackagedDevToolsAllowed(env: NodeJS.ProcessEnv = process.env, isPacka
 function canExecuteGatewayPluginScript(baseUrl: string) {
   // Empty/nullish baseUrl is the default local backend (loopback 127.0.0.1),
   // which must remain executable so local dashboard plugins load.
-  if (!baseUrl) return true
+  if (!baseUrl) {return true}
+
   try {
     const u = new URL(String(baseUrl))
     const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase()
@@ -668,12 +671,12 @@ function canExecuteGatewayPluginScript(baseUrl: string) {
 }
 
 export {
-  DATA_URL_READ_MAX_BYTES,
-  DEFAULT_FETCH_TIMEOUT_MS,
   assertSafeOutboundUrl,
   assertTerminalOwner,
   buildDesktopContentSecurityPolicy,
   canExecuteGatewayPluginScript,
+  DATA_URL_READ_MAX_BYTES,
+  DEFAULT_FETCH_TIMEOUT_MS,
   encryptDesktopSecret,
   isPackagedDevToolsAllowed,
   isPrivateOrReservedIp,

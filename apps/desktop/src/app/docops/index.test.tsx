@@ -1,7 +1,7 @@
-// @vitest-environment jsdom
-import { atom } from 'nanostores'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+// @vitest-environment jsdom
+import { atom } from 'nanostores'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as HermesApi from '@/hermes'
@@ -21,6 +21,7 @@ vi.mock('@/hermes', async importOriginal => ({
 const mockCwdAtom = atom('/test-project')
 vi.mock('@/store/session', async importOriginal => {
   const actual = await importOriginal<typeof import('@/store/session')>()
+
   return {
     ...actual,
     $currentCwd: mockCwdAtom
@@ -32,6 +33,7 @@ const mockProjects = atom<Array<{ id: string; name: string; primary_path?: strin
 const mockProjectTree = atom<Array<{ id: string; path?: string; repos: Array<{ path?: string }> }>>([])
 vi.mock('@/store/projects', async importOriginal => {
   const actual = await importOriginal<typeof import('@/store/projects')>()
+
   return {
     ...actual,
     $projectScope: mockScopeAtom,
@@ -62,6 +64,7 @@ function activeStatus(overrides: Partial<DoxProjectStatus> = {}): DoxProjectStat
 async function renderDocOps(client?: QueryClient) {
   const { DocOpsView } = await import('./index')
   const onClose = vi.fn()
+
   return {
     onClose,
     ...render(
@@ -80,20 +83,30 @@ beforeEach(() => {
   mockScopeAtom.set('__all_projects__')
   mockProjects.set([])
   mockProjectTree.set([])
+
   // jsdom does not implement scrollIntoView; Radix Select calls it when the
   // listbox opens. Stub it so picker-interaction tests don't throw.
   if (!(Element.prototype as { scrollIntoView?: unknown }).scrollIntoView) {
-    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+    ;
+
+(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
   }
+
   // Radix also probes pointer-capture APIs jsdom lacks.
   if (!(Element.prototype as { hasPointerCapture?: unknown }).hasPointerCapture) {
     ;(Element.prototype as unknown as { hasPointerCapture: () => boolean }).hasPointerCapture = () => false
   }
+
   if (!(Element.prototype as { setPointerCapture?: unknown }).setPointerCapture) {
-    ;(Element.prototype as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {}
+    ;
+
+(Element.prototype as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {}
   }
+
   if (!(Element.prototype as { releasePointerCapture?: unknown }).releasePointerCapture) {
-    ;(Element.prototype as unknown as { releasePointerCapture: () => void }).releasePointerCapture = () => {}
+    ;
+
+(Element.prototype as unknown as { releasePointerCapture: () => void }).releasePointerCapture = () => {}
   }
 })
 
@@ -302,9 +315,11 @@ describe('DocOpsView', () => {
 
   it('shows "Checking…" text while the check is running', async () => {
     let resolveCheck: (value: DoxReport) => void
+
     const checkPromise = new Promise<DoxReport>(resolve => {
       resolveCheck = resolve
     })
+
     runDoxCheck.mockReturnValue(checkPromise)
 
     await renderDocOps()

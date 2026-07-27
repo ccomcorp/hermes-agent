@@ -20,7 +20,6 @@ import type {
   CustomEndpointUpdate,
   CustomEndpointValidationResponse,
   DebugShareResponse,
-  DoxFinding,
   DoxProjectStatus,
   DoxReport,
   ElevenLabsVoicesResponse,
@@ -1746,6 +1745,7 @@ export function runDebugShare(): Promise<DebugShareResponse> {
 
 export function runDoxCheck(root?: string): Promise<DoxReport> {
   const qs = root ? `?root=${encodeURIComponent(root)}` : ''
+
   return window.hermesDesktop.api<DoxReport>({
     ...profileScoped(),
     path: `/api/dox/check${qs}`
@@ -1754,6 +1754,7 @@ export function runDoxCheck(root?: string): Promise<DoxReport> {
 
 export function getDoxStatus(projectPath?: string): Promise<DoxProjectStatus> {
   const qs = projectPath ? `?path=${encodeURIComponent(projectPath)}` : ''
+
   return window.hermesDesktop.api<DoxProjectStatus>({
     ...profileScoped(),
     path: `/api/dox/status${qs}`

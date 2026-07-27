@@ -930,8 +930,10 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
   if (isText && state.text !== undefined) {
     const language = (state.language || target.language || '').toLowerCase()
     const isMarkdown = language === 'markdown' || language === 'md'
+
     const isHtml =
       target.previewKind === 'html' || language === 'html' || language === 'htm'
+
     const hasDiff = Boolean(state.diff && state.diff.trim())
     // Order the toggle reads left→right; default lands on the most useful view.
     const modes: PreviewViewMode[] = []

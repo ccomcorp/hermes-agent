@@ -1,3 +1,4 @@
+import { useStore } from '@nanostores/react'
 /**
  * Canvas — Live UI creation workspace (AIOS hermes-canvas plugin).
  * Native desktop host for the hermes-canvas dashboard plugin, mirroring the
@@ -12,7 +13,6 @@
  * to it (adding X-Hermes-Session-Token).
  */
 import * as React from 'react'
-import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
@@ -30,30 +30,41 @@ const Badge = (props: any) =>
     className: cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', props.className),
     ...props
   })
+
 const Button = (props: any) =>
   React.createElement('button', { className: cn('inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium', props.className), ...props })
+
 const Card = (props: any) =>
   React.createElement('div', { className: cn('rounded-lg border bg-card text-card-foreground', props.className), ...props })
+
 const CardHeader = (props: any) => React.createElement('div', { className: cn('p-4 pb-2', props.className), ...props })
 const CardTitle = (props: any) => React.createElement('h3', { className: cn('font-semibold leading-none', props.className), ...props })
 const CardContent = (props: any) => React.createElement('div', { className: cn('p-4 pt-2', props.className), ...props })
 const Separator = (props: any) => React.createElement('div', { className: cn('h-px w-full bg-border', props.className), ...props })
+
 // Also provided so the SHARED __HERMES_PLUGIN_SDK__ singleton is a superset that
 // still serves Kanban (which needs these) if Canvas installs the SDK first.
 const Input = (props: any) =>
   React.createElement('input', { className: cn('flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm', props.className), ...props })
+
 const Label = (props: any) =>
   React.createElement('label', { className: cn('text-sm font-medium', props.className), ...props })
+
 const Select = (props: any) =>
   React.createElement('select', { className: cn('h-9 rounded-md border bg-transparent px-3 text-sm', props.className), ...props })
+
 const SelectOption = (props: any) => React.createElement('option', props)
 
 function timeAgo(ts: number): string {
-  if (!ts) return ''
+  if (!ts) {return ''}
   const diff = Date.now() / 1000 - ts
-  if (diff < 60) return 'just now'
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+
+  if (diff < 60) {return 'just now'}
+
+  if (diff < 3600) {return `${Math.floor(diff / 60)}m ago`}
+
+  if (diff < 86400) {return `${Math.floor(diff / 3600)}h ago`}
+
   return `${Math.floor(diff / 86400)}d ago`
 }
 
@@ -68,7 +79,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
   const [error, setError] = useState<string | null>(null)
 
   const loadCanvas = useCallback(async () => {
-    if (!containerRef.current) return
+    if (!containerRef.current) {return}
     const token = connection?.token || ''
     const apiBase = connection?.baseUrl || 'http://127.0.0.1:9120'
 
@@ -79,17 +90,22 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
     if (!win.__HERMES_CANVAS_DESKTOP_FETCH__) {
       win.__HERMES_CANVAS_DESKTOP_FETCH__ = true
       const orig = win.fetch.bind(win)
+
       win.fetch = (input: any, init?: any) => {
         const url = typeof input === 'string' ? input : (input && input.url) || ''
+
         if (typeof url === 'string' && (url.startsWith('/api/plugins/hermes-canvas') || url.startsWith('/dashboard-plugins/hermes-canvas'))) {
           const base = $connection.get()?.baseUrl || apiBase
           const tok = $connection.get()?.token || ''
           const next = init || {}
           const headers = new Headers(next.headers || {})
-          if (tok && !headers.has('X-Hermes-Session-Token')) headers.set('X-Hermes-Session-Token', tok)
+
+          if (tok && !headers.has('X-Hermes-Session-Token')) {headers.set('X-Hermes-Session-Token', tok)}
           next.headers = headers
+
           return orig(`${base}${url}`, next)
         }
+
         return orig(input, init)
       }
     }
@@ -113,10 +129,14 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const currentBase = $connection.get()?.baseUrl || apiBase
           const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
           const headers: Record<string, string> = { Accept: 'application/json' }
-          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+
+          if (currentToken) {headers['Authorization'] = `Bearer ${currentToken}`}
+
           if (opts?.body && typeof opts.body !== 'string') { headers['Content-Type'] = 'application/json'; opts = { ...opts, body: JSON.stringify(opts.body) } }
           const res = await fetch(resolvedUrl, { ...opts, headers: { ...headers, ...(opts?.headers || {}) } })
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+
+          if (!res.ok) {throw new Error(`HTTP ${res.status}: ${await res.text()}`)}
+
           return res.json()
         },
         authedFetch: async (url: string, opts?: any) => {
@@ -124,10 +144,14 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const currentBase = $connection.get()?.baseUrl || apiBase
           const resolvedUrl = url.startsWith('/') ? `${currentBase}${url}` : url
           const headers: Record<string, string> = {}
-          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`
+
+          if (currentToken) {headers['Authorization'] = `Bearer ${currentToken}`}
+
           if (opts?.body && !(opts.body instanceof FormData)) { headers['Content-Type'] = 'application/json'; opts = { ...opts, body: JSON.stringify(opts.body) } }
           const res = await fetch(resolvedUrl, { ...opts, headers: { ...headers, ...(opts?.headers || {}) } })
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+
+          if (!res.ok) {throw new Error(`HTTP ${res.status}: ${await res.text()}`)}
+
           return res.json()
         },
         buildWsUrl: async (path: string, params?: Record<string, string>) => {
@@ -137,6 +161,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           const protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
           const sp = new URLSearchParams(params || {})
           sp.set('token', currentToken)
+
           // Kanban's WS contract (caller passes '/events' → /api/plugins/kanban/events).
           // Canvas does not use WS; this exists so an inheriting Kanban keeps working.
           return `${protocol}//${u.host}/api/plugins/kanban${path}?${sp}`
@@ -149,6 +174,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
     }
 
     const registry = win.__HERMES_PLUGINS__
+
     if (!registry._components['hermes-canvas']) {
       try {
         if (!document.querySelector('link[data-hermes-plugin="hermes-canvas"]')) {
@@ -159,6 +185,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           link.dataset.hermesPlugin = 'hermes-canvas'
           document.head.appendChild(link)
         }
+
         const resp = await fetch(canvasUrl(connection, '/dashboard-plugins/hermes-canvas/dist/index.js?v=12'))
         const code = await resp.text()
         assertCanExecuteGatewayPluginScript(connection?.baseUrl)
@@ -167,15 +194,18 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
         console.error('[canvas] Plugin script failed:', err)
         setError('Failed to load canvas plugin. Check that the gateway is running.')
         setLoading(false)
+
         return
       }
     }
 
     const CanvasPage = registry._components['hermes-canvas']
+
     if (!CanvasPage) {
       console.error('[canvas] Plugin loaded but failed to register. Registry:', Object.keys(registry._components))
       setError('Canvas plugin loaded but failed to register its component.')
       setLoading(false)
+
       return
     }
 
@@ -185,7 +215,9 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
   }, [connection])
 
   useEffect(() => { void loadCanvas() }, [loadCanvas])
-  useEffect(() => { setStatusbarItemGroup('canvas', []); return () => setStatusbarItemGroup('canvas', []) }, [setStatusbarItemGroup])
+  useEffect(() => { setStatusbarItemGroup('canvas', []);
+
+ return () => setStatusbarItemGroup('canvas', []) }, [setStatusbarItemGroup])
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-(--ui-chat-surface-background) pt-(--titlebar-height)">
@@ -195,7 +227,7 @@ export function CanvasView({ setStatusbarItemGroup }: { setStatusbarItemGroup: S
           <div><p className="text-lg font-medium text-destructive">Canvas unavailable</p><p className="mt-2 text-sm">{error}</p></div>
         </div>
       )}
-      <div ref={containerRef} className={cn('flex-1 overflow-auto', loading && 'hidden')} />
+      <div className={cn('flex-1 overflow-auto', loading && 'hidden')} ref={containerRef} />
     </div>
   )
 }

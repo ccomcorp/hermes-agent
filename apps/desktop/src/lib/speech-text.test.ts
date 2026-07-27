@@ -23,6 +23,7 @@ describe('resolveSpeakText conversational', () => {
       spokenReply: 'Here is the short take.',
       displayText: '## Huge\n\n| a | b |\n| 1 | 2 |\n\nLots of detail.'
     })
+
     expect(out).toBe('Here is the short take.')
   })
 

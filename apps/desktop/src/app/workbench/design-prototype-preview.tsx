@@ -94,7 +94,8 @@ export function DesignPrototypePreview({ html, fill = false }: DesignPrototypePr
   // window even while the cursor is over the preview.
   const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
     const box = boxRef.current
-    if (!box) return
+
+    if (!box) {return}
 
     e.preventDefault()
     const startX = e.clientX
@@ -102,14 +103,16 @@ export function DesignPrototypePreview({ html, fill = false }: DesignPrototypePr
     const startW = box.offsetWidth
     const startH = box.offsetHeight
     const frame = frameRef.current
-    if (frame) frame.style.pointerEvents = 'none'
+
+    if (frame) {frame.style.pointerEvents = 'none'}
 
     const onMove = (ev: PointerEvent) => {
       box.style.width = `${Math.max(360, startW + (ev.clientX - startX))}px`
       box.style.height = `${Math.max(240, startH + (ev.clientY - startY))}px`
     }
+
     const onUp = () => {
-      if (frame) frame.style.pointerEvents = ''
+      if (frame) {frame.style.pointerEvents = ''}
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }

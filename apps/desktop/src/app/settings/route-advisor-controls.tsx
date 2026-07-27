@@ -52,6 +52,7 @@ export function RouteAdvisorControls({ config, onConfigChange }: Props) {
   const handleCooldownChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const parsed = parseInt(e.target.value, 10)
+
       if (!isNaN(parsed) && parsed >= 1) {
         onConfigChange(setNested(config, 'route_advisor.cooldown_turns', parsed))
       }

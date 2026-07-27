@@ -40,6 +40,7 @@ import { Copy, Download, FolderOpen, RefreshCw, Upload } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 import type { HermesConfigRecord } from '@/types/hermes'
+
 import { setHermesConfigCache } from '../hooks/use-config-record'
 import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
@@ -67,6 +68,7 @@ export function ConfigView({
   ...props
 }: ConfigViewProps) {
   const sectionIds = useMemo(() => SECTIONS.map(section => section.id), [])
+
   const [activeSectionId, setActiveSectionId] = useRouteEnumParam(
     'section',
     sectionIds,

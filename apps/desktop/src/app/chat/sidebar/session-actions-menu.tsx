@@ -256,6 +256,7 @@ function useSessionActions({
       setMoving(false)
     }
   }
+
   const tiles = useStore($sessionTiles)
   const selectedStoredSessionId = useStore($selectedStoredSessionId)
 
@@ -431,7 +432,7 @@ function useSessionActions({
 
   const renderMoveSubmenu = (kit: MenuKit) => (
     <kit.Sub key="move-to-project">
-      <kit.SubTrigger disabled={!sessionId || moving} className="gap-2">
+      <kit.SubTrigger className="gap-2" disabled={!sessionId || moving}>
         <Codicon name="folder" size="0.875rem" />
         <span>{r.moveToProject}</span>
       </kit.SubTrigger>
@@ -748,6 +749,7 @@ function MoveToNewProjectDialog({
         folder: trimmedFolder,
         profile
       })
+
       notify({
         durationMs: 2_500,
         kind: 'success',

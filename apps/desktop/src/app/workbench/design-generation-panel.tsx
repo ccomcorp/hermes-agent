@@ -76,6 +76,7 @@ import {
   readRequirement,
   updateRequirement
 } from './api'
+import { builtEntryCandidates, extractDevPreviewUrl, toFileUrl } from './built-result'
 import { buildDesignGenerationPrompt, defaultDesignSettingsForGeneration, stripCodeFence } from './design-generation'
 import type { DesignGenerationKind } from './design-generation'
 import { buildDesignHandoffMessage } from './design-handoff'
@@ -86,9 +87,8 @@ import {
   kanbanStatusBadgeVariant,
   sendDesignToKanban
 } from './design-kanban'
-import { builtEntryCandidates, extractDevPreviewUrl, toFileUrl } from './built-result'
-import { openInCanvas } from './open-in-canvas'
 import { DesignPrototypePreview } from './design-prototype-preview'
+import { openInCanvas } from './open-in-canvas'
 import {
   $workbenchActiveRequirementId,
   $workbenchActiveRequirementTrace,
@@ -290,6 +290,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
 
     void (async () => {
       const reqRes = await readRequirement(workspaceRoot, requirementId)
+
       if (cancelled || !reqRes.ok) {
         return
       }
@@ -301,6 +302,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         status: 'implemented',
         autoAdvance: true
       })
+
       if (cancelled || !upd.ok) {
         return
       }
@@ -340,7 +342,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         try {
           const res = await window.hermesDesktop.readFileText(candidate)
 
-          if (cancelled) return
+          if (cancelled) {return}
 
           if (res && typeof res.text === 'string' && res.text.trim() && !res.binary) {
             setBuiltResult({ path: res.path || candidate, html: res.text })
@@ -352,7 +354,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         }
       }
 
-      if (!cancelled) setBuiltResult(null)
+      if (!cancelled) {setBuiltResult(null)}
     })()
 
     return () => {
@@ -370,7 +372,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
       if (c && c.status === 'done' && c.title) {
         const u = extractDevPreviewUrl(c.title)
 
-        if (u) return u
+        if (u) {return u}
       }
     }
 
@@ -534,6 +536,7 @@ export function DesignGenerationPanel({ workspaceRoot }: DesignGenerationPanelPr
         } else {
           addLinkedKanbanCardId(targetRequirementId, cardId)
         }
+
         notify({ kind: 'success', title: s.designGeneration.sentToKanban, message: '' })
       } else {
         // Card exists on the board; only the backlink failed. Surface it as a

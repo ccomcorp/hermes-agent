@@ -437,14 +437,17 @@ export function sessionProjectColor(session: SessionInfo, projects: ProjectInfo[
 const sessionLineageKeys = (session: SessionInfo): Set<string> => {
   const keys = new Set<string>([session.id])
   const root = (session as SessionInfo & { _lineage_root_id?: null | string })._lineage_root_id
+
   if (root) {
     keys.add(root)
   }
+
   return keys
 }
 
 const upsertSession = (rows: SessionInfo[], session: SessionInfo): SessionInfo[] => {
   const lineage = sessionLineageKeys(session)
+
   return [session, ...rows.filter(row => !lineage.has(row.id) && !sessionLineageKeys(row).has(session.id))].sort(
     (a, b) => b.started_at - a.started_at
   )
@@ -570,10 +573,12 @@ export function overlayRepoLanes(
     // cwd move cannot leave a stale copy under the previous worktree/main row.
     // Without this, backend snapshot placement + live re-placement stack duplicates.
     const lineage = sessionLineageKeys(session)
+
     for (const g of lanes) {
       if (g === lane) {
         continue
       }
+
       const before = g.sessions.length
       g.sessions = g.sessions.filter(row => !lineage.has(row.id) && !sessionLineageKeys(row).has(session.id))
       changed ||= g.sessions.length !== before
@@ -615,6 +620,7 @@ export function overlayLiveLanes(
     }
 
     const cwd = (session.cwd || '').trim()
+
     if (!cwd) {
       continue
     }
@@ -629,12 +635,14 @@ export function overlayLiveLanes(
       //    those lanes are not under the main root but still belong to the repo)
       let score = -1
       const root = (repo.path || '').trim()
+
       if (root && isPathUnder(root, cwd)) {
         score = segments(root).length
       }
 
       for (const group of repo.groups) {
         const lanePath = normalizePath(group.path)
+
         if (lanePath && isPathUnder(lanePath, cwd)) {
           // Lane matches dominate root matches so a session in a sibling
           // worktree is attributed to its owning repo even when cwd is not

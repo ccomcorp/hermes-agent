@@ -72,6 +72,7 @@ export function useAutoSpeakReplies({
       markSpoken()
 
       const mode = $speakMode.get() === 'conversational' ? 'conversational' : 'full'
+
       const text = resolveSpeakText({
         mode,
         spokenReply: reply.spoken_reply,
