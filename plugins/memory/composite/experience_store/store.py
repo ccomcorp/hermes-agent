@@ -60,6 +60,10 @@ VALID_DERIVATIONS = {
 
 VALID_SOURCES = {"auto", "reviewed"}
 
+# A brain transport outage must leave a pending observation to replay; only a
+# substantive, non-confirming response consumes this retry budget.
+OBSERVE_OUTBOX_MAX_ATTEMPTS = 3
+
 
 def _perf_clock() -> float:
     return time.perf_counter()
@@ -611,6 +615,163 @@ class ExperienceStore:
             counts[row[0]] = row[1]
         return counts
 
+    # ----- observe outbox (M0-B3: durable deferred brain observations) -----
+
+    @_synchronized
+    def observe_outbox_enqueue(
+        self,
+        *,
+        payload: dict[str, Any],
+        content_hash: str,
+        session_id: str,
+        enqueue_key: str,
+    ) -> str:
+        """Persist a failed brain observation, deduplicated by ``enqueue_key``.
+
+        Observe operations intentionally use a distinct table from deferred
+        signals: an observation is not an outcome and must never manufacture a
+        valence/derivation merely to fit the signal ledger.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("observe outbox payload must be a dict")
+        if not content_hash or not enqueue_key:
+            raise ValueError("observe outbox requires content_hash and enqueue_key")
+
+        entry_id = uuid.uuid4().hex
+        self._conn.execute(
+            """
+            INSERT INTO observe_outbox
+                (id, payload, content_hash, session_id, enqueue_key, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+            ON CONFLICT(enqueue_key) DO NOTHING
+            """,
+            (
+                entry_id,
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                str(content_hash),
+                str(session_id),
+                str(enqueue_key),
+                time.time(),
+            ),
+        )
+        row = self._conn.execute(
+            "SELECT id FROM observe_outbox WHERE enqueue_key = ?", (str(enqueue_key),)
+        ).fetchone()
+        self._conn.commit()
+        if row is None:  # pragma: no cover - defensive SQLite invariant guard
+            raise RuntimeError("observe outbox enqueue did not persist an entry")
+        return str(row[0])
+
+    @_synchronized
+    def observe_outbox_claim(self) -> dict | None:
+        """Atomically claim the oldest pending observe operation, if any."""
+        row = self._conn.execute(
+            """
+            SELECT id, payload, content_hash, session_id, enqueue_key, attempts, created_at
+            FROM observe_outbox
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+
+        claim_id = uuid.uuid4().hex
+        cur = self._conn.execute(
+            """
+            UPDATE observe_outbox
+            SET status = 'in_flight', claim_id = ?, last_attempt_ts = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (claim_id, time.time(), row[0]),
+        )
+        self._conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return {
+            "id": row[0],
+            "payload": json.loads(row[1]),
+            "content_hash": row[2],
+            "session_id": row[3],
+            "enqueue_key": row[4],
+            "attempts": row[5],
+            "created_at": row[6],
+            "claim_id": claim_id,
+        }
+
+    @_synchronized
+    def observe_outbox_confirm(
+        self, entry_id: str, observation_id: str, claim_id: str
+    ) -> bool:
+        """Mark a claimed observation as durably delivered to the brain."""
+        cur = self._conn.execute(
+            """
+            UPDATE observe_outbox
+            SET status = 'confirmed', observation_id = ?, claim_id = NULL, last_error = NULL
+            WHERE id = ? AND status = 'in_flight' AND claim_id = ?
+            """,
+            (str(observation_id), str(entry_id), str(claim_id)),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    @_synchronized
+    def observe_outbox_fail(self, entry_id: str, reason: str, claim_id: str) -> bool:
+        """Return an observation to pending or dead-letter it after substantive failures."""
+        if reason not in {"transport", "substantive"}:
+            raise ValueError("observe outbox failure reason must be transport or substantive")
+
+        if reason == "transport":
+            cur = self._conn.execute(
+                """
+                UPDATE observe_outbox
+                SET status = 'pending', claim_id = NULL, last_error = ?
+                WHERE id = ? AND status = 'in_flight' AND claim_id = ?
+                """,
+                (reason, str(entry_id), str(claim_id)),
+            )
+        else:
+            cur = self._conn.execute(
+                """
+                UPDATE observe_outbox
+                SET status = CASE WHEN attempts + 1 >= ? THEN 'dead' ELSE 'pending' END,
+                    attempts = attempts + 1,
+                    claim_id = NULL,
+                    last_error = ?
+                WHERE id = ? AND status = 'in_flight' AND claim_id = ?
+                """,
+                (OBSERVE_OUTBOX_MAX_ATTEMPTS, reason, str(entry_id), str(claim_id)),
+            )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    @_synchronized
+    def observe_outbox_reclaim(self) -> int:
+        """Recover operations stranded in flight by a prior process crash/restart."""
+        cur = self._conn.execute(
+            """
+            UPDATE observe_outbox
+            SET status = 'pending', claim_id = NULL
+            WHERE status = 'in_flight'
+            """
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    @_synchronized
+    def observe_outbox_counts(self) -> dict[str, int]:
+        """Return observe-outbox status counts plus the largest retry count seen."""
+        counts: dict[str, int] = {}
+        for status, count in self._conn.execute(
+            "SELECT status, COUNT(*) FROM observe_outbox GROUP BY status"
+        ).fetchall():
+            counts[str(status)] = int(count)
+        counts["max_attempts"] = int(
+            self._conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM observe_outbox").fetchone()[0]
+        )
+        return counts
+
 
 __all__ = [
     "ExperienceStore",
@@ -619,4 +780,5 @@ __all__ = [
     "VALID_SOURCES",
     "VALID_DERIVATIONS",
     "RECALL_BUDGET_MS",
+    "OBSERVE_OUTBOX_MAX_ATTEMPTS",
 ]

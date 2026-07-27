@@ -4,6 +4,8 @@ EVAL-CB3-01: no legacy resolver/path mutation
 EVAL-CB3-02: provider store identity is plugins.memory.composite.experience_store.ExperienceStore
 EVAL-CB3-03: build+initialize succeeds under absent/unreachable AIOS vars without opening store before initialize
 EVAL-CB3-04: native loop_self_check parity (write-only, circulating, fresh-store cases)
+EVAL-CB3-05: durable observe outbox in test_outbox_drain.py (offline/no-id enqueue,
+persisted replay, bounded failures, and claim-token isolation)
 """
 
 from __future__ import annotations

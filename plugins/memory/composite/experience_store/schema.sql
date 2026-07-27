@@ -85,3 +85,26 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS idx_signals_lesson ON signals(lesson_ref);
 CREATE INDEX IF NOT EXISTS idx_receipts_consumed ON receipts(consumed, kind);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
+
+-- Durable observe outbox (M0-B3). This is deliberately separate from the
+-- signal outbox above: signal rows are outcome-derived (lesson_ref + valence +
+-- derivation), while failed brain observations are replayable context payloads.
+-- Keeping the ledgers separate preserves the signal contract and allows an
+-- observe retry to be tracked without inventing a synthetic outcome signal.
+CREATE TABLE IF NOT EXISTS observe_outbox (
+    id              TEXT PRIMARY KEY,          -- uuid4 hex
+    payload         TEXT NOT NULL,              -- JSON brain.observe payload
+    content_hash    TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
+    enqueue_key     TEXT NOT NULL UNIQUE,       -- session + content hash dedup key
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending | in_flight | confirmed | dead
+    attempts        INTEGER NOT NULL DEFAULT 0, -- substantive failures only
+    claim_id        TEXT,
+    observation_id  TEXT,
+    last_error      TEXT,
+    last_attempt_ts REAL,
+    created_at      REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_observe_outbox_status
+    ON observe_outbox(status, created_at);

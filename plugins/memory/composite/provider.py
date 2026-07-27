@@ -311,7 +311,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # never blocks boot.
         if self._store is not None and self._brain_stage >= 1:
             try:
-                reclaimed = self._store.outbox_reclaim()
+                reclaimed = self._store.observe_outbox_reclaim()
                 if reclaimed:
                     logger.info("outbox restart-reclaim: %d in_flight op(s) → pending", reclaimed)
             except Exception as exc:
@@ -383,8 +383,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             return BRAIN_FAIL
         try:
             content_hash = _observe_content_hash(content)
-            self._store.outbox_enqueue(
-                kind="observe",
+            self._store.observe_outbox_enqueue(
                 payload={"type": "context", "content": content},
                 content_hash=content_hash,
                 session_id=session_id,
@@ -398,13 +397,13 @@ class HermesCompositeProvider(CompositeMemoryProvider):
     def _drain_outbox(self, max_ops: int = _OUTBOX_DRAIN_MAX) -> Dict[str, int]:
         """Drain pending observe ops to the brain — OFF the turn thread (SPEC-m1-outbox §2.3).
 
-        Single-drainer-per-pass, bounded by ``max_ops``. Each op: atomic ``outbox_claim``
+        Single-drainer-per-pass, bounded by ``max_ops``. Each op: atomic ``observe_outbox_claim``
         (pending→in_flight), then re-POST observe OUTSIDE the store lock, then settle:
-          * valid ``observation_id`` returned → ``outbox_confirm`` (in_flight→confirmed).
-          * transport error (observe raised) → ``outbox_fail('transport')`` (back to pending,
+          * valid ``observation_id`` returned → ``observe_outbox_confirm`` (in_flight→confirmed).
+          * transport error (observe raised) → ``observe_outbox_fail('transport')`` (back to pending,
             attempts UNCHANGED — a long outage must not poison-kill, §2.3 finding #6).
           * non-confirming response (no id, treated as a substantive/4xx reject) →
-            ``outbox_fail('substantive')`` (attempts++, → dead at the cap).
+            ``observe_outbox_fail('substantive')`` (attempts++, → dead at the cap).
         Best-effort throughout: a settle/claim failure logs and the pass stops; it NEVER raises
         into the caller (the background worker). Guarded to brain_stage>=1 + a present brain/store.
         Returns ``{confirmed, transport_fail, substantive_fail}`` counts (useful to tests/health).
@@ -414,22 +413,26 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             return out
         for _ in range(max(0, int(max_ops))):
             try:
-                row = self._store.outbox_claim()
+                row = self._store.observe_outbox_claim()
             except Exception as exc:
-                logger.debug("outbox_claim failed; stopping drain pass: %s", exc)
+                logger.debug("observe_outbox_claim failed; stopping drain pass: %s", exc)
                 break
             if row is None:
                 break  # nothing pending
             oid = row["id"]
+            claim_id = row.get("claim_id")
             payload = row.get("payload") or {}
+            if not isinstance(claim_id, str) or not claim_id:
+                logger.debug("outbox drain received an unclaimed row; stopping pass")
+                break
             try:
                 obs_id = self._brain.observe(payload)
             except Exception as exc:  # transport — back to pending, do not poison.
                 logger.debug("outbox drain observe transport-failed: %s", exc)
                 try:
-                    self._store.outbox_fail(oid, "transport")
+                    self._store.observe_outbox_fail(oid, "transport", claim_id)
                 except Exception as exc2:
-                    logger.debug("outbox_fail(transport) failed: %s", exc2)
+                    logger.debug("observe_outbox_fail(transport) failed: %s", exc2)
                 out["transport_fail"] += 1
                 # The brain is unreachable: a transport-failed op returns to pending with
                 # attempts UNCHANGED. STOP the pass rather than re-claim the same row in a spin —
@@ -437,10 +440,10 @@ class HermesCompositeProvider(CompositeMemoryProvider):
                 break
             try:
                 if obs_id:
-                    self._store.outbox_confirm(oid, str(obs_id))
+                    self._store.observe_outbox_confirm(oid, str(obs_id), claim_id)
                     out["confirmed"] += 1
                 else:
-                    self._store.outbox_fail(oid, "substantive")
+                    self._store.observe_outbox_fail(oid, "substantive", claim_id)
                     out["substantive_fail"] += 1
             except Exception as exc:
                 logger.debug("outbox settle failed for %s: %s", oid, exc)
