@@ -9,6 +9,24 @@ from unittest.mock import MagicMock
 from tools.environments.base import BaseEnvironment, _BoundedOutputCollector
 
 
+def _bash_executable_or_skip() -> str:
+    """Return the real Bash executable on every supported host.
+
+    Native Windows CI can expose Git Bash through ``PATH`` while having no
+    POSIX ``/bin/bash`` path.  Execute the discovered binary rather than
+    claiming the behavioral shell tests are runnable and then failing before
+    their assertions.
+    """
+    import shutil
+
+    bash = shutil.which("bash")
+    if bash is None:
+        import pytest
+
+        pytest.skip("bash required")
+    return bash
+
+
 class _TestableEnv(BaseEnvironment):
     """Concrete subclass for testing base class methods."""
 
@@ -252,13 +270,9 @@ class TestAtomicSnapshotConcurrencyBehavioral:
 
     def _run(self, script):
         import subprocess
-        return subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True)
+        return subprocess.run([_bash_executable_or_skip(), "-c", script], capture_output=True, text=True)
 
     def test_concurrent_writes_never_tear_the_snapshot(self, tmp_path):
-        import shutil
-        if not shutil.which("bash"):
-            import pytest
-            pytest.skip("bash required")
         import shlex
         snap = str(tmp_path / "hermes-snap-x.sh")
         _q = shlex.quote
@@ -293,10 +307,6 @@ class TestAtomicSnapshotConcurrencyBehavioral:
     def test_failed_export_does_not_destroy_good_snapshot(self, tmp_path):
         """If ``export -p`` fails, the ``&&``-chained mv must NOT clobber the
         existing good snapshot."""
-        import shutil
-        if not shutil.which("bash"):
-            import pytest
-            pytest.skip("bash required")
         import shlex
         snap = str(tmp_path / "snap.sh")
         _q = shlex.quote
@@ -319,12 +329,16 @@ class TestSnapshotFileModes:
     def test_snapshot_and_cwd_files_are_0600(self, tmp_path):
         import os
         from pathlib import Path
-        import shutil
         import stat
         import subprocess
-        if not shutil.which("bash"):
+
+        # This asserts POSIX mode bits on the real filesystem. Git Bash makes
+        # shell commands available on native Windows, but it does not make the
+        # Windows filesystem expose Unix 0600/0644 semantics to pathlib.
+        if os.name == "nt":
             import pytest
-            pytest.skip("bash required")
+
+            pytest.skip("POSIX file-mode contract is not observable on native Windows")
 
         class ExecutableEnv(BaseEnvironment):
             def __init__(self, temp_dir):
@@ -336,7 +350,7 @@ class TestSnapshotFileModes:
 
             def _run_bash(self, cmd_string, *, login=False, timeout=120, stdin_data=None):
                 proc = subprocess.Popen(
-                    ["/bin/bash", "-lc", cmd_string],
+                    [_bash_executable_or_skip(), "-lc", cmd_string],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
