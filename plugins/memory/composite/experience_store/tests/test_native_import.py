@@ -103,7 +103,7 @@ def test_experience_store_appends_and_recalls(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# EVAL-RB-01: deliberate native-import negative test
+# EVAL-CB2-05: negative import provenance — prove AIOS vars not required
 # ---------------------------------------------------------------------------
 
 def test_experience_store_does_not_need_aios_variables(monkeypatch) -> None:

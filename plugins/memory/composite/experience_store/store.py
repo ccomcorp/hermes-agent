@@ -352,6 +352,11 @@ class ExperienceStore:
         return mark_consumed(self._conn, receipt_id)
 
     @_synchronized
+    def get_receipt(self, receipt_id: str) -> dict | None:
+        """Return a receipt by id, or None if not found."""
+        return get_receipt(self._conn, receipt_id)
+
+    @_synchronized
     def set_source(self, ref, source: str) -> dict | None:
         """Set a lesson's source ('auto' | 'reviewed'). Returns the updated record or None."""
         if source not in VALID_SOURCES:
@@ -425,19 +430,18 @@ class ExperienceStore:
 
     @_synchronized
     def aggregate(self, window: int | None = None) -> dict:
-        """Return aggregate statistics for the store."""
-        sql = "SELECT COUNT(*) FROM lessons WHERE tombstoned = 0"
-        total_lessons = self._conn.execute(sql).fetchone()[0]
+        """Return aggregate statistics for the store (AIOS parity: 11+ fields)."""
+        total_lessons = self._conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE tombstoned = 0"
+        ).fetchone()[0]
 
-        sql2 = (
+        recall_hits = self._conn.execute(
             "SELECT COUNT(*) FROM receipts WHERE kind = 'hit'"
-        )
-        recall_hits = self._conn.execute(sql2).fetchone()[0]
+        ).fetchone()[0]
 
-        sql3 = (
+        recall_misses = self._conn.execute(
             "SELECT COUNT(*) FROM receipts WHERE kind = 'miss'"
-        )
-        recall_misses = self._conn.execute(sql3).fetchone()[0]
+        ).fetchone()[0]
 
         consumed = self.circulation(window=window)
 
@@ -449,6 +453,26 @@ class ExperienceStore:
             ).fetchall()
         })
 
+        # FI-02: expanded aggregate fields (AIOS parity)
+        fork_authored = self._conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE migrated = 0"
+        ).fetchone()[0]
+
+        migrated_lessons = self._conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE migrated = 1"
+        ).fetchone()[0]
+
+        tombstoned = self._conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE tombstoned = 1"
+        ).fetchone()[0]
+
+        never_recalled = self._conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE uses = 0 AND tombstoned = 0"
+        ).fetchone()[0]
+
+        unsignalled_lessons = total_lessons - signalled_lessons
+
+        # variance: use population variance (AIOS parity)
         variance = 0.0
         if len(all_signals) >= 2:
             mean = sum(all_signals) / len(all_signals)
@@ -462,8 +486,15 @@ class ExperienceStore:
             "valence_count": len(all_signals),
             "signalled_lessons": signalled_lessons,
             "valence_variance": variance,
+            # FI-02: expanded fields
+            "fork_authored": fork_authored,
+            "migrated_lessons": migrated_lessons,
+            "tombstoned": tombstoned,
+            "never_recalled": never_recalled,
+            "unsignalled_lessons": unsignalled_lessons,
         }
 
+    @_synchronized
     def iter_lessons(self, *, include_tombstoned: bool = False, source: str | None = None):
         """ADDITIVE read-only iterator over lessons (full records, via get())."""
         sql = "SELECT id FROM lessons"
@@ -476,11 +507,109 @@ class ExperienceStore:
             params.append(source)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY ts DESC"
+        sql += " ORDER BY ts ASC, rowid ASC"
         for (ref,) in self._conn.execute(sql, params).fetchall():
             rec = self.get(ref)
             if rec is not None:
                 yield rec
+
+    # ----- outbox (FI-01: durable deferred signal writes, AIOS parity) -----
+
+    @_synchronized
+    def outbox_enqueue(
+        self, lesson_ref: str, valence: float, derivation: str
+    ) -> str:
+        """Enqueue a deferred signal for processing by the outbox drain loop.
+
+        Returns the entry's uuid4 hex id.
+        """
+        if derivation not in VALID_DERIVATIONS:
+            raise ConstantValenceError(
+                f"derivation must be one of {sorted(VALID_DERIVATIONS)}; "
+                f"got {derivation!r}"
+            )
+        entry_id = uuid.uuid4().hex
+        self._conn.execute(
+            "INSERT INTO outbox (id, lesson_ref, valence, derivation, status, created_at) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (entry_id, lesson_ref, float(valence), derivation, time.time()),
+        )
+        self._conn.commit()
+        return entry_id
+
+    @_synchronized
+    def outbox_claim(self) -> dict | None:
+        """Claim the oldest pending outbox entry. Returns None if empty."""
+        row = self._conn.execute(
+            "SELECT id, lesson_ref, valence, derivation, retries, created_at "
+            "FROM outbox WHERE status = 'pending' "
+            "ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        claim_id = uuid.uuid4().hex
+        self._conn.execute(
+            "UPDATE outbox SET status = 'claimed', claim_id = ?, "
+            "last_attempt_ts = ? WHERE id = ?",
+            (claim_id, time.time(), row[0]),
+        )
+        self._conn.commit()
+        return {
+            "id": row[0],
+            "lesson_ref": row[1],
+            "valence": row[2],
+            "derivation": row[3],
+            "retries": row[4],
+            "created_at": row[5],
+            "claim_id": claim_id,
+        }
+
+    @_synchronized
+    def outbox_confirm(self, entry_id: str) -> bool:
+        """Confirm a claimed outbox entry as processed."""
+        cur = self._conn.execute(
+            "UPDATE outbox SET status = 'confirmed' WHERE id = ? AND status = 'claimed'",
+            (entry_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    @_synchronized
+    def outbox_fail(self, entry_id: str) -> bool:
+        """Mark a claimed outbox entry as failed (eligible for reclaim)."""
+        cur = self._conn.execute(
+            "UPDATE outbox SET status = 'failed', retries = retries + 1 "
+            "WHERE id = ? AND status = 'claimed'",
+            (entry_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    @_synchronized
+    def outbox_reclaim(self, max_age_seconds: float = 300.0) -> int:
+        """Return all failed entries older than max_age_seconds to pending status.
+
+        Returns the count of reclaimed entries.
+        """
+        cutoff = time.time() - max_age_seconds
+        self._conn.execute(
+            "UPDATE outbox SET status = 'pending', claim_id = NULL "
+            "WHERE status = 'failed' AND last_attempt_ts < ?",
+            (cutoff,),
+        )
+        reclaimed = self._conn.total_changes
+        self._conn.commit()
+        return reclaimed
+
+    @_synchronized
+    def outbox_counts(self) -> dict:
+        """Return counts of outbox entries by status."""
+        counts: dict[str, int] = {}
+        for row in self._conn.execute(
+            "SELECT status, COUNT(*) FROM outbox GROUP BY status"
+        ).fetchall():
+            counts[row[0]] = row[1]
+        return counts
 
 
 __all__ = [

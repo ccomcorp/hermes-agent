@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,21 @@ BACKUP_MISSING = "BACKUP_MISSING"
 FIXTURE_INVALID = "FIXTURE_INVALID"
 MANIFEST_PARSE_ERROR = "MANIFEST_PARSE_ERROR"
 OK = "OK"
+
+# --- Fixed required-file allowlist ---
+# FH-01: the harness independently enforces exactly these 5 files.
+# A manifest declaring anything else (extra, missing, or different set) is rejected.
+
+_REQUIRED_FILES: tuple[str, ...] = (
+    "experience.db",
+    "experience.db-wal",
+    "experience.db-shm",
+    "composite/config.json",
+    ".env.placeholders",
+)
+
+# SHA-256 hex digest pattern: exactly 64 lowercase hex chars.
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass
@@ -69,7 +85,11 @@ def validate_fixture_bundle(bundle_dir: str | Path) -> FixtureResult:
     Checks (in order):
       1. Bundle directory exists.
       2. manifest.json exists and parses to valid JSON.
-      3. Every file declared in manifest.files exists at the expected sha256.
+      3. FH-02: Every file key is a safe relative path (no '..', no absolute, no traversal).
+      4. FH-01: manifest.files EXACTLY matches _REQUIRED_FILES (no extra, no missing).
+      5. FH-03: Every digest is a 64-char hex string SHA-256.
+      6. Every declared file exists at the expected SHA-256.
+      7. The bundle directory does NOT resolve to the current HERMES_HOME.
 
     Returns a FixtureResult — if result.is_valid is False, the caller MUST NOT
     open any SQLite or read any fixture file.
@@ -97,13 +117,62 @@ def validate_fixture_bundle(bundle_dir: str | Path) -> FixtureResult:
             detail=f"Failed to parse manifest.json: {exc}",
         )
 
-    files: dict[str, str] = manifest.get("files", {})
+    files: dict[str, Any] = manifest.get("files", {})
     if not isinstance(files, dict) or not files:
         return FixtureResult(
             status=FIXTURE_INVALID,
             detail="manifest.files is missing or empty",
         )
 
+    # FH-02: path-traversal and absolute-path rejection — BEFORE any file I/O.
+    for rel_path in list(files.keys()):
+        if not isinstance(rel_path, str):
+            return FixtureResult(
+                status=FIXTURE_INVALID,
+                detail=f"manifest.files key is not a string: {rel_path!r}",
+            )
+        if os.path.isabs(rel_path) or rel_path.startswith("/"):
+            return FixtureResult(
+                status=FIXTURE_INVALID,
+                detail=f"manifest.files contains absolute path: {rel_path!r}",
+            )
+        if ".." in Path(rel_path).parts:
+            return FixtureResult(
+                status=FIXTURE_INVALID,
+                detail=f"manifest.files contains traversal path: {rel_path!r}",
+            )
+
+    # FH-03: digest-form validation — must be 64-char hex strings.
+    for rel_path, digest in files.items():
+        if not isinstance(digest, str):
+            return FixtureResult(
+                status=FIXTURE_INVALID,
+                detail=f"manifest.files[{rel_path!r}] digest is not a string: {type(digest).__name__}",
+            )
+        if not _HEX64_RE.match(digest):
+            return FixtureResult(
+                status=FIXTURE_INVALID,
+                detail=f"manifest.files[{rel_path!r}] digest is not a valid 64-char SHA-256 hex: {digest!r}",
+            )
+
+    # FH-01: fixed required-file allowlist enforcement.
+    declared_set = set(files.keys())
+    required_set = set(_REQUIRED_FILES)
+    if declared_set != required_set:
+        extra = declared_set - required_set
+        missing = required_set - declared_set
+        parts: list[str] = []
+        if extra:
+            parts.append(f"unexpected files: {sorted(extra)}")
+        if missing:
+            parts.append(f"missing required files: {sorted(missing)}")
+        return FixtureResult(
+            status=FIXTURE_INVALID,
+            detail="manifest.files does not match required bundle set — " + "; ".join(parts),
+            missing_files=sorted(missing),
+        )
+
+    # Hash verification — every file must exist with matching SHA-256.
     missing_files: list[str] = []
     mismatched_files: list[str] = []
 
@@ -131,6 +200,14 @@ def validate_fixture_bundle(bundle_dir: str | Path) -> FixtureResult:
             status=FIXTURE_INVALID,
             detail="Fixture file hash mismatch — bundle may be tampered or stale",
             mismatched_files=mismatched_files,
+        )
+
+    # Reject bundles that resolve to current HERMES_HOME.
+    hermes_home = os.environ.get("HERMES_HOME", "")
+    if hermes_home and bundle.resolve() == Path(hermes_home).resolve():
+        return FixtureResult(
+            status=FIXTURE_INVALID,
+            detail="Bundle directory resolves to current HERMES_HOME — refusing to open",
         )
 
     return FixtureResult(
@@ -168,22 +245,43 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-# --- builder (for operator use) ---
+# --- builder (operator helper — DISABLED after FH-04) ---
 
 def write_manifest(bundle_dir: str | Path, source_commit: str = "", source_sha256: str = "") -> str:
     """Scan bundle_dir for declared files, compute their hashes, and write manifest.json.
 
-    This is the operator-side helper — ONLY ever run against the verified
-    operator-supplied bundle.
+    FH-04: This function is DISABLED for production use.  It exists ONLY for
+    test harness construction and raises RuntimeError when called against
+    paths that are not explicitly under a disposable temp directory (tests
+    construct bundles under tmp_path).
     """
-    bundle = Path(bundle_dir)
-    files = [
-        "experience.db",
-        "experience.db-wal",
-        "experience.db-shm",
-        "composite/config.json",
-        ".env.placeholders",
-    ]
+    from pathlib import Path as _Path
+
+    bundle = _Path(bundle_dir)
+
+    # Guard: refuse any path that is not under a disposable temp directory.
+    # This prevents operator misuse against production/live state.
+    bundle_resolved = bundle.resolve()
+    for temp_root in (
+        _Path("/tmp"), _Path("/var/tmp"),
+        # Windows temp directories
+        _Path(os.environ.get("TMP", "")),
+        _Path(os.environ.get("TEMP", "")),
+    ):
+        try:
+            bundle_resolved.relative_to(temp_root.resolve())
+            break
+        except (ValueError, OSError):
+            continue
+    else:
+        raise RuntimeError(
+            "write_manifest is disabled for non-test use. "
+            "Manifests must only be created against operator-supplied verified bundles "
+            "under disposable temp directories. "
+            f"Refusing path: {bundle_resolved}"
+        )
+
+    files = list(_REQUIRED_FILES)
 
     file_hashes: dict[str, str] = {}
     for rel in files:
@@ -209,6 +307,7 @@ __all__ = [
     "MANIFEST_PARSE_ERROR",
     "OK",
     "FixtureResult",
+    "_REQUIRED_FILES",
     "validate_fixture_bundle",
     "open_fixture_store",
     "write_manifest",

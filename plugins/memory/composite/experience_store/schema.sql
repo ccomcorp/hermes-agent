@@ -65,5 +65,23 @@ CREATE TABLE IF NOT EXISTS receipts (
     ts          REAL NOT NULL
 );
 
+-- Durable outbox for deferred signal writes (B2).
+-- provider.py calls outbox_enqueue() to defer signal processing;
+-- the outbox drain loop claims, confirms, or fails each entry.
+-- claim_id is non-NULL only while an entry is in-flight.
+CREATE TABLE IF NOT EXISTS outbox (
+    id              TEXT PRIMARY KEY,          -- uuid4 hex
+    lesson_ref      TEXT NOT NULL,
+    valence         REAL NOT NULL,
+    derivation      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending | claimed | confirmed | failed
+    claim_id        TEXT,
+    retries         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_ts REAL,
+    created_at      REAL NOT NULL,
+    FOREIGN KEY (lesson_ref) REFERENCES lessons(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_signals_lesson ON signals(lesson_ref);
 CREATE INDEX IF NOT EXISTS idx_receipts_consumed ON receipts(consumed, kind);
+CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);

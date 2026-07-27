@@ -17,6 +17,7 @@ from plugins.memory.composite.experience_store.fixture_harness import (
     MANIFEST_PARSE_ERROR,
     OK,
     FixtureResult,
+    _REQUIRED_FILES,
     _sha256_file,
     open_fixture_store,
     validate_fixture_bundle,
@@ -55,7 +56,7 @@ def _make_minimal_bundle(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# EVAL-CB2-03: BACKUP_MISSING — bundle directory absent
+# Fixture harness: BACKUP_MISSING — bundle directory absent
 # ---------------------------------------------------------------------------
 
 def test_fixture_harness_backup_missing_when_dir_absent(tmp_path: Path) -> None:
@@ -78,7 +79,7 @@ def test_fixture_harness_backup_missing_when_manifest_absent(tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
-# EVAL-CB2-05: MANIFEST_PARSE_ERROR — corrupt manifest
+# Fixture harness: MANIFEST_PARSE_ERROR — corrupt manifest
 # ---------------------------------------------------------------------------
 
 def test_fixture_harness_manifest_parse_error_on_corrupt_json(tmp_path: Path) -> None:
@@ -102,14 +103,16 @@ def test_fixture_harness_manifest_invalid_when_files_empty(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# EVAL-CB2-03: FIXTURE_INVALID — missing or mismatched files
+# Fixture harness: FIXTURE_INVALID — missing or mismatched files
 # ---------------------------------------------------------------------------
 
 def test_fixture_harness_invalid_on_missing_file(tmp_path: Path) -> None:
     """A declared file is absent → FIXTURE_INVALID, no SQLite opened."""
     bundle = _make_minimal_bundle(tmp_path)
 
-    # Write a manifest that declares a non-existent file
+    # Write a manifest that declares a non-existent file.
+    # After FH-01 repair: extra files are caught by the allowlist gate before
+    # file-existence check. The test still proves fail-closed behavior.
     manifest = {
         "version": 1,
         "source_commit": "089213f",
@@ -120,7 +123,7 @@ def test_fixture_harness_invalid_on_missing_file(tmp_path: Path) -> None:
             "experience.db-shm": _sha256_file(bundle / "experience.db-shm"),
             "composite/config.json": _sha256_file(bundle / "composite/config.json"),
             ".env.placeholders": _sha256_file(bundle / ".env.placeholders"),
-            "missing-file.db": "deadbeefdeadbeefdeadbeef",  # DOES NOT EXIST
+            "missing-file.db": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         },
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest))
@@ -128,7 +131,9 @@ def test_fixture_harness_invalid_on_missing_file(tmp_path: Path) -> None:
     result, store = open_fixture_store(bundle)
     assert result.status == FIXTURE_INVALID
     assert store is None
-    assert "missing-file.db" in result.missing_files
+    # After FH-01 repair: extra-file is caught by allowlist gate.
+    # The missing_files field is populated for truly missing required files,
+    # not for extra/unexpected ones (which fire the allowlist mismatch first).
 
 
 def test_fixture_harness_invalid_on_hash_mismatch(tmp_path: Path) -> None:
@@ -158,7 +163,7 @@ def test_fixture_harness_invalid_on_hash_mismatch(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# EVAL-CB2-02: OK — valid bundle opens the store
+# Fixture harness: OK — valid bundle opens the store
 # ---------------------------------------------------------------------------
 
 def test_fixture_harness_ok_on_valid_bundle(tmp_path: Path) -> None:
@@ -188,3 +193,199 @@ def test_fixture_harness_ok_on_valid_bundle(tmp_path: Path) -> None:
         assert isinstance(ref, str) and len(ref) == 32
     finally:
         store.close()
+
+
+# ============================================================================
+# Adversarial tests — FH-01: fixed required-file allowlist enforcement
+# ============================================================================
+
+def test_fixture_harness_rejects_missing_required_file(tmp_path: Path) -> None:
+    """Bundle missing one of the 5 required files → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    # Remove .env.placeholders
+    (bundle / ".env.placeholders").unlink()
+
+    # Write manifest manually (write_manifest requires all files present)
+    manifest = {
+        "version": 1,
+        "source_commit": "089213f",
+        "source_sha256": "352bd22a",
+        "files": {
+            "experience.db": _sha256_file(bundle / "experience.db"),
+            "experience.db-wal": _sha256_file(bundle / "experience.db-wal"),
+            "experience.db-shm": _sha256_file(bundle / "experience.db-shm"),
+            "composite/config.json": _sha256_file(bundle / "composite/config.json"),
+            ".env.placeholders": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+    assert any("env" in f.lower() for f in result.missing_files)
+
+
+def test_fixture_harness_rejects_extra_file_in_manifest(tmp_path: Path) -> None:
+    """Manifest declaring a non-required file → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "source_commit": "089213f",
+        "source_sha256": "352bd22a",
+        "files": {
+            "experience.db": _sha256_file(bundle / "experience.db"),
+            "experience.db-wal": _sha256_file(bundle / "experience.db-wal"),
+            "experience.db-shm": _sha256_file(bundle / "experience.db-shm"),
+            "composite/config.json": _sha256_file(bundle / "composite/config.json"),
+            ".env.placeholders": _sha256_file(bundle / ".env.placeholders"),
+            "extra-sneaky.db": "a" * 64,  # NOT in the fixed set
+        },
+    }
+    (bundle / "extra-sneaky.db").write_text("malicious")
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+    assert "unexpected" in result.detail.lower() or "extra" in result.detail.lower()
+
+
+def test_fixture_harness_rejects_manifest_missing_required_key(tmp_path: Path) -> None:
+    """Manifest with fewer than 5 entries → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "experience.db": _sha256_file(bundle / "experience.db"),
+            # Only one file — 4 missing
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+
+
+def test_fixture_harness_rejects_hermes_home_bundle(tmp_path: Path, monkeypatch) -> None:
+    """Opening a bundle that resolves to current HERMES_HOME → rejected."""
+    bundle = _make_minimal_bundle(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(bundle))
+    manifest_path = write_manifest(bundle_dir=str(bundle))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+    assert "hermes_home" in result.detail.lower()
+
+
+# ============================================================================
+# Adversarial tests — FH-02: path-traversal rejection
+# ============================================================================
+
+def test_fixture_harness_rejects_traversal_path(tmp_path: Path) -> None:
+    """Manifest entry with '..' → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "../etc/passwd": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+    assert "path" in result.detail.lower() or "traversal" in result.detail.lower()
+
+
+def test_fixture_harness_rejects_absolute_path(tmp_path: Path) -> None:
+    """Manifest entry with absolute path → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "/etc/passwd": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+    # After FH-02-before-FH-01 reorder: absolute path caught first.
+    assert "absolute" in result.detail.lower()
+
+
+def test_fixture_harness_rejects_transversal_mixed_required_file(tmp_path: Path) -> None:
+    """A required file declared with traversal prefix → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "../../experience.db": _sha256_file(bundle / "experience.db"),
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+
+
+# ============================================================================
+# Adversarial tests — FH-03: digest-form validation
+# ============================================================================
+
+def test_fixture_harness_rejects_non_string_digest(tmp_path: Path) -> None:
+    """Manifest with non-string hash value → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "experience.db": 12345,  # integer, not string
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+
+
+def test_fixture_harness_rejects_short_digest(tmp_path: Path) -> None:
+    """Manifest with hash shorter than 64 chars → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "experience.db": "abc123",  # too short
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+
+
+def test_fixture_harness_rejects_non_hex_digest(tmp_path: Path) -> None:
+    """Manifest with non-hex hash → FIXTURE_INVALID."""
+    bundle = _make_minimal_bundle(tmp_path)
+    manifest = {
+        "version": 1,
+        "files": {
+            "experience.db": "g" * 64,  # 'g' is not valid hex
+        },
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    result = validate_fixture_bundle(bundle)
+    assert result.status == FIXTURE_INVALID
+
+
+# ============================================================================
+# Adversarial tests — FH-04: write_manifest disabled
+# ============================================================================
+
+def test_write_manifest_not_exported_for_operator_use() -> None:
+    """write_manifest must either be removed or return an error when called outside tests."""
+    # After repair, write_manifest should raise an error or be removed from __all__.
+    # This test asserts the function exists but is disabled.
+    import plugins.memory.composite.experience_store.fixture_harness as fh
+    if hasattr(fh, "write_manifest"):
+        with pytest.raises((RuntimeError, NotImplementedError, AssertionError)):
+            fh.write_manifest("/nonexistent/path")
