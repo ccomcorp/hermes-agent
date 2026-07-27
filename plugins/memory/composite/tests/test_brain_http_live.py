@@ -24,7 +24,7 @@ import uuid
 import pytest
 
 from plugins.memory.composite.brain_http import HttpBrainClient
-from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
+from plugins.memory.composite.core import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
 
 _BRAIN_URL = os.environ.get("HERMES_BRAIN_URL", "http://1.1.11.31:8000")
 _REWARD_OPT_IN = os.environ.get("HERMES_BRAIN_LIVE_REWARD") == "1"

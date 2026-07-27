@@ -20,7 +20,7 @@ import threading
 import pytest
 
 from plugins.memory.composite.experience_store import ExperienceStore
-from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
+from plugins.memory.composite.core import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
 from plugins.memory.composite.provider import HermesCompositeProvider
 
 

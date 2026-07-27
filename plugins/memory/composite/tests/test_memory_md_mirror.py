@@ -13,7 +13,7 @@ import json
 import threading
 
 from plugins.memory.composite.experience_store import ExperienceStore
-from backends import BRAIN_OK
+from plugins.memory.composite.core import BRAIN_OK
 from plugins.memory.composite.provider import HermesCompositeProvider
 from agent.memory_manager import MemoryManager
 
