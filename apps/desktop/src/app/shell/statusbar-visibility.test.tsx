@@ -80,6 +80,17 @@ describe('statusbar item visibility', () => {
     expect(within(statusbar).getByText('Cron')).toBeTruthy()
   })
 
+  it('surfaces a live subagent indicator even when Agents is hidden by default', () => {
+    const statusbar = bar([
+      item('agents', '1 Subagent', { lockedVisible: true }),
+      item('gateway-health', 'Gateway')
+    ])
+
+    // Agents is normally hidden as a route shortcut. Live delegated work is
+    // status, not navigation, and must remain visible in the global bottom bar.
+    expect(within(statusbar).getByText('1 Subagent')).toBeTruthy()
+  })
+
   it('never lets the user hide a locked item (system icon / update pill)', async () => {
     const statusbar = bar([item('command-center', 'Command Center', { lockedVisible: true })])
 

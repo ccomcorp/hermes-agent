@@ -417,12 +417,12 @@ export function useStatusbarItems({
           agentsOpen && 'bg-accent/55 text-foreground',
           subagentsFailed > 0 && 'text-destructive hover:text-destructive'
         ),
-        detail:
-          subagentsRunning > 0
-            ? copy.subagents(subagentsRunning)
-            : subagentsFailed > 0
-              ? copy.failed(subagentsFailed)
-              : undefined,
+        // Agents is hidden by default because it is normally a route shortcut.
+        // While delegated work is alive or failed, though, it becomes operational
+        // status and must surface in the global footer even for users who never
+        // opted into the shortcut. The dynamic label makes the active work
+        // discoverable without relying on the collapsed composer status stack.
+        detail: subagentsFailed > 0 ? copy.failed(subagentsFailed) : undefined,
         icon:
           subagentsFailed > 0 ? (
             <AlertCircle className="size-3" />
@@ -432,7 +432,9 @@ export function useStatusbarItems({
             <Codicon name="hubot" size="0.75rem" />
           ),
         id: 'agents',
-        label: copy.agents,
+        label: subagentsRunning > 0 ? copy.subagents(subagentsRunning) : copy.agents,
+        // A hidden route shortcut must not hide a live delegation or its failure.
+        lockedVisible: subagentsRunning > 0 || subagentsFailed > 0,
         onSelect: openAgents,
         title: agentsOpen ? copy.closeAgents : copy.openAgents,
         toggleLabel: copy.agents,
