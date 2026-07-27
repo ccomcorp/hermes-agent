@@ -23,7 +23,7 @@ from urllib.parse import urlparse, parse_qs
 import pytest
 
 from plugins.memory.composite.brain_http import HttpBrainClient
-from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
+from plugins.memory.composite.core import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL
 
 
 # --- stub brain server --------------------------------------------------------------

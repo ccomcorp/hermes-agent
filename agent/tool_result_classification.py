@@ -122,3 +122,41 @@ def tool_result_is_rejection(tool_name: str, result: Any) -> bool:
         return False
     # Misuse markers matched as whole words/phrases (boundary-anchored) to avoid sub-token hits.
     return any(_WORD(m, text) for m in _REJECTION_MARKERS)
+
+
+# --- Truthful negatives (absence reports) vs execution failures -------------------
+#
+# The tool-call guardrail counts "failures" per tool to detect runaway loops. Some
+# results the broad content classifier flags as failures are actually TRUTHFUL
+# NEGATIVES: the tool executed correctly and reported that the requested state does
+# not exist (a dead background process, a missing file). Counting those as tool
+# failures halts legitimate diagnostics against degraded/absent subsystems — the
+# exact behavior an agent needs while investigating. This predicate draws that line
+# for the guardrail's args-blind same-tool counter; identical-args repetition is
+# still caught by the broad exact-signature counter, so loop protection is kept.
+#
+# Conservative: only well-formed payloads whose error text is purely an absence
+# report qualify. Anything ambiguous stays failure-counted (loop protection wins ties).
+
+def tool_result_is_truthful_negative(tool_name: str, result: Any) -> bool:
+    """True when a failed-looking payload is actually a truthful absence report."""
+    if not isinstance(result, str):
+        return False
+    try:
+        data = json.loads(result.strip())
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    err = data.get("error")
+    if not err:
+        return False
+    text = str(err).lower()
+    # Process registry: the process is gone — a truthful state report, not a failure.
+    if tool_name == "process" and data.get("status") == "not_found":
+        return True
+    # File reads: not-found (with suggestions) is a truthful negative.
+    if text.startswith("file not found"):
+        return True
+    # Generic absence phrasing from other tools ("... not found", "no such file").
+    return any(_WORD(m, text) for m in ("not found", "no such file", "no process with id"))

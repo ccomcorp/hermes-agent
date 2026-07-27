@@ -188,6 +188,87 @@ def test_hard_stop_enabled_halts_same_tool_varying_args_failure_streak():
     assert third.count == 3
 
 
+def _process_not_found(pid: str) -> str:
+    return json.dumps({"status": "not_found", "error": f"No process with ID {pid}"})
+
+
+def test_same_tool_halt_ignores_process_not_found_truthful_negatives():
+    """Polling a dead process registry is diagnosis, not a tool-failure loop."""
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            hard_stop_enabled=True,
+            exact_failure_block_after=99,
+            same_tool_failure_warn_after=2,
+            same_tool_failure_halt_after=3,
+        )
+    )
+    decisions = [
+        controller.after_call("process", {"action": "poll", "session_id": "a"}, _process_not_found("proc_a"), failed=True),
+        controller.after_call("process", {"action": "wait", "session_id": "b"}, _process_not_found("proc_b"), failed=True),
+        controller.after_call("process", {"action": "log", "session_id": "c"}, _process_not_found("proc_c"), failed=True),
+        controller.after_call("process", {"action": "poll", "session_id": "d"}, _process_not_found("proc_d"), failed=True),
+    ]
+    assert [d.action for d in decisions] == ["allow"] * 4
+    assert controller.halt_decision is None
+
+
+def test_exact_signature_still_blocks_identical_truthful_negative_retries():
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(hard_stop_enabled=True, exact_failure_block_after=3, same_tool_failure_halt_after=99)
+    )
+    args = {"action": "poll", "session_id": "dead"}
+    for _ in range(3):
+        controller.after_call("process", args, _process_not_found("proc_dead"), failed=True)
+    blocked = controller.before_call("process", args)
+    assert blocked.action == "block"
+    assert blocked.code == "repeated_exact_failure_block"
+
+
+def test_read_file_not_found_negative_excluded_from_same_tool_count():
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            hard_stop_enabled=True,
+            exact_failure_block_after=99,
+            same_tool_failure_warn_after=2,
+            same_tool_failure_halt_after=3,
+        )
+    )
+    for i in range(4):
+        decision = controller.after_call(
+            "read_file",
+            {"path": f"/tmp/missing-{i}.txt"},
+            json.dumps({"content": "", "error": f"File not found: /tmp/missing-{i}.txt"}),
+            failed=True,
+        )
+        assert decision.action == "allow"
+    assert controller.halt_decision is None
+
+
+def test_same_tool_halt_still_fires_for_genuine_failures_amid_truthful_negatives():
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            hard_stop_enabled=True,
+            exact_failure_block_after=99,
+            same_tool_failure_warn_after=2,
+            same_tool_failure_halt_after=3,
+        )
+    )
+    controller.after_call("process", {"action": "poll", "session_id": "a"}, _process_not_found("proc_a"), failed=True)
+    controller.after_call("process", {"action": "poll", "session_id": "b"}, _process_not_found("proc_b"), failed=True)
+    for sid in ("x", "y"):
+        controller.after_call(
+            "process", {"action": "kill", "session_id": sid},
+            json.dumps({"status": "error", "error": "registry exploded"}), failed=True,
+        )
+    third = controller.after_call(
+        "process", {"action": "kill", "session_id": "z"},
+        json.dumps({"status": "error", "error": "registry exploded"}), failed=True,
+    )
+    assert third.action == "halt"
+    assert third.code == "same_tool_failure_halt"
+    assert third.count == 3
+
+
 def test_idempotent_no_progress_repeated_result_warns_without_blocking_by_default():
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(no_progress_warn_after=2, no_progress_block_after=2)
@@ -256,3 +337,24 @@ def test_reset_for_turn_clears_bounded_guardrail_state():
 
     assert controller.before_call("web_search", {"query": "same"}).action == "allow"
     assert controller.before_call("read_file", {"path": "/tmp/x"}).action == "allow"
+
+
+def test_after_call_survives_lone_surrogates_in_result_and_args():
+    # Scraped web/social text can contain unpaired UTF-16 surrogates (e.g. the
+    # first half of a mathematical-bold pair, '\ud835'). str.encode('utf-8')
+    # rejects them, and the result hasher crashed the whole conversation loop
+    # (live outage: "Outer loop error in API call #34 ... surrogates not
+    # allowed"). Weird text must never take down the loop.
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(hard_stop_enabled=True, exact_failure_block_after=2, no_progress_block_after=2)
+    )
+    dirty = "price \ud835 update"
+
+    decision = controller.after_call("web_search", {"query": dirty}, dirty, failed=False)
+    assert decision.action in {"allow", "warn"}
+
+    # hashing stays deterministic: the same dirty failure twice still trips
+    # the exact-failure guard, proving the hash is stable across calls
+    controller.after_call("web_search", {"query": dirty}, '{"error":"\ud835 boom"}', failed=True)
+    controller.after_call("web_search", {"query": dirty}, '{"error":"\ud835 boom"}', failed=True)
+    assert controller.before_call("web_search", {"query": dirty}).action == "block"

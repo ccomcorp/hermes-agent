@@ -26,6 +26,7 @@ export function useOverlayRouting() {
   const cronOpen = currentView === 'cron'
   const docopsOpen = currentView === 'docops'
   const profilesOpen = currentView === 'profiles'
+  const webhooksOpen = currentView === 'webhooks'
   const chatOpen = currentView === 'chat'
   const overlayOpen = isOverlayView(currentView)
 
@@ -33,6 +34,7 @@ export function useOverlayRouting() {
   // so closing them returns there instead of bouncing to /.
   const returnPathRef = useRef(NEW_CHAT_ROUTE)
 
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     if (!overlayOpen) {
       returnPathRef.current = `${location.pathname}${location.search}${location.hash}`
@@ -48,6 +50,10 @@ export function useOverlayRouting() {
     (section: CommandCenterSection) => navigate(`${COMMAND_CENTER_ROUTE}?section=${section}`),
     [navigate]
   )
+
+  const resetOverlayReturnRoute = useCallback(() => {
+    returnPathRef.current = NEW_CHAT_ROUTE
+  }, [])
 
   const closeOverlayToPreviousRoute = useCallback(
     () => navigate(returnPathRef.current || NEW_CHAT_ROUTE, { replace: true }),
@@ -80,8 +86,10 @@ export function useOverlayRouting() {
     openDocops,
     openStarmap,
     profilesOpen,
+    resetOverlayReturnRoute,
     settingsOpen,
     starmapOpen,
-    toggleCommandCenter
+    toggleCommandCenter,
+    webhooksOpen
   }
 }

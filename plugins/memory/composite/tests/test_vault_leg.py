@@ -24,7 +24,7 @@ from plugins.memory.composite.vault_qmd import (
     QmdVaultCache,
     _resolve_node_bin,
 )
-from store import ExperienceStore
+from plugins.memory.composite.experience_store import ExperienceStore
 
 
 # ----- fakes -------------------------------------------------------------------------

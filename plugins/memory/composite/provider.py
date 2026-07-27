@@ -1,29 +1,23 @@
-"""Composite memory provider plugin — dev-instance wiring for the AIOS experience store.
+"""Composite memory provider plugin — native binding to the vendor composite engine.
 
-This is the thin chassis-side binding described in
-``packages/memory/composite-provider/INTEGRATION.md`` (AIOS repo). The routing /
-composition engine and the store engine both live in the AIOS repo and are unit-tested
-there; nothing here re-implements them. This module only:
+This is the thin chassis-side binding. The composite routing/engine and the experience
+store both live natively under `plugins/memory/composite/core/` and
+`plugins/memory/composite/experience_store/` — zero AIOS dependency, zero sys.path
+hacks. This module only:
 
-  1. Puts the two AIOS packages on ``sys.path`` so the chassis can import them.
-  2. Subclasses ``CompositeMemoryProvider`` with ``record_fork_lesson()`` — the
-     fork-authored append seam consumed by ``agent/background_review.py`` (M1 Task 2
-     BLOCKER #2: without a fork→store write, ``store.circulation()`` has no
-     ``migrated=0`` rows to count and AC1's numerator is structurally 0).
-  3. Builds the provider with ``owns_brain=False`` — shutdown() must never close a
+  1. Subclasses ``CompositeMemoryProvider`` with ``record_fork_lesson()`` — the
+     fork-authored append seam consumed by ``agent/background_review.py``.
+  2. Builds the provider with ``owns_brain=False`` — shutdown() must never close a
      shared HTTP client it did not create.
-  4. DEFERS the ``ExperienceStore`` open to ``initialize()`` so a read-only discovery probe
+  3. DEFERS the ``ExperienceStore`` open to ``initialize()`` so a read-only discovery probe
      creates no sqlite connection / no ``experience.db`` (D1).
 
-The brain leg is now wireable and STAGED via ``HERMES_BRAIN_STAGE`` (0=off default /
-1=observe+recall / 2=+paired reward); stage 0 keeps the live agent byte-for-byte unchanged.
-The VAULT leg (V1) is now wired too: a QMD-backed ``VaultCache`` (``vault_qmd.QmdVaultCache``)
-is constructed when QMD is installed/indexed (default ON; HERMES_VAULT_ENABLE=0 disables),
-else ``vault=None``. Vault recall is cache-fronted via the base ``queue_prefetch`` and merged
-by score in ``prefetch`` — no inline network on the turn thread. The ``sync_turn`` ack reports
-a leg by its ACTUAL presence/stage (R9 — never a healthy-looking status for a leg that was
-never constructed): an absent leg is ``"skipped"``, an active brain leg is ``"observe-only"``
-(reward is outcome-gated in ``handle_tool_call``, never per-turn), an active vault leg ``"ok"``.
+The brain leg is staged via ``HERMES_BRAIN_STAGE`` (0=off default / 1=observe+recall /
+2=+paired reward); stage 0 keeps the live agent byte-for-byte unchanged. The VAULT leg
+(V1) is wired via QMD-backed ``VaultCache`` when installed/indexed. Vault recall is
+cache-fronted via the base ``queue_prefetch`` and merged by score in ``prefetch``. The
+``sync_turn`` ack reports each leg by its ACTUAL presence/stage (R9 — never a
+healthy-looking status for an absent leg): ``"skipped"``, ``"observe-only"``, ``"ok"``.
 """
 
 from __future__ import annotations
@@ -34,80 +28,21 @@ import hashlib
 import json
 import logging
 import os
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# --- 1. Put the AIOS packages on the chassis path -------------------------------------
-def _resolve_aios_package_dirs():
-    """Return ``(experience-store dir, composite-provider dir)`` or raise an ACTIONABLE
-    ``ImportError`` naming ``AIOS_PACKAGES_DIR`` when the sibling AIOS checkout is missing (R8).
-
-    Repos are siblings: ``<AIOS>/hermes-agent`` and ``<AIOS>/aios``; resolve relative to this
-    file (``parents[3]`` == hermes-agent), overridable via ``AIOS_PACKAGES_DIR`` for a deeper
-    checkout / symlink. A bare ``ModuleNotFoundError`` with no hint is the failure mode we
-    refuse to ship — without this, an absent or mis-located AIOS dir surfaces only as an
-    opaque import error.
-    """
-    env = os.environ.get("AIOS_PACKAGES_DIR")
-    root = (
-        Path(env)
-        if env
-        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "memory"
-    )
-    store_dir = root / "experience-store"
-    composite_dir = root / "composite-provider"
-    missing = [str(d) for d in (store_dir, composite_dir) if not d.is_dir()]
-    if missing:
-        raise ImportError(
-            "composite memory provider requires the AIOS packages, not found at: "
-            f"{missing}. Set AIOS_PACKAGES_DIR to the directory containing "
-            "'composite-provider' and 'experience-store' (a sibling AIOS checkout beside "
-            f"hermes-agent). AIOS_PACKAGES_DIR={env or 'unset (used sibling-path default)'}"
-        )
-    return store_dir, composite_dir
-
-
-_STORE_DIR, _COMPOSITE_DIR = _resolve_aios_package_dirs()
-for _d in (_STORE_DIR, _COMPOSITE_DIR):
-    _s = str(_d)
-    if _s not in sys.path:
-        sys.path.insert(0, _s)
-
-
-def _resolve_aios_health_dir() -> Optional[str]:
-    """Return the AIOS ``packages/health`` dir (for ``ExperienceHealth``), or ``None``.
-
-    Mirrors ``synthetic_week_ac1.py``: ``AIOS_HEALTH_DIR`` override, else sibling
-    ``<AIOS>/aios/packages/health`` resolved from this file. The loop self-check (AC-PX5 #3)
-    reads ``ExperienceHealth.circulation_report``; an absent health package degrades that
-    check to a quiet no-op (best-effort — it never blocks session-end)."""
-    env = os.environ.get("AIOS_HEALTH_DIR")
-    cand = (
-        Path(env)
-        if env
-        else Path(__file__).resolve().parents[3].parent / "aios" / "packages" / "health"
-    )
-    return str(cand) if cand.is_dir() else None
-
-
-_HEALTH_DIR = _resolve_aios_health_dir()
-if _HEALTH_DIR and _HEALTH_DIR not in sys.path:
-    sys.path.insert(0, _HEALTH_DIR)
-
-# Flat imports (the AIOS packages live in hyphenated dirs, so the package dir itself is
-# placed on sys.path and the modules import flat — the convention their own tests use).
-# When the chassis is on the path, composite_provider binds the REAL
-# agent.memory_provider.MemoryProvider automatically (not the _base_shim).
-from store import ExperienceStore  # noqa: E402  (path inserted above)
-from composite_provider import (  # noqa: E402
+# --- Import from the native core + store packages ---
+from .core import (  # noqa: E402
+    BRAIN_OK,
+    BRAIN_DEGRADED,
+    BRAIN_FAIL,
     CompositeMemoryProvider,
     TOOL_SIGNAL,
 )
-from backends import BRAIN_OK, BRAIN_DEGRADED, BRAIN_FAIL  # noqa: E402  (per-backend ack markers)
+from .experience_store import ExperienceStore  # noqa: E402
 
 # Cap on a single mirrored lesson's text. Matches the composite's brain-observe cap;
 # keeps a full SKILL.md body from bloating the FTS index while preserving recall keys.
@@ -346,10 +281,10 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         ``build_provider``/``register`` (which the loader re-runs per discovery probe). The
         build is idempotent (only when no store was injected).
 
-        #5 (latent guard): the chassis currently hardcodes ``agent_context="primary"`` at its
-        single ``initialize_all`` call site (agent_init.py), so the non-primary skip in
-        ``sync_turn`` does not yet fire in practice. It is kept as future-proofing AND because
-        ``sync_turn`` performs no store append regardless — the store stays clean either way.
+        #5: the chassis passes the lifecycle ``agent_context`` through this
+        # initialize_all call site. Non-primary contexts are read/skip-only for
+        # ordinary memory mirroring, so sync_turn/on_memory_write return without
+        # appending foreground user-memory artifacts.
         """
         # AC-PX5 #2 (boot wiring assertion, OWN PROVIDER ONLY): refuse to boot a silently-dead
         # loop. Assert the chassis still exposes the MemoryManager fan-out dispatch AND the seam
@@ -358,10 +293,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # — a raise here would prevent the desktop from starting; covered by a live-boot test).
         # The manager is threaded from initialize_all when available; otherwise the class-level
         # dispatch surface is verified via the MemoryManager class.
-        try:
-            from .loop_guard import assert_loop_wired
-        except ImportError:  # loaded flat (plugin dir not a package on this path)
-            from loop_guard import assert_loop_wired  # type: ignore
+        from .loop_guard import assert_loop_wired
         manager = kwargs.get("memory_manager")
         if manager is None:
             from agent.memory_manager import MemoryManager
@@ -379,7 +311,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         # never blocks boot.
         if self._store is not None and self._brain_stage >= 1:
             try:
-                reclaimed = self._store.outbox_reclaim()
+                reclaimed = self._store.observe_outbox_reclaim()
                 if reclaimed:
                     logger.info("outbox restart-reclaim: %d in_flight op(s) → pending", reclaimed)
             except Exception as exc:
@@ -451,8 +383,7 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             return BRAIN_FAIL
         try:
             content_hash = _observe_content_hash(content)
-            self._store.outbox_enqueue(
-                kind="observe",
+            self._store.observe_outbox_enqueue(
                 payload={"type": "context", "content": content},
                 content_hash=content_hash,
                 session_id=session_id,
@@ -466,13 +397,13 @@ class HermesCompositeProvider(CompositeMemoryProvider):
     def _drain_outbox(self, max_ops: int = _OUTBOX_DRAIN_MAX) -> Dict[str, int]:
         """Drain pending observe ops to the brain — OFF the turn thread (SPEC-m1-outbox §2.3).
 
-        Single-drainer-per-pass, bounded by ``max_ops``. Each op: atomic ``outbox_claim``
+        Single-drainer-per-pass, bounded by ``max_ops``. Each op: atomic ``observe_outbox_claim``
         (pending→in_flight), then re-POST observe OUTSIDE the store lock, then settle:
-          * valid ``observation_id`` returned → ``outbox_confirm`` (in_flight→confirmed).
-          * transport error (observe raised) → ``outbox_fail('transport')`` (back to pending,
+          * valid ``observation_id`` returned → ``observe_outbox_confirm`` (in_flight→confirmed).
+          * transport error (observe raised) → ``observe_outbox_fail('transport')`` (back to pending,
             attempts UNCHANGED — a long outage must not poison-kill, §2.3 finding #6).
           * non-confirming response (no id, treated as a substantive/4xx reject) →
-            ``outbox_fail('substantive')`` (attempts++, → dead at the cap).
+            ``observe_outbox_fail('substantive')`` (attempts++, → dead at the cap).
         Best-effort throughout: a settle/claim failure logs and the pass stops; it NEVER raises
         into the caller (the background worker). Guarded to brain_stage>=1 + a present brain/store.
         Returns ``{confirmed, transport_fail, substantive_fail}`` counts (useful to tests/health).
@@ -482,22 +413,26 @@ class HermesCompositeProvider(CompositeMemoryProvider):
             return out
         for _ in range(max(0, int(max_ops))):
             try:
-                row = self._store.outbox_claim()
+                row = self._store.observe_outbox_claim()
             except Exception as exc:
-                logger.debug("outbox_claim failed; stopping drain pass: %s", exc)
+                logger.debug("observe_outbox_claim failed; stopping drain pass: %s", exc)
                 break
             if row is None:
                 break  # nothing pending
             oid = row["id"]
+            claim_id = row.get("claim_id")
             payload = row.get("payload") or {}
+            if not isinstance(claim_id, str) or not claim_id:
+                logger.debug("outbox drain received an unclaimed row; stopping pass")
+                break
             try:
                 obs_id = self._brain.observe(payload)
             except Exception as exc:  # transport — back to pending, do not poison.
                 logger.debug("outbox drain observe transport-failed: %s", exc)
                 try:
-                    self._store.outbox_fail(oid, "transport")
+                    self._store.observe_outbox_fail(oid, "transport", claim_id)
                 except Exception as exc2:
-                    logger.debug("outbox_fail(transport) failed: %s", exc2)
+                    logger.debug("observe_outbox_fail(transport) failed: %s", exc2)
                 out["transport_fail"] += 1
                 # The brain is unreachable: a transport-failed op returns to pending with
                 # attempts UNCHANGED. STOP the pass rather than re-claim the same row in a spin —
@@ -505,10 +440,10 @@ class HermesCompositeProvider(CompositeMemoryProvider):
                 break
             try:
                 if obs_id:
-                    self._store.outbox_confirm(oid, str(obs_id))
+                    self._store.observe_outbox_confirm(oid, str(obs_id), claim_id)
                     out["confirmed"] += 1
                 else:
-                    self._store.outbox_fail(oid, "substantive")
+                    self._store.observe_outbox_fail(oid, "substantive", claim_id)
                     out["substantive_fail"] += 1
             except Exception as exc:
                 logger.debug("outbox settle failed for %s: %s", oid, exc)
@@ -557,7 +492,12 @@ class HermesCompositeProvider(CompositeMemoryProvider):
           * NEVER reward here — standing-note writes are not RPE outcomes
 
         Best-effort: never raises; store/brain faults are logged and skipped.
+        Non-primary guard: cron / subagent / flush agent contexts
+        skip all memory mirroring (the composite store is for the
+        foreground user session only).
         """
+        if getattr(self, "_agent_context", "primary") != "primary":
+            return  # Non-primary — skip store + brain mirroring
         action = str(action or "")
         target = str(target or "memory")
         meta = dict(metadata or {})
@@ -734,17 +674,17 @@ class HermesCompositeProvider(CompositeMemoryProvider):
     # ----- AC-PX5 #3: present-but-unproductive (runtime backstop) -----
 
     def loop_self_check(self) -> Dict[str, Any]:
-        """Read ``ExperienceHealth(store).circulation_report()`` and detect a SUSTAINED
-        write-only loop (the predecessor's "lessons written, never read" death).
+        """Detect a SUSTAINED write-only loop using the native store's public API.
 
-        A check is "write-only" when the ``WRITE_ONLY_MEMORY`` flag is active (circulation==0
-        with total_lessons>0) AND the corpus exceeds the configured recall floor. K consecutive
-        write-only checks emit a ``logger.ERROR`` and flip ``_loop_writeonly_alarm`` (surfaced
-        by :meth:`loop_health`). A circulating check (or a fresh/foreign store below the floor)
-        resets the streak and clears the alarm — so noise from a cold or non-loop store stays
-        quiet. Returns the structured self-check result (also useful to tests/health callers).
+        A check is "write-only" when circulation()==0 with total_lessons>0 AND
+        the corpus exceeds the configured recall floor. K consecutive write-only
+        checks emit a ``logger.ERROR`` and flip ``_loop_writeonly_alarm`` (surfaced
+        by :meth:`loop_health`). A circulating check (or a fresh/foreign store below
+        the floor) resets the streak and clears the alarm — so noise from a cold or
+        non-loop store stays quiet. Returns the structured self-check result (also
+        useful to tests/health callers).
 
-        Best-effort: with no store yet, or the AIOS health package absent, returns a quiet
+        Best-effort: with no store yet, returns a quiet
         ``{"checked": False, ...}`` and changes no state.
         """
         result: Dict[str, Any] = {
@@ -757,20 +697,11 @@ class HermesCompositeProvider(CompositeMemoryProvider):
         }
         if self._store is None:
             return result
-        try:
-            from experience_health import ExperienceHealth  # AIOS health pkg (path inserted)
-        except ImportError:
-            logger.debug("loop_self_check: AIOS health package not importable; skipping")
-            return result
 
-        report = ExperienceHealth(self._store).circulation_report()
-        circulation = report.get("circulation", 0)
-        total = report.get("total_lessons", 0)
-        write_only_flag = next(
-            (f for f in report.get("flags", []) if f.get("name") == "WRITE_ONLY_MEMORY"),
-            None,
-        )
-        flag_active = bool(write_only_flag and write_only_flag.get("active"))
+        circulation = self._store.circulation()
+        total = self._store.aggregate().get("total_lessons", 0)
+        # A store is write-only when circulation is 0 but lessons exist.
+        flag_active = circulation == 0 and total > 0
         # Above-floor guard: a corpus at/below the floor is too small to call a pathology.
         write_only = flag_active and total > self._loop_writeonly_floor
 
@@ -1265,10 +1196,7 @@ def _resolve_vault(recall_limit: int):
     if not _vault_enabled():
         logger.debug("composite vault leg disabled (HERMES_VAULT_ENABLE=0)")
         return None
-    try:
-        from .vault_qmd import QmdVaultCache  # type: ignore
-    except ImportError:  # loaded flat (composite dir on sys.path)
-        from vault_qmd import QmdVaultCache  # type: ignore
+    from .vault_qmd import QmdVaultCache
     vault = QmdVaultCache(recall_limit=recall_limit)
     if not vault.is_available():
         logger.info(
@@ -1344,10 +1272,7 @@ def build_provider(hermes_home: str) -> "HermesCompositeProvider":
             or str(settings.get("brain_url") or "").strip()
             or "http://1.1.11.31:8000"
         )
-        try:
-            from .brain_http import HttpBrainClient  # type: ignore
-        except ImportError:  # loaded flat (composite dir on sys.path)
-            from brain_http import HttpBrainClient  # type: ignore
+        from .brain_http import HttpBrainClient
         brain = HttpBrainClient(
             url, source="hermes-agent",
             domain=os.environ.get("CLAUDE_ACTIVE_PROJECT") or None,

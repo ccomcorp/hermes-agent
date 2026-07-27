@@ -1,15 +1,18 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useRef } from 'react'
 
+import { resolveSpeakText } from '@/lib/speech-text'
 import { playSpeechText } from '@/lib/voice-playback'
+import { ownsAmbientCue } from '@/store/ambient'
 import { notifyError } from '@/store/notifications'
 import { $messages } from '@/store/session'
 import { $voicePlayback } from '@/store/voice-playback'
-import { $autoSpeakReplies } from '@/store/voice-prefs'
+import { $autoSpeakReplies, $speakMode } from '@/store/voice-prefs'
 
 interface AutoSpeakReply {
   id: string
   pending: boolean
+  spoken_reply?: string | null
   text: string
 }
 
@@ -27,9 +30,10 @@ interface UseAutoSpeakReplies {
 /**
  * Pure-TTS auto-speak: when `voice.auto_tts` is on, read each completed assistant
  * turn aloud — no dictation, no conversation loop. Stays off while a full voice
- * conversation runs (it speaks replies itself) and never overlaps clips: a reply
- * landing mid-playback is held and spoken on the playback-idle edge. Always reads
- * the latest reply, so a backlog collapses to the newest.
+ * conversation runs (it speaks replies itself) and never overlaps clips.
+ *
+ * Honours `voice.speak_mode`: conversational speaks a short synthesis (spoken_reply
+ * or first sentences) — never the full essay. Full mode reads the complete reply.
  */
 export function useAutoSpeakReplies({
   conversationActive,
@@ -39,6 +43,7 @@ export function useAutoSpeakReplies({
   sessionId
 }: UseAutoSpeakReplies) {
   const enabled = useStore($autoSpeakReplies)
+  const speakMode = useStore($speakMode)
   const latest = useRef({ conversationActive, failureLabel, markSpoken, pendingReply })
   latest.current = { conversationActive, failureLabel, markSpoken, pendingReply }
 
@@ -65,9 +70,28 @@ export function useAutoSpeakReplies({
       }
 
       markSpoken()
-      void playSpeechText(reply.text, { messageId: reply.id, source: 'read-aloud' }).catch(error =>
-        notifyError(error, failureLabel)
-      )
+
+      const mode = $speakMode.get() === 'conversational' ? 'conversational' : 'full'
+      const text = resolveSpeakText({
+        mode,
+        spokenReply: reply.spoken_reply,
+        displayText: reply.text
+      })
+
+      if (!text) {
+        return
+      }
+
+      // Only one window voices a given reply when the same chat is open in
+      // several (reply.id is the shared backend message id). markSpoken already
+      // ran in every window, so peers just stay quiet.
+      void ownsAmbientCue(`speak:${reply.id}`).then(owns => {
+        if (owns) {
+          void playSpeechText(text, { messageId: reply.id, source: 'read-aloud' }).catch(error =>
+            notifyError(error, failureLabel)
+          )
+        }
+      })
     }
 
     // Re-check on a reply completing ($messages) and on the prior clip ending

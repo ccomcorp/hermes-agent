@@ -119,3 +119,47 @@ def test_init_is_idempotent_and_seeds_contract_and_ledger(tmp_path):
     assert (tmp_path / "docops.yml").exists()
     assert "<!-- hermes-dox -->" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert (tmp_path / "dox" / "CHANGELOG.md").exists()
+
+
+def test_status_default_does_not_walk_parents(tmp_path):
+    init_project(tmp_path, mode="ops")
+    subdir = tmp_path / "plans" / "workstream"
+    subdir.mkdir(parents=True)
+
+    status = status_project(subdir)
+    assert status["active"] is False
+    assert status["mode"] is None
+
+
+def test_status_search_parents_resolves_initialized_ancestor(tmp_path):
+    init_project(tmp_path, mode="ops")
+    subdir = tmp_path / "plans" / "azure-alpha-remediation" / "reports"
+    subdir.mkdir(parents=True)
+
+    status = status_project(subdir, search_parents=True)
+
+    assert status["active"] is True
+    assert status["mode"] == "ops"
+    assert Path(status["root"]) == tmp_path.resolve()
+
+
+def test_status_search_parents_returns_start_when_no_ancestor(tmp_path):
+    subdir = tmp_path / "nested" / "leaf"
+    subdir.mkdir(parents=True)
+
+    status = status_project(subdir, search_parents=True)
+
+    assert status["active"] is False
+    assert Path(status["root"]) == subdir.resolve()
+
+
+def test_check_search_parents_runs_against_initialized_ancestor(tmp_path):
+    init_project(tmp_path, mode="ops")
+    subdir = tmp_path / "plans" / "workstream"
+    subdir.mkdir(parents=True)
+
+    report = check_project(subdir, search_parents=True)
+
+    assert report.status["active"] is True
+    assert report.status["mode"] == "ops"
+    assert report.exit_code == 0

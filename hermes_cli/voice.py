@@ -781,7 +781,42 @@ def speak_text(text: str) -> None:
     try:
         from tools.tts_tool import text_to_speech_tool
 
-        tts_text = text[:4000] if len(text) > 4000 else text
+        # ── Conversational spoken-reply pipeline ────────────────────
+        try:
+            from hermes_cli.config import load_config
+            voice_cfg = load_config().get("voice", {})
+            speak_mode = (
+                voice_cfg.get("speak_mode", "full")
+                if isinstance(voice_cfg, dict) else "full"
+            )
+        except Exception:
+            speak_mode = "full"
+
+        if speak_mode == "conversational":
+            from agent.spoken_reply import SpokenReplyCaps, buildSpokenReply
+
+            max_chars = 5000
+            max_words = 900
+            if isinstance(voice_cfg, dict):
+                try:
+                    max_chars = int(voice_cfg.get("spoken_max_chars") or max_chars)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    max_words = int(voice_cfg.get("spoken_max_words") or max_words)
+                except (TypeError, ValueError):
+                    pass
+            spoken_reply = buildSpokenReply(
+                text,
+                caps=SpokenReplyCaps(max_chars=max_chars, max_words=max_words),
+            )
+            tts_text = spoken_reply.text
+        else:
+            tts_text = text
+        # ───────────────────────────────────────────────────────────
+
+        _tts_cap = 5000 if speak_mode == "conversational" else 8000
+        tts_text = tts_text[:_tts_cap] if len(tts_text) > _tts_cap else tts_text
         tts_text = re.sub(r'```[\s\S]*?```', ' ', tts_text)             # fenced code blocks
         tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)    # [text](url) → text
         tts_text = re.sub(r'https?://\S+', '', tts_text)                # bare URLs

@@ -35,7 +35,7 @@ import pytest
 
 from plugins.memory.composite.brain_http import HttpBrainClient
 from plugins.memory.composite.provider import HermesCompositeProvider
-from store import ExperienceStore
+from plugins.memory.composite.experience_store import ExperienceStore
 
 
 # --- minimal stub brain (real socket, real urllib round-trip) -----------------------

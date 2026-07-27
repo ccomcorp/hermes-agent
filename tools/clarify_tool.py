@@ -53,21 +53,69 @@ def _flatten_choice(c) -> str:
     return str(c).strip()
 
 
+def _invoke_callback(callback, question, choices, multi_select):
+    """Invoke the platform callback, passing multi_select if supported.
+
+    Uses signature inspection (not a ``TypeError`` retry) to decide whether
+    the callback accepts the ``multi_select`` keyword — a retry-on-TypeError
+    approach would re-invoke a *compatible* callback that raised TypeError
+    internally, potentially prompting the user twice.
+    """
+    import inspect
+
+    accepts_multi = False
+    try:
+        sig = inspect.signature(callback)
+        params = sig.parameters
+        accepts_multi = "multi_select" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+    except (TypeError, ValueError):
+        accepts_multi = False
+
+    if accepts_multi:
+        return callback(question, choices, multi_select=multi_select)
+    return callback(question, choices)
+
+
+def _parse_multi_select_response(raw_response) -> List[str]:
+    """Parse a multi-select response into a list of cleaned choice strings."""
+    if isinstance(raw_response, list):
+        return [str(r).strip() for r in raw_response if str(r).strip()]
+    raw = str(raw_response).strip()
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(p).strip() for p in parsed if str(p).strip()]
+        except json.JSONDecodeError:
+            pass
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 def clarify_tool(
     question: str,
     choices: Optional[List[str]] = None,
-    callback: Optional[Callable] = None,
+    multi_select: bool = False,
+    callback: Optional[Callable[[str, Optional[List[str]]], object]] = None,
 ) -> str:
     """
     Ask the user a question, optionally with multiple-choice options.
 
     Args:
-        question: The question text to present.
-        choices:  Up to 4 predefined answer choices. When omitted the
-                  question is purely open-ended.
-        callback: Platform-provided function that handles the actual UI
-                  interaction. Signature: callback(question, choices) -> str.
-                  Injected by the agent runner (cli.py / gateway).
+        question:     The question text to present.
+        choices:      Up to 4 predefined answer choices. When omitted the
+                      question is purely open-ended.
+        multi_select: When True, the user can select multiple choices
+                      (checkboxes).  The ``user_response`` in the output JSON
+                      will be a list of strings instead of a single string.
+                      Has no effect when ``choices`` is omitted.
+        callback:     Platform-provided function that handles the actual UI
+                      interaction.  Signature:
+                      ``callback(question, choices, multi_select=False) -> str``.
+                      The optional ``multi_select`` keyword is passed so the
+                      platform can render checkboxes instead of radio buttons.
+                      Injected by the agent runner (cli.py / gateway).
 
     Returns:
         JSON string with the user's response.
@@ -99,17 +147,38 @@ def clarify_tool(
         )
 
     try:
-        user_response = callback(question, choices)
+        raw_response = _invoke_callback(callback, question, choices, multi_select)
     except Exception as exc:
         return json.dumps(
             {"error": f"Failed to get user input: {exc}"},
             ensure_ascii=False,
         )
 
+    from tools.clarify_gateway import CANCEL_SENTINEL
+
+    if raw_response is CANCEL_SENTINEL:
+        # Session-level cancellation (e.g. Stop / session.interrupt while the
+        # clarify card was pending).  The user did not press Skip — the session
+        # was torn down underneath them, so prior Q&A / progress was *not* lost.
+        status = "cancelled"
+        response_text = ""
+    elif multi_select and choices is not None:
+        response_text = _parse_multi_select_response(raw_response)
+        status = "answered" if response_text else "skipped"
+    else:
+        response_text = str(raw_response).strip()
+        if response_text:
+            status = "answered"
+        else:
+            # User pressed Skip, or the clarify timed out — the agent opted not
+            # to wait for an answer and the entry resolved to empty string.
+            status = "skipped"
+
     return json.dumps({
         "question": question,
         "choices_offered": choices,
-        "user_response": str(user_response).strip(),
+        "user_response": response_text,
+        "status": status,
     }, ensure_ascii=False)
 
 
@@ -125,11 +194,13 @@ def check_clarify_requirements() -> bool:
 CLARIFY_SCHEMA = {
     "name": "clarify",
     "description": (
-        "Ask the user a question when you need clarification, feedback, or a "
-        "decision before proceeding. Supports two modes:\n\n"
-        "1. **Multiple choice** — provide up to 4 choices. The user picks one "
+        "decision before proceeding. Supports "
+        "three modes:\n\n"
+        "1. **Single-select multiple choice** — provide up to 4 choices. The user picks one "
         "or types their own answer via a 5th 'Other' option.\n"
-        "2. **Open-ended** — omit choices entirely. The user types a free-form "
+        "2. **Multi-select multiple choice** — set multi_select=true. The user can select "
+        "multiple options via checkboxes. user_response will be a list of selected choices.\n"
+        "3. **Open-ended** — omit choices entirely. The user types a free-form "
         "response.\n\n"
         "CRITICAL: when you are offering options, put each option ONLY in the "
         "`choices` array — NEVER enumerate the options inside the `question` "
@@ -169,6 +240,15 @@ CLARIFY_SCHEMA = {
                     "entirely ONLY for a genuinely open-ended free-text question."
                 ),
             },
+            "multi_select": {
+                "type": "boolean",
+                "description": (
+                    "When true, the user can select MULTIPLE options (like checkboxes). "
+                    "The user_response will be a list of selected choices. "
+                    "When false (default), single selection (radio). "
+                    "Has no effect when choices is omitted (open-ended question)."
+                ),
+            },
         },
         "required": ["question"],
     },
@@ -185,6 +265,7 @@ registry.register(
     handler=lambda args, **kw: clarify_tool(
         question=args.get("question", ""),
         choices=args.get("choices"),
+        multi_select=args.get("multi_select", False),
         callback=kw.get("callback")),
     check_fn=check_clarify_requirements,
     emoji="❓",

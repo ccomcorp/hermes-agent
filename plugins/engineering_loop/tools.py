@@ -76,6 +76,29 @@ def _derivation_for_command(command: str) -> str:
     return "task_completed"
 
 
+def _resolve_active_agent() -> Any:
+    """Locate the in-flight AIAgent for outcome → experience signaling.
+
+    Order (Desktop/gateway first, then CLI):
+      1. contextvar set in AIAgent._execute_tool_calls (all surfaces)
+      2. cli._active_agent_ref (CLI / TUI only)
+    """
+    try:
+        from agent.memory_manager import get_active_agent
+
+        agent = get_active_agent()
+        if agent is not None:
+            return agent
+    except Exception:
+        pass
+    try:
+        import cli as _cli  # type: ignore
+
+        return getattr(_cli, "_active_agent_ref", None)
+    except Exception:
+        return None
+
+
 def _emit_outcome_signal(
     *,
     valence: float,
@@ -91,13 +114,7 @@ def _emit_outcome_signal(
     if float(valence) == 0.0:
         return {"ok": True, "skipped": "neutral"}
     try:
-        agent = None
-        try:
-            import cli as _cli  # type: ignore
-
-            agent = getattr(_cli, "_active_agent_ref", None)
-        except Exception:
-            agent = None
+        agent = _resolve_active_agent()
         mm = getattr(agent, "_memory_manager", None) if agent is not None else None
         if mm is None or not hasattr(mm, "signal_outcome"):
             return {"ok": True, "skipped": "no_memory_manager"}

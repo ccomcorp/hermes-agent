@@ -1,0 +1,42 @@
+{
+  "verdict": "CHANGES_REQUIRED",
+  "lens": "execution-surface prompt/tool inheritance",
+  "findings": [
+    {
+      "id": "S1",
+      "severity": "HIGH",
+      "spec_location": "P2 bullet 1 (line 35); EVAL-CG-01 (line 81)",
+      "problem": "The universal guidance block for primary/profile agents is injected only 'when code tools are available', a term the spec never defines. A profile agent doing code work via terminal/file tools in a session where the CodeGraph path isn't loaded never receives the rule — and therefore also never receives the P2 fallback-recording duty. The policy silently skips a surface it claims to cover, and EVAL-CG-01 tests only the positive (tools-loaded) branch, so the skip is undetectable.",
+      "required_spec_change": "Define 'code tools' explicitly (or replace the gate with 'whenever the agent can read/write files or run shell commands in a repository'). State that at minimum the CodeGraph-first rule plus the recorded-fallback duty are injected on that broader condition. Add an eval for the negative path: agent in a code repo without the CodeGraph MCP tool must produce a recorded fallback, not silent text search."
+    },
+    {
+      "id": "S2",
+      "severity": "HIGH",
+      "spec_location": "Injection seam 2 (lines 70-72); P3 step 1 (line 45); EVAL-CG-02 (line 82)",
+      "problem": "Delegated children skip context files, so project AGENTS.md/DOX policy reaches them only if it 'must be passed or reproduced' in the child prompt — but nothing structurally obligates the delegating call site to pass it, and no eval verifies a child actually receives or reads the target repo's DOX contract. EVAL-CG-02 inspects prompt language only. Project-policy inheritance for children remains discretionary, which is precisely the prompt-inheritance gap the spec sets out to close.",
+      "required_spec_change": "Make it structural: mandate that a delegated child whose workdir is a DOX-enabled repository must read the root AGENTS.md/docops.yml as its first file action (skip_context_files does not block explicit reads), or add a required project-policy field to the delegation call. Extend EVAL-CG-02 from prompt inspection to a behavioral assertion on a delegated-child run against a DOX-enabled fixture repo."
+    },
+    {
+      "id": "S3",
+      "severity": "MEDIUM",
+      "spec_location": "Testable evaluations, EVAL-DOX-01 (line 85) and EVAL-COMMIT-01 (line 86)",
+      "problem": "The two behavioral closeout evals (DOX termination gate, validated commit gate) are bound to the engineering-loop/primary surface only. P3 and P4 assert identical duties for delegated children and Kanban workers, but no eval exercises those paths — a worker or child could terminate without `hermes dox check` evidence or commit unvalidated work and nothing in the eval suite would fail.",
+      "required_spec_change": "Parametrize EVAL-DOX-01 and EVAL-COMMIT-01 across all three named surfaces (primary/profile, delegated child, Kanban worker), or add per-surface EVAL IDs (e.g., EVAL-DOX-02 child, EVAL-DOX-03 kanban; EVAL-COMMIT-03 worker-end closeout) so the uniform closeout claim is actually tested where it is asserted."
+    },
+    {
+      "id": "S4",
+      "severity": "MEDIUM",
+      "spec_location": "P2 bullet 2 (line 36); EVAL-CG-04 (line 84)",
+      "problem": "Tool inheritance is specified as presence/absence only: children 'retain access to the parent's CodeGraph MCP toolset when the parent has it', and EVAL-CG-04 tests retention vs recorded fallback. Nothing asserts the inherited toolset's workspace-root binding matches the child's actual workdir — a child working in a Kanban worktree or different checkout could query the parent's index and pass P1's stale-graph check against the wrong root.",
+      "required_spec_change": "Add a root-binding assertion to P1 step 1 / P2: before relying on an inherited CodeGraph MCP toolset, the agent must verify the toolset's indexed root equals its own resolved workspace path, else re-initialize or record fallback. Extend EVAL-CG-04 with a mismatched-root case."
+    }
+  ],
+  "eval_ids_cited": [
+    "EVAL-CG-01",
+    "EVAL-CG-02",
+    "EVAL-CG-04",
+    "EVAL-DOX-01",
+    "EVAL-COMMIT-01"
+  ],
+  "recommended_next_step": "Amend P2 and the eval section per S1-S4 (define the injection gate, make child project-policy inheritance structural, parametrize closeout evals across all three surfaces, add MCP root-binding assertion), then re-run elicitation on the revised spec before authorizing the prompt changes."
+}

@@ -14,7 +14,10 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from utils import safe_json_loads
-from agent.tool_result_classification import file_mutation_result_landed
+from agent.tool_result_classification import (
+    file_mutation_result_landed,
+    tool_result_is_truthful_negative,
+)
 
 
 IDEMPOTENT_TOOL_NAMES = frozenset(
@@ -300,8 +303,16 @@ class ToolCallGuardrailController:
             self._exact_failure_counts[signature] = exact_count
             self._no_progress.pop(signature, None)
 
-            same_count = self._same_tool_failure_counts.get(tool_name, 0) + 1
-            self._same_tool_failure_counts[tool_name] = same_count
+            if tool_result_is_truthful_negative(tool_name, result):
+                # Absence reports (dead process, missing file) are diagnostics,
+                # not tool failures: they never feed the args-blind same-tool
+                # counter. Identical-args repetition is still caught above by
+                # the exact counter; a genuine failure streak is left untouched
+                # (a truthful negative neither increments nor resets it).
+                same_count = self._same_tool_failure_counts.get(tool_name, 0)
+            else:
+                same_count = self._same_tool_failure_counts.get(tool_name, 0) + 1
+                self._same_tool_failure_counts[tool_name] = same_count
 
             if self.config.hard_stop_enabled and same_count >= self.config.same_tool_failure_halt_after:
                 decision = ToolGuardrailDecision(
@@ -472,4 +483,8 @@ def _positive_int(value: Any, default: int) -> int:
 
 
 def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    # surrogatepass: tool results scraped from the web can carry unpaired
+    # UTF-16 surrogates (e.g. half of a mathematical-bold pair); a strict
+    # encode raises and takes down the whole conversation loop. The hash only
+    # needs deterministic bytes, not valid UTF-8.
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()

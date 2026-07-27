@@ -16,17 +16,11 @@ import os
 import sys
 from pathlib import Path
 
-# AIOS health + store packages (sibling layout, env-overridable — mirrors the composite plugin).
-_root = (
-    Path(os.environ["AIOS_PACKAGES_DIR"])
-    if os.environ.get("AIOS_PACKAGES_DIR")
-    else Path(__file__).resolve().parents[1].parent / "aios" / "packages" / "memory"
-)
-for _d in (_root / "experience-store", _root.parent / "health"):
-    if _d.is_dir() and str(_d) not in sys.path:
-        sys.path.insert(0, str(_d))
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from experience_health import ExperienceHealth  # noqa: E402  (path inserted above)
+from plugins.memory.composite.experience_store import ExperienceHealth  # noqa: E402
 
 
 def _hermes_home() -> str:

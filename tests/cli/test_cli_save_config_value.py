@@ -51,6 +51,14 @@ class TestSaveConfigValueAtomic:
         result = yaml.safe_load(config_env.read_text())
         assert result["auxiliary"]["compression"]["model"] == "google/gemini-3-flash-preview"
 
+    def test_creates_voice_speak_mode_path(self, config_env):
+        """EVAL-VDP-005 partial: config set can persist voice.speak_mode."""
+        from cli import save_config_value
+        save_config_value("voice.speak_mode", "conversational")
+
+        result = yaml.safe_load(config_env.read_text())
+        assert result["voice"]["speak_mode"] == "conversational"
+
     def test_overwrites_existing_value(self, config_env):
         """Updating an existing key replaces the value."""
         from cli import save_config_value

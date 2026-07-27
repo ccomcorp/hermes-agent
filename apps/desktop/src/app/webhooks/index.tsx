@@ -1,17 +1,12 @@
-/**
- * Webhooks — dynamic webhook subscriptions (create / list / delete / toggle).
- *
- * Functional port of the dashboard's WebhooksPage; styling is the desktop's own
- * design system (flat, tokens-not-literals, reused primitives — no card-in-card).
- * API calls live in ./api, mirroring src/hermes.ts's request helper.
- */
-import type * as React from 'react'
+import { useStore } from '@nanostores/react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
-import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Codicon } from '@/components/ui/codicon'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { CopyButton } from '@/components/ui/copy-button'
 import {
   Dialog,
   DialogContent,
@@ -20,544 +15,602 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { AlertTriangle } from '@/lib/icons'
-import { cn } from '@/lib/utils'
-import { notify, notifyError } from '@/store/notifications'
-
-import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
-import { PageSearchShell } from '../page-search-shell'
-import { EmptyState, ListRow } from '../settings/primitives'
-import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
-
 import {
   createWebhook,
   deleteWebhook,
-  listWebhooks,
+  enableWebhooks,
+  getWebhooks,
   setWebhookEnabled,
-  type WebhookCreated,
   type WebhookRoute,
   type WebhooksResponse
-} from './api'
-import { DELIVERY_OPTIONS, WEBHOOKS_STRINGS as S } from './strings'
+} from '@/hermes'
+import { useI18n } from '@/i18n'
+import { AlertTriangle, Globe, Plus, RefreshCw } from '@/lib/icons'
+import { cn } from '@/lib/utils'
+import { notify, notifyError } from '@/store/notifications'
+import { $profileScope } from '@/store/profile'
+import { runGatewayRestart } from '@/store/system-actions'
 
-function matchesQuery(sub: WebhookRoute, q: string): boolean {
-  if (!q) {
-    return true
-  }
+import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
+import {
+  Panel,
+  PanelAddButton,
+  PanelBlock,
+  PanelBody,
+  PanelDetail,
+  PanelEmpty,
+  PanelHeader,
+  PanelList,
+  PanelListRow,
+  PanelMeta,
+  PanelPill,
+  PanelRowMenu,
+  PanelSectionLabel
+} from '../overlays/panel'
+import { ListRow } from '../settings/primitives'
 
-  const needle = q.toLowerCase()
+const DELIVER_OPTIONS: readonly string[] = ['log', 'telegram', 'discord', 'slack', 'email', 'github_comment']
 
-  return [sub.name, sub.description, sub.deliver, ...sub.events].some(value =>
-    value?.toLowerCase().includes(needle)
+interface CreatedWebhook {
+  secret: string
+  url: string
+}
+
+// One affordance for "value + CopyButton": flat, token-backed (no border, no
+// raw literals). DESIGN.md Principle 1 (flat, not boxed) + 4 (tokens, not
+// literals). Reused by the detail URL row and the create-result URL/secret so
+// there is a single copyable-value chrome in this file.
+function CopyValueRow({ copyLabel, mono = true, value }: { copyLabel: string; mono?: boolean; value: string }) {
+  return (
+    <div className="flex items-center gap-1 rounded bg-foreground/5 px-2.5 py-1.5 text-[0.7rem]">
+      <span className={cn('min-w-0 flex-1 truncate text-foreground/80', mono && 'font-mono')}>{value}</span>
+      <CopyButton appearance="icon" buttonSize="icon-sm" label={copyLabel} text={value} />
+    </div>
   )
 }
 
-interface WebhooksViewProps extends React.ComponentProps<'section'> {
-  setStatusbarItemGroup: SetStatusbarItemGroup
+interface WebhooksViewProps {
+  onClose?: () => void
+  /** AIOS fork compat — surfaces and route-tile pass this to every view. */
+  setStatusbarItemGroup?: (..._: never[]) => void
 }
 
-export function WebhooksView({ setStatusbarItemGroup, ...props }: WebhooksViewProps) {
-  const [data, setData] = useState<WebhooksResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+export function WebhooksView({ onClose }: WebhooksViewProps) {
+  const { t } = useI18n()
+  const w = t.webhooks
+  // Re-load when the active profile changes so REST routes to the right backend.
+  const profileScope = useStore($profileScope)
+  const queryClient = useQueryClient()
+  const queryKey = useMemo(() => ['webhooks', profileScope] as const, [profileScope])
+
   const [query, setQuery] = useState('')
-  const [busyName, setBusyName] = useState<null | string>(null)
-  const [pendingDelete, setPendingDelete] = useState<WebhookRoute | null>(null)
-  const [deleting, setDeleting] = useState(false)
+  const [enabling, setEnabling] = useState(false)
+  const [restartNeeded, setRestartNeeded] = useState(false)
+  const [restartError, setRestartError] = useState<null | string>(null)
+  const [restarting, setRestarting] = useState(false)
+  // Master/detail: the subscription whose config fills the right pane.
+  const [selectedName, setSelectedName] = useState<null | string>(null)
+
   const [createOpen, setCreateOpen] = useState(false)
-
-  const refresh = useCallback(async () => {
-    try {
-      setData(await listWebhooks())
-    } catch (err) {
-      notifyError(err, S.loadFailed)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useRefreshHotkey(refresh)
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  useEffect(() => {
-    setStatusbarItemGroup('webhooks', [])
-
-    return () => setStatusbarItemGroup('webhooks', [])
-  }, [setStatusbarItemGroup])
-
-  const enabled = data?.enabled ?? false
-  const subscriptions = data?.subscriptions ?? []
-  const totalCount = subscriptions.length
-
-  const visible = useMemo(
-    () =>
-      subscriptions
-        .filter(sub => matchesQuery(sub, query.trim()))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [subscriptions, query]
-  )
-
-  const handleToggle = useCallback(
-    async (sub: WebhookRoute, next: boolean) => {
-      setBusyName(sub.name)
-
-      try {
-        await setWebhookEnabled(sub.name, next)
-        setData(current =>
-          current
-            ? {
-                ...current,
-                subscriptions: current.subscriptions.map(row =>
-                  row.name === sub.name ? { ...row, enabled: next } : row
-                )
-              }
-            : current
-        )
-        notify({ kind: 'success', title: next ? S.enabledToast : S.disabledToast, message: sub.name })
-      } catch (err) {
-        notifyError(err, S.toggleFailed)
-      } finally {
-        setBusyName(null)
-      }
-    },
-    []
-  )
-
-  async function handleConfirmDelete() {
-    if (!pendingDelete) {
-      return
-    }
-
-    setDeleting(true)
-
-    try {
-      await deleteWebhook(pendingDelete.name)
-      setData(current =>
-        current
-          ? { ...current, subscriptions: current.subscriptions.filter(row => row.name !== pendingDelete.name) }
-          : current
-      )
-      notify({ kind: 'success', title: S.deleted, message: pendingDelete.name })
-      setPendingDelete(null)
-    } catch (err) {
-      notifyError(err, S.deleteFailed)
-    } finally {
-      setDeleting(false)
-    }
-  }
-
-  function handleCreated(created: WebhookCreated) {
-    setData(current => {
-      if (!current) {
-        return current
-      }
-
-      const { secret: _secret, ...route } = created
-
-      return { ...current, subscriptions: [...current.subscriptions, route] }
-    })
-  }
-
-  return (
-    <PageSearchShell
-      {...props}
-      onSearchChange={setQuery}
-      searchHidden={totalCount === 0}
-      searchPlaceholder={S.search}
-      searchTrailingAction={
-        <Button disabled={!enabled} onClick={() => setCreateOpen(true)} size="sm">
-          <Codicon name="add" size="0.875rem" />
-          {S.newSubscription}
-        </Button>
-      }
-      searchValue={query}
-    >
-      {loading ? (
-        <PageLoader label={S.loading} />
-      ) : (
-        <div className="h-full min-h-0 overflow-y-auto px-[clamp(1.25rem,4vw,4rem)] pb-20">
-          <div className="mx-auto w-full max-w-4xl">
-            {!enabled && (
-              <div className="mt-4 flex items-start gap-2.5 rounded-md bg-amber-500/10 px-3 py-2.5 text-amber-600 dark:text-amber-300">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <div className="min-w-0">
-                  <div className="text-[length:var(--conversation-text-font-size)] font-medium">{S.disabledTitle}</div>
-                  <div className="mt-1 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-amber-600/85 dark:text-amber-300/85">
-                    {S.disabledBody}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="mb-2.5 flex items-center gap-2 pt-2 text-[length:var(--conversation-text-font-size)] font-medium">
-              <Codicon className="text-muted-foreground" name="radio-tower" size="1rem" />
-              <span>{S.subscriptionsHeading}</span>
-              <Badge variant="muted">{totalCount}</Badge>
-            </div>
-            <p className="-mt-1 mb-1 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
-              {S.hotReloadHint}
-            </p>
-
-            {totalCount === 0 ? (
-              <EmptyState description={S.emptyDesc} title={S.emptyTitle} />
-            ) : visible.length === 0 ? (
-              <EmptyState description={S.emptySearchDesc} title={S.emptySearchTitle} />
-            ) : (
-              <div className="divide-y divide-(--ui-stroke-tertiary)">
-                {visible.map(sub => (
-                  <WebhookRow
-                    busy={busyName === sub.name}
-                    key={sub.name}
-                    onDelete={() => setPendingDelete(sub)}
-                    onToggle={next => void handleToggle(sub, next)}
-                    sub={sub}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      <CreateWebhookDialog onCreated={handleCreated} onOpenChange={setCreateOpen} open={createOpen} />
-
-      <Dialog onOpenChange={open => !open && !deleting && setPendingDelete(null)} open={pendingDelete !== null}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{S.deleteTitle}</DialogTitle>
-            <DialogDescription>
-              {pendingDelete ? (
-                <>
-                  {S.deleteDescPrefix}
-                  <span className="font-medium text-foreground">{pendingDelete.name}</span>
-                  {S.deleteDescSuffix}
-                </>
-              ) : null}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button disabled={deleting} onClick={() => setPendingDelete(null)} variant="outline">
-              {S.cancel}
-            </Button>
-            <Button disabled={deleting} onClick={() => void handleConfirmDelete()} variant="destructive">
-              {deleting ? S.deleting : S.delete}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </PageSearchShell>
-  )
-}
-
-function CopyButton({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard
-      .writeText(value)
-      .then(() => {
-        setCopied(true)
-        window.setTimeout(() => setCopied(false), 1500)
-      })
-      .catch(() => {})
-  }, [value])
-
-  return (
-    <Button aria-label={label} onClick={handleCopy} size="icon-xs" title={label} variant="ghost">
-      <Codicon name={copied ? 'check' : 'copy'} size="0.875rem" />
-    </Button>
-  )
-}
-
-function WebhookRow({
-  busy,
-  onDelete,
-  onToggle,
-  sub
-}: {
-  busy: boolean
-  onDelete: () => void
-  onToggle: (next: boolean) => void
-  sub: WebhookRoute
-}) {
-  return (
-    <ListRow
-      action={
-        <div className="flex items-center gap-1.5">
-          <Switch
-            aria-label={sub.enabled ? S.disable : S.enable}
-            checked={sub.enabled}
-            disabled={busy}
-            onCheckedChange={onToggle}
-            size="xs"
-          />
-          <Button
-            aria-label={S.delete}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            onClick={onDelete}
-            size="icon-xs"
-            title={S.delete}
-            variant="ghost"
-          >
-            <Codicon name="trash" size="0.875rem" />
-          </Button>
-        </div>
-      }
-      below={
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <Badge variant="outline">{sub.deliver}</Badge>
-          {sub.deliver_only && <Badge variant="muted">{S.deliverOnly}</Badge>}
-          {sub.events.length === 0 ? (
-            <Badge variant="muted">{S.allEvents}</Badge>
-          ) : (
-            sub.events.map(evt => (
-              <Badge key={evt} variant="muted">
-                {evt}
-              </Badge>
-            ))
-          )}
-        </div>
-      }
-      description={sub.description || undefined}
-      hint={
-        <span className="flex items-center gap-1">
-          <span className="min-w-0 flex-1 truncate">{sub.url}</span>
-          <CopyButton label={S.copyUrl} value={sub.url} />
-        </span>
-      }
-      title={
-        <span className={cn('inline-flex items-center gap-2', !sub.enabled && 'opacity-60')}>
-          <span className="truncate">{sub.name}</span>
-          {!sub.enabled && <Badge variant="warn">{S.disabledBadge}</Badge>}
-        </span>
-      }
-    />
-  )
-}
-
-function CreateWebhookDialog({
-  onCreated,
-  onOpenChange,
-  open
-}: {
-  onCreated: (created: WebhookCreated) => void
-  onOpenChange: (open: boolean) => void
-  open: boolean
-}) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [events, setEvents] = useState('')
   const [deliver, setDeliver] = useState('log')
   const [deliverOnly, setDeliverOnly] = useState(false)
   const [prompt, setPrompt] = useState('')
+  const [skills, setSkills] = useState('')
   const [creating, setCreating] = useState(false)
-  const [error, setError] = useState<null | string>(null)
-  const [created, setCreated] = useState<null | WebhookCreated>(null)
+  const [created, setCreated] = useState<CreatedWebhook | null>(null)
 
+  const [pendingDelete, setPendingDelete] = useState<null | string>(null)
+
+  const {
+    data,
+    error,
+    isPending: loading,
+    refetch
+  } = useQuery({
+    queryKey,
+    queryFn: getWebhooks
+  })
+
+  // React Query v5 dropped useQuery onError; surface a load failure toast once
+  // per error object instead.
   useEffect(() => {
-    if (!open) {
-      return
+    if (error) {
+      notifyError(error, w.loadFailed)
     }
+  }, [error, w.loadFailed])
 
+  const enabled = data?.enabled ?? false
+  const subscriptions = useMemo(() => data?.subscriptions ?? [], [data])
+
+  // Pull fresh backend truth into the cache. `silent` swallows the error toast
+  // for post-mutation reconciles (the mutation already reported success/failure).
+  const reload = useCallback(
+    async (silent = false) => {
+      try {
+        await queryClient.invalidateQueries({ queryKey })
+      } catch (err) {
+        if (!silent) {
+          notifyError(err, w.loadFailed)
+        }
+      }
+    },
+    [queryClient, queryKey, w.loadFailed]
+  )
+
+  useRefreshHotkey(() => void refetch())
+
+  const restartGatewayNow = useCallback(async () => {
+    setRestarting(true)
+
+    try {
+      await runGatewayRestart()
+      setRestartNeeded(false)
+      setRestartError(null)
+      // Give the receiver a moment to bind before re-reading state.
+      window.setTimeout(() => void reload(true), 4000)
+    } catch (err) {
+      setRestartNeeded(true)
+      setRestartError(String(err))
+      notifyError(err, w.restartFailed(''))
+    } finally {
+      setRestarting(false)
+    }
+  }, [reload, w])
+
+  const handleEnable = useCallback(async () => {
+    setEnabling(true)
+    setRestartNeeded(false)
+    setRestartError(null)
+
+    try {
+      const result = await enableWebhooks()
+      await reload(true)
+
+      if (result.restart_started) {
+        notify({ kind: 'success', message: w.enabledRestarting })
+        window.setTimeout(() => void reload(true), 4000)
+      } else {
+        const detail = result.restart_error ? `: ${result.restart_error}` : '.'
+        setRestartNeeded(true)
+        setRestartError(w.restartFailed(detail))
+        notify({ kind: 'error', message: w.restartFailed(detail) })
+      }
+    } catch (err) {
+      notifyError(err, w.restartFailed(''))
+    } finally {
+      setEnabling(false)
+    }
+  }, [reload, w])
+
+  const resetForm = useCallback(() => {
     setName('')
     setDescription('')
     setEvents('')
     setDeliver('log')
     setDeliverOnly(false)
     setPrompt('')
-    setCreating(false)
-    setError(null)
+    setSkills('')
+  }, [])
+
+  const closeCreate = useCallback(() => {
+    if (creating) {
+      return
+    }
+
+    setCreateOpen(false)
     setCreated(null)
-  }, [open])
+  }, [creating])
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault()
-
-    const trimmedName = name.trim()
-
-    if (!trimmedName) {
-      setError(S.nameRequired)
+  const handleCreate = useCallback(async () => {
+    if (!name.trim()) {
+      notify({ kind: 'error', message: w.nameRequired })
 
       return
     }
 
     setCreating(true)
-    setError(null)
 
     try {
       const eventsList = events
         .split(',')
-        .map(value => value.trim())
+        .map(e => e.trim())
         .filter(Boolean)
 
-      const result = await createWebhook({
-        name: trimmedName,
-        description: description.trim() || undefined,
-        events: eventsList.length ? eventsList : undefined,
+      const skillsList = skills
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+
+      const res = await createWebhook({
         deliver,
         deliver_only: deliverOnly,
-        prompt: prompt.trim() || undefined
+        description: description.trim() || undefined,
+        events: eventsList.length ? eventsList : undefined,
+        name: name.trim(),
+        prompt: prompt.trim() || undefined,
+        skills: skillsList.length ? skillsList : undefined
       })
 
-      onCreated(result)
-      setCreated(result)
-      notify({ kind: 'success', title: S.createdTitle, message: trimmedName })
+      notify({ kind: 'success', message: w.created })
+      setCreated({ secret: res.secret, url: res.url })
+      resetForm()
+      void reload(true)
     } catch (err) {
-      setError(err instanceof Error ? err.message : S.createFailed)
+      notifyError(err, w.createFailed(''))
     } finally {
       setCreating(false)
     }
-  }
+  }, [deliver, deliverOnly, description, events, name, prompt, reload, resetForm, skills, w])
+
+  const handleToggle = useCallback(
+    async (subName: string, nextEnabled: boolean) => {
+      // Optimistic cache paint; the invalidate below lets backend truth win.
+      queryClient.setQueryData<WebhooksResponse>(queryKey, current =>
+        current
+          ? {
+              ...current,
+              subscriptions: current.subscriptions.map(s => (s.name === subName ? { ...s, enabled: nextEnabled } : s))
+            }
+          : current
+      )
+
+      try {
+        await setWebhookEnabled(subName, nextEnabled)
+        notify({ kind: 'success', message: nextEnabled ? w.enabled(subName) : w.disabled(subName) })
+        void reload(true)
+      } catch (err) {
+        await reload(true)
+        notifyError(err, w.toggleFailed(subName))
+      }
+    },
+    [queryClient, queryKey, reload, w]
+  )
+
+  // ConfirmDialog owns the pending→done→close beat; throw to surface its inline
+  // error and keep the dialog open. Success toast matches the cron delete idiom
+  // (title + name).
+  const handleDelete = useCallback(async () => {
+    if (!pendingDelete) {
+      return
+    }
+
+    try {
+      await deleteWebhook(pendingDelete)
+      notify({ kind: 'success', title: w.deleted, message: pendingDelete })
+      void reload(true)
+    } catch (err) {
+      notifyError(err, w.deleteFailed(pendingDelete))
+      throw err
+    }
+  }, [pendingDelete, reload, w])
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+
+    if (!q) {
+      return subscriptions
+    }
+
+    return subscriptions.filter(s =>
+      [s.name, s.description, s.deliver, ...s.events].filter(Boolean).some(v => v.toLowerCase().includes(q))
+    )
+  }, [query, subscriptions])
+
+  // Detail always reflects a concrete sub: the explicitly selected one, else the
+  // first visible row, so the right pane is never empty while subs exist.
+  const selectedSub = useMemo(
+    () => visible.find(s => s.name === selectedName) ?? visible[0] ?? null,
+    [visible, selectedName]
+  )
+
+  const banners = (
+    <>
+      {!enabled && (
+        <Alert className="mb-4" variant="warning">
+          <Globe />
+          <AlertTitle>{w.disabledTitle}</AlertTitle>
+          <AlertDescription>
+            <p>{w.disabledBody}</p>
+            <Button className="mt-1" disabled={enabling} onClick={() => void handleEnable()} size="sm">
+              <Globe />
+              {enabling ? w.enabling : w.enable}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {restartNeeded && (
+        <Alert className="mb-4" variant="warning">
+          <AlertTriangle />
+          <AlertDescription>
+            <p>{restartError ?? w.restartNeeded}</p>
+            <Button
+              className="mt-1"
+              disabled={restarting}
+              onClick={() => void restartGatewayNow()}
+              size="sm"
+              variant="secondary"
+            >
+              <RefreshCw />
+              {restarting ? w.restartingGateway : w.restartGateway}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
 
   return (
-    <Dialog onOpenChange={value => !value && !creating && onOpenChange(false)} open={open}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{created ? S.createdTitle : S.createTitle}</DialogTitle>
-          <DialogDescription>{created ? S.createdDesc : S.createDesc}</DialogDescription>
-        </DialogHeader>
-
-        {created ? (
-          <div className="grid gap-4">
-            <Field label={S.webhookUrlLabel}>
-              <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{created.url}</span>
-                <CopyButton label={S.copyUrl} value={created.url} />
-              </div>
-            </Field>
-
-            <Field label={S.secretLabel}>
-              <div className="flex items-center gap-2 rounded-md bg-amber-500/10 px-2.5 py-1.5">
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-amber-600 dark:text-amber-300">
-                  {created.secret}
-                </span>
-                <CopyButton label={S.copySecret} value={created.secret} />
-              </div>
-            </Field>
-
-            <DialogFooter>
-              <Button onClick={() => onOpenChange(false)} type="button">
-                {S.done}
+    <Panel onClose={onClose ?? (() => undefined)}>
+      {loading ? (
+        <PageLoader label={w.loading} />
+      ) : subscriptions.length === 0 ? (
+        <>
+          {banners}
+          <PanelEmpty
+            action={
+              <Button
+                disabled={!enabled || enabling}
+                onClick={() => {
+                  setCreated(null)
+                  setCreateOpen(true)
+                }}
+                size="sm"
+              >
+                <Plus />
+                {w.newSubscription}
               </Button>
-            </DialogFooter>
-          </div>
-        ) : (
-          <form className="grid gap-4" onSubmit={handleSubmit}>
-            <Field htmlFor="webhook-name" label={S.nameLabel}>
-              <Input
-                autoFocus
-                id="webhook-name"
-                onChange={event => setName(event.target.value)}
-                placeholder={S.namePlaceholder}
-                value={name}
+            }
+            description={w.empty}
+            icon="globe"
+          />
+        </>
+      ) : (
+        <>
+          <PanelHeader subtitle={w.hint} title={w.subscriptions(subscriptions.length)} />
+          {banners}
+          <PanelBody>
+            <PanelList
+              onSearchChange={setQuery}
+              searchLabel={w.search}
+              searchPlaceholder={w.search}
+              searchValue={query}
+            >
+              {visible.map(sub => (
+                <PanelListRow
+                  active={selectedSub?.name === sub.name}
+                  dotClassName={sub.enabled ? 'bg-emerald-500' : 'bg-muted-foreground/50'}
+                  key={sub.name}
+                  menu={
+                    <PanelRowMenu
+                      items={[
+                        {
+                          icon: sub.enabled ? 'circle-slash' : 'check',
+                          label: sub.enabled ? w.disableRow : w.enableRow,
+                          onSelect: () => void handleToggle(sub.name, !sub.enabled)
+                        },
+                        { icon: 'trash', label: w.delete, onSelect: () => setPendingDelete(sub.name), tone: 'danger' }
+                      ]}
+                    />
+                  }
+                  onSelect={() => setSelectedName(sub.name)}
+                  title={sub.name}
+                />
+              ))}
+              {visible.length === 0 && <p className="px-2 py-4 text-center text-xs text-muted-foreground">{w.empty}</p>}
+              <PanelAddButton
+                label={w.newSubscription}
+                onClick={() => {
+                  setCreated(null)
+                  setCreateOpen(true)
+                }}
               />
-            </Field>
+            </PanelList>
 
-            <Field htmlFor="webhook-description" label={S.descriptionLabel} optional optionalLabel={S.descriptionLabelOptional}>
-              <Input
-                id="webhook-description"
-                onChange={event => setDescription(event.target.value)}
-                placeholder={S.descriptionPlaceholder}
-                value={description}
-              />
-            </Field>
+            {selectedSub ? <WebhookDetail sub={selectedSub} /> : <PanelEmpty description={w.empty} icon="search" />}
+          </PanelBody>
+        </>
+      )}
 
-            <Field htmlFor="webhook-events" label={S.eventsLabel} optional optionalLabel={S.eventsLabelOptional}>
-              <Input
-                id="webhook-events"
-                onChange={event => setEvents(event.target.value)}
-                placeholder={S.eventsPlaceholder}
-                value={events}
-              />
-            </Field>
+      {/* Create subscription dialog */}
+      <Dialog onOpenChange={open => !open && closeCreate()} open={createOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{created ? w.createdTitle : w.newSubscription}</DialogTitle>
+            {created && <DialogDescription>{w.createdSecretHint}</DialogDescription>}
+          </DialogHeader>
 
-            <div className="grid items-start gap-4 sm:grid-cols-2">
-              <Field htmlFor="webhook-deliver" label={S.deliverLabel}>
-                <Select onValueChange={setDeliver} value={deliver}>
-                  <SelectTrigger className="h-9 rounded-md" id="webhook-deliver">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DELIVERY_OPTIONS.map(option => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-
-              <Field label={S.deliverOnlyLabel}>
-                <label className="flex h-9 items-center gap-2 text-xs text-muted-foreground">
-                  <Switch
-                    aria-label={S.deliverOnlyLabel}
-                    checked={deliverOnly}
-                    onCheckedChange={setDeliverOnly}
-                    size="xs"
-                  />
-                  <span>{S.deliverOnlyHint}</span>
-                </label>
-              </Field>
+          {created ? (
+            <div className="grid gap-2">
+              <ListRow action={<CopyValueRow copyLabel={w.copy} value={created.url} />} title={w.webhookUrl} wide />
+              <ListRow action={<CopyValueRow copyLabel={w.copy} value={created.secret} />} title={w.secretOnce} wide />
+              <DialogFooter>
+                <Button onClick={closeCreate} size="sm">
+                  {w.done}
+                </Button>
+              </DialogFooter>
             </div>
-
-            <Field htmlFor="webhook-prompt" label={S.promptLabel} optional optionalLabel={S.promptLabelOptional}>
-              <Textarea
-                className="min-h-20 font-mono"
-                id="webhook-prompt"
-                onChange={event => setPrompt(event.target.value)}
-                placeholder={S.promptPlaceholder}
-                value={prompt}
-              />
-            </Field>
-
-            {error && (
-              <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                <span>{error}</span>
+          ) : (
+            <form
+              className="grid gap-4"
+              onSubmit={e => {
+                e.preventDefault()
+                void handleCreate()
+              }}
+            >
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                <Field htmlFor="webhook-name" label={w.fieldName}>
+                  <Input
+                    autoFocus
+                    id="webhook-name"
+                    onChange={e => setName(e.target.value)}
+                    placeholder={w.fieldNamePlaceholder}
+                    value={name}
+                  />
+                </Field>
+                <Field htmlFor="webhook-description" label={w.fieldDescription}>
+                  <Input
+                    id="webhook-description"
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder={w.fieldDescriptionPlaceholder}
+                    value={description}
+                  />
+                </Field>
               </div>
-            )}
 
-            <DialogFooter>
-              <Button disabled={creating} onClick={() => onOpenChange(false)} type="button" variant="outline">
-                {S.cancel}
-              </Button>
-              <Button disabled={creating} type="submit">
-                {creating ? S.creating : S.create}
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
+              <Field htmlFor="webhook-prompt" label={w.fieldPrompt}>
+                <Textarea
+                  className="min-h-24"
+                  id="webhook-prompt"
+                  onChange={e => setPrompt(e.target.value)}
+                  placeholder={w.fieldPromptPlaceholder}
+                  value={prompt}
+                />
+              </Field>
+
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                <Field htmlFor="webhook-events" label={w.fieldEvents}>
+                  <Input
+                    id="webhook-events"
+                    onChange={e => setEvents(e.target.value)}
+                    placeholder={w.fieldEventsPlaceholder}
+                    value={events}
+                  />
+                </Field>
+                <Field htmlFor="webhook-skills" label={w.fieldSkills}>
+                  <Input
+                    id="webhook-skills"
+                    onChange={e => setSkills(e.target.value)}
+                    placeholder={w.fieldSkillsPlaceholder}
+                    value={skills}
+                  />
+                </Field>
+              </div>
+
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                <Field htmlFor="webhook-deliver" label={w.fieldDeliver}>
+                  <Select onValueChange={setDeliver} value={deliver}>
+                    <SelectTrigger className="h-9 rounded-md" id="webhook-deliver">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DELIVER_OPTIONS.map(opt => (
+                        <SelectItem key={opt} value={opt}>
+                          {w.deliverOptions[opt] ?? opt}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field htmlFor="webhook-deliver-only" label={w.fieldDeliverOnly}>
+                  <div className="flex h-9 items-center">
+                    <Switch checked={deliverOnly} id="webhook-deliver-only" onCheckedChange={setDeliverOnly} />
+                  </div>
+                </Field>
+              </div>
+
+              <DialogFooter>
+                <Button disabled={creating} size="sm" type="submit">
+                  {creating ? w.creating : w.create}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        busyLabel={w.deleting}
+        cancelLabel={t.common.cancel}
+        confirmLabel={w.delete}
+        description={
+          pendingDelete ? (
+            <>
+              {w.deleteDescPrefix}
+              <span className="font-medium text-foreground">{pendingDelete}</span>
+              {w.deleteDescSuffix}
+            </>
+          ) : null
+        }
+        destructive
+        onClose={() => setPendingDelete(null)}
+        onConfirm={handleDelete}
+        open={pendingDelete !== null}
+        title={w.deleteTitle}
+      />
+    </Panel>
   )
 }
 
-function Field({
-  children,
-  htmlFor,
-  label,
-  optional,
-  optionalLabel
-}: {
-  children: React.ReactNode
-  htmlFor?: string
-  label: string
-  optional?: boolean
-  optionalLabel?: string
-}) {
+function WebhookDetail({ sub }: { sub: WebhookRoute }) {
+  const { t } = useI18n()
+  const w = t.webhooks
+
   return (
-    <div className="grid gap-1.5">
-      <label className="flex items-baseline gap-2 text-xs font-medium text-foreground" htmlFor={htmlFor}>
-        {label}
-        {optional && <span className="text-[0.65rem] font-normal text-muted-foreground">{optionalLabel}</span>}
-      </label>
-      {children}
-    </div>
+    <PanelDetail>
+      <header className="space-y-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h3 className="text-[0.95rem] font-semibold tracking-tight text-foreground">{sub.name}</h3>
+          {sub.deliver_only && <PanelPill tone="warn">{w.deliverOnly}</PanelPill>}
+        </div>
+
+        <PanelMeta
+          rows={[
+            { label: w.fieldDeliver, value: w.deliverOptions[sub.deliver] ?? sub.deliver },
+            {
+              label: w.fieldEvents,
+              value:
+                sub.events.length === 0 ? (
+                  w.all
+                ) : (
+                  <span className="flex flex-wrap gap-1">
+                    {sub.events.map(evt => (
+                      <PanelPill key={evt}>{evt}</PanelPill>
+                    ))}
+                  </span>
+                )
+            },
+            ...(sub.skills.length > 0
+              ? [
+                  {
+                    label: w.fieldSkills,
+                    value: (
+                      <span className="flex flex-wrap gap-1">
+                        {sub.skills.map(skill => (
+                          <PanelPill key={skill}>{skill}</PanelPill>
+                        ))}
+                      </span>
+                    )
+                  }
+                ]
+              : [])
+          ]}
+        />
+
+        <CopyValueRow copyLabel={w.copy} value={sub.url} />
+      </header>
+
+      {sub.description ? (
+        <div className="space-y-1.5">
+          <PanelSectionLabel>{w.fieldDescription}</PanelSectionLabel>
+          <p className="text-xs leading-relaxed text-foreground/80">{sub.description}</p>
+        </div>
+      ) : null}
+
+      {sub.prompt ? (
+        <div className="space-y-1.5">
+          <PanelSectionLabel>{w.fieldPrompt}</PanelSectionLabel>
+          <PanelBlock>{sub.prompt}</PanelBlock>
+        </div>
+      ) : null}
+    </PanelDetail>
   )
 }

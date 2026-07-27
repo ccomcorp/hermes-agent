@@ -1,23 +1,35 @@
 import { useStore } from '@nanostores/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, FileText, Layers, RefreshCw, Settings, Tag, XCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { ErrorState } from '@/components/ui/error-state'
 import { PageLoader } from '@/components/page-loader'
+import { Button } from '@/components/ui/button'
+import { Codicon } from '@/components/ui/codicon'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getDoxStatus, runDoxCheck } from '@/hermes'
 import { cn } from '@/lib/utils'
+import {
+  $projects,
+  $projectScope,
+  $projectTree,
+  ALL_PROJECTS,
+  projectWorkspacePath
+} from '@/store/projects'
 import { $currentCwd } from '@/store/session'
 import type { DoxProjectStatus } from '@/types/hermes.ts'
 
-// ── Health mapping (shared with existing panel) ────────────────────────────
-const TIER_HEALTH: Record<string, { label: string; cls: string; icon: typeof AlertTriangle }> = {
-  A: { label: 'Attention', cls: 'border-amber-500/40 text-amber-300', icon: AlertTriangle },
-  B: { label: 'Blocked', cls: 'border-red-500/40 text-red-300', icon: XCircle },
-  C: { label: 'Blocked', cls: 'border-red-500/40 text-red-300', icon: XCircle }
-}
+import {
+  Panel,
+  PanelAction,
+  PanelEmpty,
+  PanelHeader,
+  PanelMeta,
+  PanelPill,
+  type PanelPillTone,
+  PanelSectionLabel
+} from '../overlays/panel'
+
+// ── Display helpers ────────────────────────────────────────────────────────
 
 const MODE_LABELS: Record<string, string> = {
   code: 'Code',
@@ -25,178 +37,275 @@ const MODE_LABELS: Record<string, string> = {
   ops: 'Ops'
 }
 
-// ── Views ──────────────────────────────────────────────────────────────────
-
-function InactiveState({ projectPath }: { projectPath: string }) {
-  return (
-    <ErrorState
-      icon={<FileText className="size-10" />}
-      title="DocOps not configured"
-      description={
-        projectPath
-          ? `No docops.yml found under ${projectPath}.`
-          : 'No project selected. Open a working directory to check DocOps status.'
-      }
-    >
-      <p className="text-xs text-muted-foreground mt-2">
-        Run <code className="bg-muted px-1 rounded text-xs">hermes dox init</code> to set up DocOps for this project.
-      </p>
-    </ErrorState>
-  )
+function modeTone(mode: string | null | undefined): PanelPillTone {
+  if (!mode) return 'muted'
+  if (mode === 'code') return 'good'
+  if (mode === 'hybrid') return 'warn'
+  return 'muted'
 }
 
-function ErrorFetchView({ error }: { error: Error }) {
-  return (
-    <ErrorState
-      icon={<XCircle className="size-10" />}
-      title="Could not load DocOps status"
-      description={error.message}
-    />
-  )
+function tierTone(tier: string): PanelPillTone {
+  if (tier === 'A') return 'warn'
+  if (tier === 'B' || tier === 'C') return 'bad'
+  return 'muted'
 }
 
-function StatusBadge({ active, mode }: { active: boolean; mode: string | null }) {
-  if (!active || !mode) {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        Not initialized
-      </Badge>
-    )
-  }
-  return (
-    <Badge
-      className={cn(
-        'text-white border',
-        mode === 'code'
-          ? 'border-green-500/40 bg-green-900/40 text-green-300'
-          : mode === 'hybrid'
-            ? 'border-blue-500/40 bg-blue-900/40 text-blue-300'
-            : 'border-purple-500/40 bg-purple-900/40 text-purple-300'
-      )}
-    >
-      {MODE_LABELS[mode] ?? mode}
-    </Badge>
-  )
+function shortPath(path: string, max = 64): string {
+  if (path.length <= max) return path
+  return `…${path.slice(-(max - 1))}`
 }
 
-function LayerStatus({ layers }: { layers: DoxProjectStatus['layers'] }) {
-  const items = [
-    { key: 'contract', label: 'Contract', active: layers.contract },
-    { key: 'ledger', label: 'Ledger', active: layers.ledger },
-    { key: 'publish', label: 'Publish', active: layers.publish }
+// ── Status body ────────────────────────────────────────────────────────────
+
+function ActiveDocOpsBody({
+  checkError,
+  checkResult,
+  checkRunning,
+  onRunCheck,
+  status
+}: {
+  checkError: string | null
+  checkResult: null | { driftCount: number; exitCode: number; at: string }
+  checkRunning: boolean
+  onRunCheck: () => void
+  status: DoxProjectStatus
+}) {
+  const layers = [
+    { key: 'contract', label: 'Contract', active: status.layers.contract },
+    { key: 'ledger', label: 'Ledger', active: status.layers.ledger },
+    { key: 'publish', label: 'Publish', active: status.layers.publish }
   ]
-  return (
-    <div className="flex gap-3">
-      {items.map(item => {
-        const Icon = item.active ? CheckCircle2 : XCircle
-        return (
-          <div
-            key={item.key}
-            className={cn(
-              'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs',
-              item.active
-                ? 'border-green-500/30 text-green-300 bg-green-900/30'
-                : 'border-muted text-muted-foreground'
-            )}
-          >
-            <Icon className="size-3" />
-            {item.label}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
 
-function MarkersDisplay({ markers }: { markers: DoxProjectStatus['markers'] }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      <div
-        className={cn(
-          'flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs',
-          markers.docops_yml
-            ? 'border-green-500/30 text-green-300 bg-green-900/30'
-            : 'border-red-500/30 text-red-300 bg-red-900/30'
-        )}
-      >
-        {markers.docops_yml ? <CheckCircle2 className="size-3" /> : <XCircle className="size-3" />}
-        docops.yml
-      </div>
-      <div
-        className={cn(
-          'flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs',
-          markers.agents_md_header
-            ? 'border-green-500/30 text-green-300 bg-green-900/30'
-            : 'border-red-500/30 text-red-300 bg-red-900/30'
-        )}
-      >
-        {markers.agents_md_header ? <CheckCircle2 className="size-3" /> : <XCircle className="size-3" />}
-        AGENTS.md
-      </div>
-      {markers.structural.map(m => (
+    <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4 pr-1">
+      {checkError ? (
         <div
-          key={m}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs border-blue-500/30 text-blue-300 bg-blue-900/30"
+          className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          role="alert"
         >
-          <Tag className="size-3" />
-          {m}
+          <Codicon className="mt-0.5 shrink-0" name="error" size="0.875rem" />
+          <span className="min-w-0 break-words">{checkError}</span>
         </div>
-      ))}
-    </div>
-  )
-}
+      ) : null}
 
-function DriftView({ drift }: { drift: DoxProjectStatus['drift'] }) {
-  if (drift.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        No drift detected. Run <code className="bg-muted px-1 rounded text-xs">hermes do check</code> for a full analysis.
-      </p>
-    )
-  }
+      {checkResult && !checkError ? (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-lg border px-3 py-2 text-xs',
+            checkResult.driftCount === 0
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+          )}
+          role="status"
+        >
+          <Codicon
+            className="mt-0.5 shrink-0"
+            name={checkResult.driftCount === 0 ? 'pass-filled' : 'warning'}
+            size="0.875rem"
+          />
+          <span className="min-w-0 break-words">
+            {checkResult.driftCount === 0
+              ? `Check complete — no drift found. Documentation is in sync. (${checkResult.at})`
+              : `Check complete — ${checkResult.driftCount} item${checkResult.driftCount === 1 ? '' : 's'} need attention (see Drift below). (${checkResult.at})`}
+          </span>
+        </div>
+      ) : null}
 
-  return (
-    <div className="space-y-1">
-      {drift.map((item, i) => {
-        const health = TIER_HEALTH[item.tier]
-        const Icon = health?.icon ?? AlertTriangle
-        return (
-          <div
-            key={`${item.path}-${i}`}
-            className={cn(
-              'flex items-start gap-2 px-2.5 py-1.5 rounded border text-xs',
-              health?.cls ?? 'border-muted text-muted-foreground'
-            )}
+      <section className="space-y-2">
+        <PanelSectionLabel>Mode</PanelSectionLabel>
+        <div className="flex flex-wrap items-center gap-2">
+          <PanelPill tone={modeTone(status.mode)}>
+            {MODE_LABELS[status.mode ?? ''] ?? status.mode ?? 'Unknown'}
+          </PanelPill>
+          <PanelAction
+            disabled={checkRunning}
+            icon={checkRunning ? 'loading~spin' : 'debug-restart'}
+            onClick={onRunCheck}
           >
-            <Icon className="size-3 mt-0.5 shrink-0" />
-            <div className="min-w-0">
-              <span className="font-medium">{item.path}</span>
-              <span className="text-muted-foreground"> — {item.kind}</span>
-              {item.message && (
-                <span className="text-muted-foreground">: {item.message}</span>
-              )}
-            </div>
+            {checkRunning ? 'Checking…' : 'Run Check'}
+          </PanelAction>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Layers</PanelSectionLabel>
+        <div className="flex flex-wrap gap-1.5">
+          {layers.map(layer => (
+            <PanelPill key={layer.key} tone={layer.active ? 'good' : 'muted'}>
+              {layer.label}
+              {layer.active ? ' · on' : ' · off'}
+            </PanelPill>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Markers</PanelSectionLabel>
+        <div className="flex flex-wrap gap-1.5">
+          <PanelPill tone={status.markers.docops_yml ? 'good' : 'bad'}>docops.yml</PanelPill>
+          <PanelPill tone={status.markers.agents_md_header ? 'good' : 'bad'}>AGENTS.md</PanelPill>
+          {status.markers.structural.map(marker => (
+            <PanelPill key={marker} tone="muted">
+              {marker}
+            </PanelPill>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Drift</PanelSectionLabel>
+        {status.drift.length === 0 ? (
+          <div className="flex items-start gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2 text-xs text-emerald-400/90">
+            <Codicon className="mt-0.5 shrink-0" name="pass-filled" size="0.875rem" />
+            <span>
+              <span className="font-medium">No drift — documentation is in sync.</span> Every contract index,
+              ledger, and report pack matches its rules. Nothing to do here.
+            </span>
           </div>
-        )
-      })}
+        ) : (
+          <ul className="space-y-1.5">
+            {status.drift.map((item, i) => (
+              <li
+                key={`${item.path}-${item.kind}-${i}`}
+                className="flex items-start gap-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-xs"
+              >
+                <PanelPill tone={tierTone(item.tier)}>Tier {item.tier}</PanelPill>
+                <div className="min-w-0">
+                  <div className="font-medium text-foreground/90">{item.path}</div>
+                  <div className="text-muted-foreground/75">
+                    {item.kind}
+                    {item.message ? ` — ${item.message}` : ''}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Advisories</PanelSectionLabel>
+        <div className="flex items-center gap-2">
+          <PanelPill tone={status.pending_advisories > 0 ? 'warn' : 'muted'}>
+            {status.pending_advisories}
+          </PanelPill>
+          <span className="text-xs text-muted-foreground/80">pending</span>
+        </div>
+        <p className="text-xs leading-relaxed text-muted-foreground/70">
+          {status.pending_advisories > 0 ? (
+            <>
+              Reminders that files were edited in a DOX-aware project and their docs may need updating. This counter
+              is <span className="font-medium text-foreground/75">profile-wide</span> — it can include edits from
+              other projects/sessions, so it is not necessarily about this project. They clear automatically on the
+              next agent turn, or via <code className="rounded bg-foreground/5 px-1">hermes dox status</code>.
+            </>
+          ) : (
+            'No pending advisories. Edits in DOX-aware projects would appear here as reminders to update docs.'
+          )}
+        </p>
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Last publish</PanelSectionLabel>
+        {status.last_publish ? (
+          <PanelMeta
+            rows={[
+              { label: 'Pack', value: status.last_publish.pack },
+              { label: 'At', value: status.last_publish.at }
+            ]}
+          />
+        ) : (
+          <p className="text-xs text-muted-foreground/80">Never published</p>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <PanelSectionLabel>Actions</PanelSectionLabel>
+        <p className="text-xs leading-relaxed text-muted-foreground/75">
+          Status is read from the project root via <code className="rounded bg-foreground/5 px-1">hermes dox status</code>
+          . Checks run through the Desktop bridge (
+          <code className="rounded bg-foreground/5 px-1">POST /api/dox/check</code>
+          ). Scaffold with{' '}
+          <code className="rounded bg-foreground/5 px-1">hermes dox init --mode hybrid</code> when markers are missing.
+        </p>
+        <Button
+          aria-label="Run DocOps check"
+          className="gap-1.5"
+          disabled={checkRunning}
+          onClick={onRunCheck}
+          size="sm"
+          variant="secondary"
+        >
+          <Codicon name={checkRunning ? 'loading~spin' : 'check-all'} size="0.875rem" />
+          {checkRunning ? 'Checking…' : 'Run Check'}
+        </Button>
+      </section>
     </div>
   )
 }
 
-// ── Main Panel ─────────────────────────────────────────────────────────────
+// ── Main panel ─────────────────────────────────────────────────────────────
 
-export function DocOpsView({ onClose }: { onClose?: () => void }) {
+export function DocOpsView({ onClose }: { onClose: () => void }) {
   const currentCwd = useStore($currentCwd)
-  const projectPath = currentCwd?.trim() || ''
+  const projectScope = useStore($projectScope)
+  const projects = useStore($projects)
+  const projectTree = useStore($projectTree)
+
+  // Build the explicit project picker options: every project with a resolvable
+  // workspace path (tree path first, then the list's primary path), plus a
+  // "Current directory" fallback for loose / cwd-only sessions. DocOps no longer
+  // *guesses* which project you mean from ambient nav state — you pick it. The
+  // default selection still mirrors the scoped project (or cwd) so it "just
+  // works" when the ambient guess is right, but you can override.
+  const cwd = currentCwd?.trim() || ''
+  const projectOptions = useMemo(() => {
+    const opts: Array<{ id: string; label: string; path: string }> = []
+    const seen = new Set<string>()
+    for (const proj of projects) {
+      const treeNode = projectTree.find(node => node.id === proj.id)
+      const path = (
+        treeNode?.path
+        || treeNode?.repos.find(repo => repo.path)?.path
+        || projectWorkspacePath(proj)
+        || ''
+      ).trim()
+      if (path && !seen.has(proj.id)) {
+        seen.add(proj.id)
+        opts.push({ id: proj.id, label: proj.name || path, path })
+      }
+    }
+    opts.sort((a, b) => a.label.localeCompare(b.label))
+    return opts
+  }, [projects, projectTree])
+
+  // Default target from the sidebar-scoped project, else cwd.
+  const scopedPath = useMemo(() => {
+    if (projectScope && projectScope !== ALL_PROJECTS) {
+      const match = projectOptions.find(o => o.id === projectScope)
+      if (match) return match.path
+    }
+    return cwd
+  }, [projectScope, projectOptions, cwd])
+
+  // Explicit user override (via the picker). null = follow the default above.
+  const [selectedId, setSelectedId] = useState<null | string>(null)
+  const selectedOption = selectedId ? projectOptions.find(o => o.id === selectedId) : undefined
+  const projectPath = selectedOption?.path || (selectedId === '__cwd__' ? cwd : scopedPath)
+
   const queryClient = useQueryClient()
   const [checkRunning, setCheckRunning] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
+  // Result banner after a Run Check so the action is never silent.
+  const [checkResult, setCheckResult] = useState<null | { driftCount: number; exitCode: number; at: string }>(null)
 
   const {
     data: status,
     isLoading,
     error,
-    isError
+    isError,
+    refetch,
+    isFetching
   } = useQuery<DoxProjectStatus>({
     queryKey: ['dox', 'status', projectPath],
     queryFn: () => getDoxStatus(projectPath),
@@ -206,11 +315,15 @@ export function DocOpsView({ onClose }: { onClose?: () => void }) {
   })
 
   const handleRunCheck = async () => {
+    if (!projectPath) return
     setCheckRunning(true)
     setCheckError(null)
+    setCheckResult(null)
     try {
-      await runDoxCheck(projectPath)
-      // Refresh the status panel after a successful check
+      const report = await runDoxCheck(projectPath)
+      const driftCount = Array.isArray(report?.drift) ? report.drift.length : 0
+      const exitCode = typeof report?.exit_code === 'number' ? report.exit_code : 0
+      setCheckResult({ driftCount, exitCode, at: new Date().toLocaleTimeString() })
       await queryClient.invalidateQueries({ queryKey: ['dox', 'status', projectPath] })
     } catch (err) {
       setCheckError(err instanceof Error ? err.message : 'Check failed')
@@ -219,162 +332,112 @@ export function DocOpsView({ onClose }: { onClose?: () => void }) {
     }
   }
 
-  // No project selected
-  if (!projectPath) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <InactiveState projectPath="" />
-      </div>
-    )
+  const handleRefresh = () => {
+    setCheckError(null)
+    setCheckResult(null)
+    void refetch()
   }
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <PageLoader label="Loading DocOps status..." />
-      </div>
-    )
-  }
+  const subtitle = projectPath ? shortPath(projectPath) : 'No project selected'
+  // Current value for the picker: explicit override, else the scoped project id
+  // (so the dropdown reflects the ambient default), else the cwd sentinel.
+  const scopedId =
+    projectScope && projectScope !== ALL_PROJECTS && projectOptions.some(o => o.id === projectScope)
+      ? projectScope
+      : '__cwd__'
+  const pickerValue = selectedId ?? scopedId
+  const projectPicker =
+    projectOptions.length > 0 ? (
+      <Select onValueChange={setSelectedId} value={pickerValue}>
+        <SelectTrigger
+          aria-label="DocOps project"
+          className="h-7 max-w-[16rem] text-xs"
+          size="sm"
+        >
+          <span className="flex items-center gap-1.5 truncate">
+            <Codicon name="folder" size="0.875rem" />
+            <SelectValue placeholder="Select project" />
+          </span>
+        </SelectTrigger>
+        <SelectContent>
+          {cwd ? <SelectItem value="__cwd__">Current directory</SelectItem> : null}
+          {projectOptions.map(opt => (
+            <SelectItem key={opt.id} value={opt.id}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : null
 
-  // Error state
-  if (isError) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <ErrorFetchView error={error as Error} />
-      </div>
-    )
-  }
-
-  // Inactive project (no docops.yml)
-  if (!status?.active) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <InactiveState projectPath={projectPath} />
-      </div>
-    )
-  }
-
-  // Active project — render full panel
-  return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-        <div className="flex items-center gap-3">
-          <Settings className="size-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold tracking-tight">DocOps — {projectPath}</h2>
-          <StatusBadge active={status.active} mode={status.mode} />
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            aria-label="Run DocOps check"
-            disabled={checkRunning}
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      {projectPicker}
+      {projectPath ? (
+        <>
+          <PanelAction disabled={isFetching || checkRunning} icon="refresh" onClick={handleRefresh}>
+            Refresh
+          </PanelAction>
+          <PanelAction
+            disabled={checkRunning || !status?.active}
+            icon={checkRunning ? 'loading~spin' : 'check-all'}
             onClick={() => void handleRunCheck()}
-            size="xs"
-            variant="secondary"
           >
-            {checkRunning ? (
-              <>
-                <RefreshCw className="size-3 animate-spin" />
-                Checking…
-              </>
-            ) : (
-              <>
-                <RefreshCw className="size-3" />
-                Run Check
-              </>
-            )}
-          </Button>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-muted-foreground hover:text-foreground p-1 rounded"
-              aria-label="Close DocOps panel"
-            >
-              <XCircle className="size-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 overflow-auto p-5 space-y-5">
-        {/* Check error */}
-        {checkError && (
-          <div className="flex items-start gap-2 px-3 py-2 rounded border border-red-500/30 bg-red-900/20 text-red-300 text-xs">
-            <XCircle className="size-3 mt-0.5 shrink-0" />
-            <span>{checkError}</span>
-          </div>
-        )}
-
-        {/* Mode */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Mode
-          </h3>
-          <StatusBadge active={status.active} mode={status.mode} />
-        </section>
-
-        {/* Layers */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Layers className="size-3" /> Layers
-          </h3>
-          <LayerStatus layers={status.layers} />
-        </section>
-
-        {/* Markers */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Tag className="size-3" /> Markers
-          </h3>
-          <MarkersDisplay markers={status.markers} />
-        </section>
-
-        {/* Drift */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <AlertTriangle className="size-3" /> Drift
-          </h3>
-          <DriftView drift={status.drift} />
-        </section>
-
-        {/* Advisories */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Advisories
-          </h3>
-          <div className="flex items-center gap-2">
-            <Badge
-              className={
-                status.pending_advisories > 0
-                  ? 'border-amber-500/40 text-amber-300 bg-amber-900/30'
-                  : 'border-muted text-muted-foreground'
-              }
-            >
-              {status.pending_advisories}
-            </Badge>
-            <span className="text-xs text-muted-foreground">pending</span>
-          </div>
-        </section>
-
-        {/* Last Publish */}
-        <section>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Last Publish
-          </h3>
-          {status.last_publish ? (
-            <div className="flex items-center gap-2">
-              <Badge className="border-green-500/30 text-green-300 bg-green-900/30">
-                {status.last_publish.pack}
-              </Badge>
-              <span className="text-xs text-muted-foreground">{status.last_publish.at}</span>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">Never published</p>
-          )}
-        </section>
-      </div>
+            {checkRunning ? 'Checking…' : 'Run Check'}
+          </PanelAction>
+        </>
+      ) : null}
     </div>
+  )
+
+  // Always host inside Panel → OverlayView so DocOps is a card over the shell
+  // (sidebar + chat remain underneath), not a full-window surface. Esc / backdrop
+  // / titlebar X all dismiss via onClose.
+  return (
+    <Panel closeLabel="Close DocOps" onClose={onClose}>
+      <PanelHeader actions={headerActions} subtitle={subtitle} title="DocOps" />
+
+      {!projectPath ? (
+        <PanelEmpty
+          description="Open a working directory (project) first. DocOps status is scoped to the current project root."
+          icon="folder"
+          title="No project selected"
+        />
+      ) : isLoading ? (
+        <PageLoader aria-label="Loading DocOps status..." className="min-h-0 flex-1" label="Loading DocOps status..." />
+      ) : isError ? (
+        <PanelEmpty
+          action={
+            <Button onClick={handleRefresh} size="sm" variant="secondary">
+              Retry
+            </Button>
+          }
+          description={(error as Error)?.message || 'Unknown error loading DocOps status.'}
+          icon="warning"
+          title="Could not load DocOps status"
+        />
+      ) : !status?.active ? (
+        <PanelEmpty
+          description={
+            <>
+              No <code className="rounded bg-foreground/5 px-1">docops.yml</code> found under{' '}
+              <span className={cn('font-medium text-foreground/85')}>{projectPath}</span>. Run{' '}
+              <code className="rounded bg-foreground/5 px-1">hermes dox init</code> (code / ops / hybrid) to enable
+              living documentation for this project.
+            </>
+          }
+          icon="book"
+          title="DocOps not configured"
+        />
+      ) : (
+        <ActiveDocOpsBody
+          checkError={checkError}
+          checkResult={checkResult}
+          checkRunning={checkRunning}
+          onRunCheck={() => void handleRunCheck()}
+          status={status}
+        />
+      )}
+    </Panel>
   )
 }

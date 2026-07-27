@@ -14,7 +14,7 @@ const runDoxCheck = vi.fn()
 
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<typeof HermesApi>()),
-  getDoxStatus: () => getDoxStatus(),
+  getDoxStatus: (...args: unknown[]) => getDoxStatus(...args),
   runDoxCheck: (...args: unknown[]) => runDoxCheck(...args)
 }))
 
@@ -24,6 +24,19 @@ vi.mock('@/store/session', async importOriginal => {
   return {
     ...actual,
     $currentCwd: mockCwdAtom
+  }
+})
+
+const mockScopeAtom = atom<string>('__all_projects__')
+const mockProjects = atom<Array<{ id: string; name: string; primary_path?: string; folders?: unknown[] }>>([])
+const mockProjectTree = atom<Array<{ id: string; path?: string; repos: Array<{ path?: string }> }>>([])
+vi.mock('@/store/projects', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/store/projects')>()
+  return {
+    ...actual,
+    $projectScope: mockScopeAtom,
+    $projects: mockProjects,
+    $projectTree: mockProjectTree
   }
 })
 
@@ -48,11 +61,15 @@ function activeStatus(overrides: Partial<DoxProjectStatus> = {}): DoxProjectStat
 
 async function renderDocOps(client?: QueryClient) {
   const { DocOpsView } = await import('./index')
-  return render(
-    <QueryClientProvider client={client ?? new QueryClient()}>
-      <DocOpsView />
-    </QueryClientProvider>
-  )
+  const onClose = vi.fn()
+  return {
+    onClose,
+    ...render(
+      <QueryClientProvider client={client ?? new QueryClient()}>
+        <DocOpsView onClose={onClose} />
+      </QueryClientProvider>
+    )
+  }
 }
 
 // ── Setup / teardown ──────────────────────────────────────────────────────
@@ -60,6 +77,24 @@ async function renderDocOps(client?: QueryClient) {
 beforeEach(() => {
   getDoxStatus.mockResolvedValue(activeStatus())
   mockCwdAtom.set('/test-project')
+  mockScopeAtom.set('__all_projects__')
+  mockProjects.set([])
+  mockProjectTree.set([])
+  // jsdom does not implement scrollIntoView; Radix Select calls it when the
+  // listbox opens. Stub it so picker-interaction tests don't throw.
+  if (!(Element.prototype as { scrollIntoView?: unknown }).scrollIntoView) {
+    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+  }
+  // Radix also probes pointer-capture APIs jsdom lacks.
+  if (!(Element.prototype as { hasPointerCapture?: unknown }).hasPointerCapture) {
+    ;(Element.prototype as unknown as { hasPointerCapture: () => boolean }).hasPointerCapture = () => false
+  }
+  if (!(Element.prototype as { setPointerCapture?: unknown }).setPointerCapture) {
+    ;(Element.prototype as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {}
+  }
+  if (!(Element.prototype as { releasePointerCapture?: unknown }).releasePointerCapture) {
+    ;(Element.prototype as unknown as { releasePointerCapture: () => void }).releasePointerCapture = () => {}
+  }
 })
 
 afterEach(() => {
@@ -70,7 +105,18 @@ afterEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('DocOpsView', () => {
-  it('renders the project path in the header', async () => {
+  it('hosts content in OverlayView/Panel chrome (not a full-window surface)', async () => {
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByText('DocOps')).toBeDefined()
+    })
+
+    // OverlayView paints a fixed inset host; Panel wires onClose into it.
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+  })
+
+  it('renders the project path in the header subtitle', async () => {
     await renderDocOps()
 
     await waitFor(() => {
@@ -91,9 +137,9 @@ describe('DocOpsView', () => {
     await renderDocOps()
 
     await waitFor(() => {
-      expect(screen.getByText('Contract')).toBeDefined()
-      expect(screen.getByText('Ledger')).toBeDefined()
-      expect(screen.getByText('Publish')).toBeDefined()
+      expect(screen.getByText(/Contract/)).toBeDefined()
+      expect(screen.getByText(/Ledger/)).toBeDefined()
+      expect(screen.getByText(/Publish/)).toBeDefined()
     })
   })
 
@@ -140,8 +186,23 @@ describe('DocOpsView', () => {
 
     await waitFor(() => {
       expect(screen.getByText('DocOps not configured')).toBeDefined()
-      expect(screen.getByText(/No docops.yml found/)).toBeDefined()
+      expect(screen.getByText(/docops\.yml/)).toBeDefined()
     })
+
+    // Still dismissible via Panel chrome when inactive
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+  })
+
+  it('shows empty project state with Panel chrome', async () => {
+    mockCwdAtom.set('')
+    await renderDocOps()
+
+    await waitFor(() => {
+      // Title (PanelEmpty) + subtitle (PanelHeader) both carry this copy.
+      expect(screen.getAllByText('No project selected').length).toBeGreaterThanOrEqual(1)
+    })
+    expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+    expect(screen.getByText(/Open a working directory/)).toBeDefined()
   })
 
   it('shows drift items when present', async () => {
@@ -161,18 +222,18 @@ describe('DocOpsView', () => {
     })
   })
 
-  it('shows empty drift message when no drift', async () => {
+  it('shows an all-clear drift message when no drift', async () => {
     getDoxStatus.mockResolvedValue(activeStatus({ drift: [] }))
     await renderDocOps()
 
     await waitFor(() => {
-      expect(screen.getByText(/No drift detected/)).toBeDefined()
+      expect(screen.getByText(/documentation is in sync/i)).toBeDefined()
     })
   })
 
   // ── Run Check action ──────────────────────────────────────────────────
 
-  it('shows a "Run Check" button in the header', async () => {
+  it('shows a "Run Check" control', async () => {
     await renderDocOps()
 
     await waitFor(() => {
@@ -192,8 +253,7 @@ describe('DocOpsView', () => {
       expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
     })
 
-    const btn = screen.getByRole('button', { name: 'Run DocOps check' })
-    fireEvent.click(btn)
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
 
     await waitFor(() => {
       expect(runDoxCheck).toHaveBeenCalledWith('/test-project')
@@ -241,7 +301,6 @@ describe('DocOpsView', () => {
   })
 
   it('shows "Checking…" text while the check is running', async () => {
-    // Deferred promise so the button stays in loading state
     let resolveCheck: (value: DoxReport) => void
     const checkPromise = new Promise<DoxReport>(resolve => {
       resolveCheck = resolve
@@ -257,15 +316,174 @@ describe('DocOpsView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Checking…')).toBeDefined()
+      expect(screen.getAllByText('Checking…').length).toBeGreaterThanOrEqual(1)
     })
 
-    // Resolve the check and verify the button returns to normal
     resolveCheck!({ status: {} as DoxReport['status'], drift: [], exit_code: 0 })
 
     await waitFor(() => {
       expect(screen.queryByText('Checking…')).toBeNull()
-      expect(screen.getByText('Run Check')).toBeDefined()
+      expect(screen.getAllByText('Run Check').length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('invokes onClose when Close DocOps is clicked', async () => {
+    const { onClose } = await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close DocOps' })).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close DocOps' }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  // ── Target resolution: active project primary path vs cwd ─────────────
+  // Regression guard for the fix that made DocOps resolve the SELECTED
+  // project's workspace, not just the raw session cwd — so a session sitting
+  // in a subfolder still reports the dox-initialized project root.
+
+  it('prefers the scoped project path over the session cwd', async () => {
+    // cwd is a subfolder / parent root; the panel must target the scoped project.
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+    })
+  })
+
+  it('prefers the project tree path when present', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
+    mockProjectTree.set([{ id: 'p_azure', path: '/ws/Azure-tree', repos: [] }])
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure-list', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure-tree')
+    })
+  })
+
+  it('falls back to the session cwd when no project is scoped', async () => {
+    mockCwdAtom.set('/ws/loose-session')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([])
+    mockProjectTree.set([])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/loose-session')
+    })
+  })
+
+  // ── Explicit project picker ───────────────────────────────────────────
+
+  it('renders a project picker trigger listing the scoped project', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('p_azure')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never,
+      { id: 'p_teams', name: 'Teams', primary_path: '/ws/Teams', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    // Radix Select renders a button trigger (aria-label), not a native combobox.
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: 'DocOps project' })).toBeDefined()
+    })
+    // Default reflects the scoped project label.
+    expect(screen.getByText('Azure')).toBeDefined()
+    expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+  })
+
+  it('defaults to Current directory when no project is scoped', async () => {
+    mockCwdAtom.set('/ws/loose')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/loose')
+    })
+  })
+
+  it('queries the picked project path when the user selects one', async () => {
+    mockCwdAtom.set('/ws')
+    mockScopeAtom.set('__all_projects__')
+    mockProjects.set([
+      { id: 'p_azure', name: 'Azure', primary_path: '/ws/Azure', folders: [] } as never
+    ])
+
+    await renderDocOps()
+
+    const trigger = await screen.findByRole('combobox', { name: 'DocOps project' })
+    fireEvent.click(trigger)
+
+    const option = await screen.findByRole('option', { name: 'Azure' })
+    fireEvent.click(option)
+
+    await waitFor(() => {
+      expect(getDoxStatus).toHaveBeenCalledWith('/ws/Azure')
+    })
+  })
+
+  // ── Run Check feedback (no longer silent) ─────────────────────────────
+
+  it('shows an all-clear banner after a clean check', async () => {
+    runDoxCheck.mockResolvedValue({ status: {} as DoxReport['status'], drift: [], exit_code: 0 })
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Check complete — no drift found/)).toBeDefined()
+    })
+  })
+
+  it('shows a findings banner after a check with drift', async () => {
+    runDoxCheck.mockResolvedValue({
+      status: {} as DoxReport['status'],
+      drift: [
+        { tier: 'A', path: 'reports/x/report.html', kind: 'report_html_missing' },
+        { tier: 'A', path: 'reports/x/MANIFEST.json', kind: 'manifest_missing' }
+      ],
+      exit_code: 0
+    })
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Run DocOps check' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run DocOps check' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Check complete — 2 items need attention/)).toBeDefined()
+    })
+  })
+
+  it('explains the advisories counter is profile-wide', async () => {
+    getDoxStatus.mockResolvedValue(activeStatus({ pending_advisories: 3 }))
+    await renderDocOps()
+
+    await waitFor(() => {
+      expect(screen.getByText(/profile-wide/)).toBeDefined()
     })
   })
 })
