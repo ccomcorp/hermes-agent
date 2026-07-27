@@ -1825,6 +1825,44 @@ class TestMessageStorage:
         assert len(conv) == 1
         assert conv[0].get("codex_message_items") == items
 
+    def test_spoken_reply_persisted_and_restored(self, db):
+        """The TTS-ready reply must survive a session resume independently of display content."""
+        db.create_session(session_id="s1", source="desktop")
+        db.append_message(
+            "s1",
+            role="assistant",
+            content="A detailed written answer.",
+            spoken_reply="A concise spoken answer.",
+        )
+
+        rows = db.get_messages("s1")
+        assert rows[0]["spoken_reply"] == "A concise spoken answer."
+        assert "spoken_reply" not in db.get_messages_as_conversation("s1")[0]
+
+    def test_spoken_reply_column_reconciles_on_existing_database(self, tmp_path):
+        """Older desktop state DBs gain the column declaratively at their next open."""
+        from hermes_state import SCHEMA_SQL
+
+        db_path = tmp_path / "existing_state.db"
+        legacy_schema = SCHEMA_SQL.replace(
+            "    display_metadata TEXT,\n    spoken_reply TEXT\n",
+            "    display_metadata TEXT\n",
+        )
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(legacy_schema)
+        finally:
+            conn.close()
+
+        session_db = SessionDB(db_path=db_path)
+        try:
+            columns = {
+                row[1] for row in session_db._conn.execute("PRAGMA table_info(messages)")
+            }
+            assert "spoken_reply" in columns
+        finally:
+            session_db.close()
+
     def test_reasoning_not_set_for_non_assistant(self, db):
         """reasoning is never leaked onto user or tool messages."""
         db.create_session(session_id="s1", source="telegram")

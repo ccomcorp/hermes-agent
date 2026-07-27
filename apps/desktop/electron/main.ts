@@ -187,7 +187,8 @@ import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
   getVenvSitePackagesEntries,
-  resolveVenvHermesCommand
+  resolveVenvHermesCommand,
+  resolveVenvRoot
 } from './windows-hermes-path'
 import {
   buildWindowsInteractiveCommand,
@@ -2067,6 +2068,18 @@ function getVenvPython(venvRoot) {
   return path.join(venvRoot, IS_WINDOWS ? path.join('Scripts', 'python.exe') : path.join('bin', 'python'))
 }
 
+function resolvePythonVenvRoot(root) {
+  return resolveVenvRoot(
+    [path.join(root, '.venv'), path.join(root, 'venv')],
+    getVenvPython,
+    fileExists
+  )
+}
+
+function resolveActiveVenvRoot() {
+  return resolvePythonVenvRoot(ACTIVE_HERMES_ROOT)
+}
+
 // Windows console-window flashes are governed by the *parent's* console, not by
 // each child spawn. A GUI-subsystem parent (pythonw.exe) has no console, so every
 // console-subsystem child it spawns (git, gh, cmd, ...) must allocate its own —
@@ -3411,7 +3424,13 @@ function readBootstrapMarker() {
 // ever having written the bootstrap marker -- so we must be able to recognise
 // "already installed" off the filesystem alone, not just the marker.
 function isActiveRuntimeUsable() {
-  const venvPython = getVenvPython(VENV_ROOT)
+  const venvRoot = resolveActiveVenvRoot()
+
+  if (!venvRoot) {
+    return false
+  }
+
+  const venvPython = getVenvPython(venvRoot)
 
   return (
     isHermesSourceRoot(ACTIVE_HERMES_ROOT) &&
@@ -3637,7 +3656,7 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     return null
   }
 
-  const venvRoot = path.join(root, 'venv')
+  const venvRoot = resolvePythonVenvRoot(root) || path.join(root, 'venv')
   const venvPython = getVenvPython(venvRoot)
   const command = IS_WINDOWS && fileExists(venvPython) ? venvPython : python
 
@@ -3662,7 +3681,10 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
 // VENV_ROOT may not exist yet on first run; bootstrap=true tells
 // ensureRuntime() to create / refresh it before launch.
 function createActiveBackend(backendArgs) {
-  const venvPython = getVenvPython(VENV_ROOT)
+  // The managed runtime historically used `venv`, while source worktrees use
+  // `.venv`. Resolve one root once so the executable and environment agree.
+  const venvRoot = resolveActiveVenvRoot() || VENV_ROOT
+  const venvPython = getVenvPython(venvRoot)
   const command = fileExists(venvPython) ? venvPython : findSystemPython()
 
   return {
@@ -3672,8 +3694,8 @@ function createActiveBackend(backendArgs) {
     args: ['-m', 'hermes_cli.main', ...backendArgs],
     env: buildDesktopBackendEnv({
       hermesHome: HERMES_HOME,
-      pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
-      venvRoot: VENV_ROOT
+      pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(venvRoot)],
+      venvRoot
     }),
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
@@ -3977,9 +3999,10 @@ async function ensureRuntime(backend) {
     )
   }
 
-  const venvPython = getVenvPython(VENV_ROOT)
+  const venvRoot = resolveActiveVenvRoot()
+  const venvPython = venvRoot ? getVenvPython(venvRoot) : null
 
-  if (!fileExists(venvPython)) {
+  if (!venvPython || !fileExists(venvPython)) {
     // No venv at the expected location AND no bootstrap-needed sentinel
     // means we have a half-installed checkout: .git exists, source files
     // exist, but venv is missing or broken. This shouldn't happen in
@@ -3988,12 +4011,12 @@ async function ensureRuntime(backend) {
     // install.ps1 succeeds. If we hit this, the user (or a deleted venv)
     // broke the invariant; tell them to re-run the install.
     throw new Error(
-      `Hermes venv missing at ${VENV_ROOT}. Re-run the desktop installer or ` + '`scripts/install.ps1` to rebuild it.'
+      `Hermes venv missing at ${ACTIVE_HERMES_ROOT}. Re-run the desktop installer or ` + '`scripts/install.ps1` to rebuild it.'
     )
   }
 
-  backend.command = getVenvPython(VENV_ROOT)
-  backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`
+  backend.command = venvPython
+  backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${venvRoot})`
   updateBootProgress({
     phase: 'runtime.ready',
     message: 'Hermes runtime is ready',
@@ -10612,7 +10635,9 @@ ipcMain.handle('hermes:version', async () => ({
 // bundled agent), hiding the agent/full options when there's nothing to remove.
 
 function uninstallVenvPython() {
-  return getVenvPython(VENV_ROOT)
+  const venvRoot = resolveActiveVenvRoot()
+
+  return venvRoot ? getVenvPython(venvRoot) : getVenvPython(VENV_ROOT)
 }
 
 async function getUninstallSummary() {

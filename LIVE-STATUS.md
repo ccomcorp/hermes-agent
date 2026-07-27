@@ -3,7 +3,8 @@
 **Mode:** hybrid  
 **Root:** `D:\HeicH\hermes-agent`  
 **Home:** `D:\HeicH\hermes-home`  
-**Updated:** 2026-07-26 (Kanban C+D Slices 1–3 source-fixed/tested; non-primary memory fence source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
+**Updated:** 2026-07-26 (Kanban C+D Slices 1–3 source-fixed/tested; non-primary memory fence source-fixed/tested; Desktop backend/LSP recovery source-fixed/tested; clarify cancellation/Skip semantics fixed, tested, and built; packaged Desktop pack/restart pending)
+**Updated:** 2026-07-26 — WAL checkpoint close-path fix landed; Python venv resolution hardened; LSP diagnostic latch verified. All focused gates green (Python 41/41 + Desktop 24/24). Desktop repackaged; restart pending.
 
 ## Scoreboard
 
@@ -15,6 +16,8 @@
 | Desktop left-panel routing | **FIXED (source + built)** | Visible built-in sidebar rows now have route constants + mounted workspace/overlay surfaces + split-pane renderers; restart Desktop to load |
 | Clarify cancellation semantics | **FIXED (source + built)** | Stop/session.interrupt now produces `cancelled`, never Skip; first reply/cancel wins atomically; Python 226 + Desktop 40 focused tests and production build passed; pack/restart pending |
 | Desktop Windows checks | **TESTS GREEN / PACKAGE LOCKED** | `npm run check` now passes typecheck + all app tests (2775/4 skipped); `test:desktop:all` package step hits EBUSY because this live Desktop is running from `apps/desktop/release/win-unpacked` |
+| Desktop blank workspace / LSP logs | **SOURCE FIXED / RESTART PENDING** | Backend resolves the actual `.venv` interpreter instead of an unconfigured system Python; unsupported TypeScript pull diagnostics latch off after `-32601`. Desktop typecheck + 49 focused LSP tests green; package/restart still required. |
+| SQLite WAL checkpoint I/O error | **FIXED (source)** | `SessionDB.close()` skips TRUNCATE checkpoint for SQLite 3.51.0–3.51.2 (WAL-reset bug); commit-path keeps PASSIVE. 16 focused tests green. Desktop repackaged; restart pending. |
 | Composite + experience | **PASS** | 357 lessons; AIOS_PACKAGES_DIR wired |
 | Non-primary memory fence | **SOURCE FIXED** | cron/subagent/flush agents carry explicit lifecycle context; direct `memory` writes fenced before MEMORY/USER/provider mutation; focused gates green |
 | NeuroLinked | **PASS** | connected ADOLESCENT |

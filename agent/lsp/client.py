@@ -235,6 +235,9 @@ class LSPClient:
         self._docs: Dict[str, _DocState] = {}
         # Capability registrations — only diagnostic ones are tracked.
         self._diagnostic_registrations: Dict[str, Dict[str, Any]] = {}
+        # Latched: server returned -32601 for textDocument/diagnostic, so
+        # stop sending pull requests instead of retrying in a tight loop.
+        self._diagnostic_pull_disabled: bool = False
 
         # State machine
         self._state: str = "stopped"
@@ -818,6 +821,11 @@ class LSPClient:
         Silently no-ops on errors (server may not support the pull
         endpoint).
         """
+        # If the server already told us it doesn't support
+        # textDocument/diagnostic (-32601), don't spam it with more
+        # requests — the push (publishDiagnostics) path still works.
+        if self._diagnostic_pull_disabled:
+            return
         abs_path = os.path.abspath(path)
         doc = self._docs.get(abs_path)
         sent_version = doc.version if doc else -1
@@ -830,7 +838,21 @@ class LSPClient:
                 params,
                 timeout=DIAGNOSTICS_REQUEST_TIMEOUT,
             )
-        except (LSPRequestError, LSPProtocolError, asyncio.TimeoutError) as e:
+        except LSPRequestError as e:
+            if e.code == ERROR_METHOD_NOT_FOUND:
+                # Latch: this server will never answer the pull method.
+                # Stop retrying — the wait_for_diagnostics loop would
+                # otherwise fire this ~15×/s for the entire timeout budget.
+                self._diagnostic_pull_disabled = True
+                logger.debug(
+                    "[%s] server does not support textDocument/diagnostic "
+                    "(-32601); disabling pull diagnostics",
+                    self.server_id,
+                )
+            else:
+                logger.debug("[%s] document diagnostic pull failed: %s", self.server_id, e)
+            return
+        except (LSPProtocolError, asyncio.TimeoutError) as e:
             logger.debug("[%s] document diagnostic pull failed: %s", self.server_id, e)
             return
         if not isinstance(result, dict):

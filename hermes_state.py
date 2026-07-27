@@ -1202,7 +1202,8 @@ CREATE TABLE IF NOT EXISTS messages (
     compacted INTEGER NOT NULL DEFAULT 0,
     api_content TEXT,
     display_kind TEXT,
-    display_metadata TEXT
+    display_metadata TEXT,
+    spoken_reply TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_model_usage (
@@ -2545,15 +2546,19 @@ class SessionDB:
     def close(self):
         """Close the database connection.
 
-        Attempts a TRUNCATE WAL checkpoint first so that exiting processes
-        help shrink the WAL file.
+        On fixed SQLite builds, attempts a TRUNCATE WAL checkpoint first so
+        that exiting processes help shrink the WAL file. Vulnerable builds
+        skip explicit checkpointing: SessionDB is also used for short-lived
+        per-request connections, so a close is not necessarily process
+        shutdown and must not race another writer's WAL reset.
         """
         with self._lock:
             if self._conn:
-                try:
-                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception as exc:
-                    logger.debug("WAL checkpoint (TRUNCATE) at close failed: %s", exc)
+                if not is_sqlite_wal_reset_vulnerable():
+                    try:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception as exc:
+                        logger.debug("WAL checkpoint (TRUNCATE) at close failed: %s", exc)
                 self._conn.close()
                 self._conn = None
 
@@ -6416,6 +6421,7 @@ class SessionDB:
         api_content: Optional[str] = None,
         display_kind: Optional[str] = None,
         display_metadata: Optional[Dict[str, Any]] = None,
+        spoken_reply: Optional[str] = None,
         compression_lock_holder: Optional[str] = None,
     ) -> int:
         """
@@ -6509,8 +6515,8 @@ class SessionDB:
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, effect_disposition, timestamp, token_count, finish_reason,
                    reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
-                   codex_message_items, platform_message_id, observed, active, api_content, display_kind, display_metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   codex_message_items, platform_message_id, observed, active, api_content, display_kind, display_metadata, spoken_reply)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -6533,6 +6539,8 @@ class SessionDB:
                     _scrub_surrogates(api_content) if isinstance(api_content, str) else None,
                     _scrub_surrogates(display_kind) if isinstance(display_kind, str) else None,
                     display_metadata_json,
+                    _scrub_surrogates(spoken_reply)
+                    if role == "assistant" and isinstance(spoken_reply, str) else None,
                 ),
             )
             msg_id = cursor.lastrowid
@@ -6650,8 +6658,8 @@ class SessionDB:
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, effect_disposition, timestamp, token_count, finish_reason,
                    reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
-                   codex_message_items, platform_message_id, observed, active, api_content, display_kind, display_metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   codex_message_items, platform_message_id, observed, active, api_content, display_kind, display_metadata, spoken_reply)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -6674,6 +6682,8 @@ class SessionDB:
                     _scrub_surrogates(api_content) if isinstance(api_content, str) else None,
                     _scrub_surrogates(msg.get("display_kind")) if isinstance(msg.get("display_kind"), str) else None,
                     self._encode_display_metadata(msg.get("display_metadata")),
+                    _scrub_surrogates(msg.get("spoken_reply"))
+                    if role == "assistant" and isinstance(msg.get("spoken_reply"), str) else None,
                 ),
             )
             inserted += 1

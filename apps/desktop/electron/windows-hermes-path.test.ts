@@ -21,7 +21,8 @@ import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
   getVenvSitePackagesEntries,
-  resolveVenvHermesCommand
+  resolveVenvHermesCommand,
+  resolveVenvRoot
 } from './windows-hermes-path'
 
 test('buildPathExtCandidates: Windows tries PATHEXT extensions before the empty extension', () => {
@@ -146,6 +147,27 @@ test('resolveVenvHermesCommand: is case-insensitive on hermes.exe and the Script
 })
 
 // ── getVenvSitePackagesEntries ─────────────────────────────────────────────
+
+test('resolveVenvRoot: prefers a working .venv over a legacy venv directory', () => {
+  const pythonFor = (root: string) => `${root}\\Scripts\\python.exe`
+  const candidates = ['C:\\hermes-agent\\.venv', 'C:\\hermes-agent\\venv']
+
+  assert.equal(
+    resolveVenvRoot(candidates, pythonFor, python => python === 'C:\\hermes-agent\\.venv\\Scripts\\python.exe'),
+    'C:\\hermes-agent\\.venv'
+  )
+})
+
+test('resolveVenvRoot: falls back to the legacy venv and returns null without any interpreter', () => {
+  const pythonFor = (root: string) => `${root}\\Scripts\\python.exe`
+  const candidates = ['C:\\hermes-agent\\.venv', 'C:\\hermes-agent\\venv']
+
+  assert.equal(
+    resolveVenvRoot(candidates, pythonFor, python => python === 'C:\\hermes-agent\\venv\\Scripts\\python.exe'),
+    'C:\\hermes-agent\\venv'
+  )
+  assert.equal(resolveVenvRoot(candidates, pythonFor, () => false), null)
+})
 
 test('getVenvSitePackagesEntries: returns Lib/site-packages on Windows when it exists', () => {
   const expected = path.win32.join('C:\\venv', 'Lib', 'site-packages')

@@ -1452,8 +1452,10 @@ them into invariants before re-requesting review.
 | gateway/ | TODO: describe |
 | hermes_agent.egg-info/ | TODO: describe |
 | hermes_cli/ | TODO: describe |
+| infograficos/ | TODO: describe |
 | infographic/ | TODO: describe |
 | locales/ | TODO: describe |
+| mcp-research-data/ | TODO: describe |
 | native/ | TODO: describe |
 | nix/ | TODO: describe |
 | node_modules/ | TODO: describe |

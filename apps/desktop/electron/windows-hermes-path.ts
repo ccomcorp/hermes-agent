@@ -81,6 +81,19 @@ export function chooseUpdaterArgs(haveRealInstall: boolean, branch: string): str
 }
 
 /**
+ * Return the first venv root whose Python interpreter exists, or null when
+ * none do. Callers pass candidates in preference order (normally `.venv`
+ * before legacy `venv`) so the command and its environment agree.
+ */
+export function resolveVenvRoot(
+  candidates: readonly string[],
+  getVenvPython: (venvRoot: string) => string,
+  fileExists: (filePath: string) => boolean
+): string | null {
+  return candidates.find(venvRoot => Boolean(venvRoot) && fileExists(getVenvPython(venvRoot))) ?? null
+}
+
+/**
  * Resolve the site-packages directory entries for a Python venv.
  *
  * On Windows, venv layout is `<venvRoot>/Lib/site-packages`.

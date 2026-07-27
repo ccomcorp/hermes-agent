@@ -1,5 +1,19 @@
 # Session Log
 
+## 2026-07-26 — WAL checkpoint close-path mitigation + venv resolution hardening
+
+- **Root cause:** SQLite 3.51.0 ships with a known WAL-reset bug (documented at sqlite.org/wal.html#walresetbug) that causes `PRAGMA wal_checkpoint(TRUNCATE)` to fail with `disk I/O error` when another connection is resetting the WAL concurrently. The Desktop backend's crash-restart cycle on the blank-page bug triggered this race repeatedly, producing thousands of errors in agent.log.
+- **Fix:** `SessionDB.close()` now checks `is_sqlite_wal_reset_vulnerable()` (SQLite 3.51.0–3.51.2) and skips the TRUNCATE checkpoint entirely — the connection closes cleanly and the WAL file is left intact for the next writer's autocheckpoint. Periodic `_try_wal_checkpoint()` on the commit path continues using PASSIVE mode (safe under the WAL-reset bug). The connection-level `_try_wal_checkpoint` and `vacuum` TRUNCATE sites were audited and judged sufficient with PASSIVE fallbacks.
+- **Venv resolution:** `resolveVenvRoot()` export in `windows-hermes-path.ts` probes `.venv/` then legacy `venv/`, returning the first with a working Python interpreter. Five call sites in `main.ts` now use the resolved root so the Desktop backend picks up the correct interpreter and its site-packages.
+- **Gates:** Python WAL strategy 7/7 + gate 9/9 + message storage (spoken_reply) + LSP e2e/protocol/diagnostics/lifecycle **41 passed**; Desktop venv tests **24/24**; Desktop typecheck + changed-file ESLint green; staged production build at `release-next2/win-unpacked` (SHA-verified against dist output). Log review: 0 WAL TRUNCATE I/O errors in current log (prior errors were from the crash-restart cycle, now fixed by both the venv resolution and the WAL close-path guard).
+
+## 2026-07-26 — Desktop blank-workspace and LSP log-storm source repair
+
+- **Observed state:** reopening Desktop could leave a blank workspace while its backend restart loop logged missing PyYAML; separately, the TypeScript LSP logged repeated `-32601` unsupported `textDocument/diagnostic` errors.
+- **Source repair:** `createActiveBackend` now uses `findPythonForRoot(ACTIVE_HERMES_ROOT)` so `.venv` is preferred when present, and derives its environment entries from the resolved interpreter. The LSP client latches pull diagnostics off after `ERROR_METHOD_NOT_FOUND`, retaining normal push diagnostics without retry spam.
+- **Safety evidence:** Desktop typecheck passed; focused LSP client/protocol suites **49 passed**; doctor and SQLite-WAL suites **99 passed**. The exact fork doctor was run without `--fix` against `D:\HeicH\hermes-home`: it returned exit 0, found no security/MCP issues, and left config/state hashes unchanged. The same no-fix doctor against the Desktop AppData home exited 0 and left config unchanged, but its documented rolled-back state-db write-health probe changed SQLite file bytes; follow-up integrity and foreign-key checks passed, with 72 sessions and 8,332 messages intact.
+- **Operational state:** source changes are not in the packaged Electron app yet; pack/restart remains required. Do not run bare `hermes update` on this fork; assess fork/upstream divergence and use the gated update flow if an upgrade is separately approved.
+
 ## 2026-07-26 — Desktop queue drain stuck-forever fix
 
 - **Symptom:** On every Desktop restart, a "Queued message not sent" notification appeared alongside "image not found" errors for stale Snagit temp files. The stuck queue entry in localStorage kept retrying forever.

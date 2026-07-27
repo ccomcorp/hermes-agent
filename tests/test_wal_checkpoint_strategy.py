@@ -28,6 +28,11 @@ def db(tmp_path):
 class TestTryWalCheckpointPassive:
     """_try_wal_checkpoint() should use PASSIVE mode for periodic use."""
 
+    @pytest.fixture(autouse=True)
+    def _assume_fixed_sqlite(self, monkeypatch):
+        """These assertions cover the ordinary checkpoint policy after a runtime upgrade."""
+        monkeypatch.setattr("hermes_state.is_sqlite_wal_reset_vulnerable", lambda: False)
+
     def test_checkpoint_uses_passive_mode(self, db):
         """PASSIVE checkpoint does not require exclusive lock — safe for large DBs."""
         # Capture the real connection's execute before mocking
@@ -76,7 +81,12 @@ class TestTryWalCheckpointPassive:
 class TestCloseUsesTruncate:
     """close() should still use TRUNCATE to shrink WAL on shutdown."""
 
-    def test_close_uses_truncate_mode(self, db):
+    @pytest.fixture(autouse=True)
+    def _assume_fixed_sqlite(self, monkeypatch):
+        """The default tests exercise fixed SQLite; individual cases override this guard."""
+        monkeypatch.setattr("hermes_state.is_sqlite_wal_reset_vulnerable", lambda: False)
+
+    def test_close_uses_truncate_mode_on_fixed_sqlite(self, db, monkeypatch):
         """TRUNCATE at close is safe — no concurrent writers during shutdown."""
         real_conn = db._conn
         execute_calls = []
@@ -96,6 +106,17 @@ class TestCloseUsesTruncate:
             f"Expected 1 TRUNCATE checkpoint at close, got {len(truncate_calls)}"
         )
 
+    def test_close_skips_checkpoint_on_wal_reset_vulnerable_sqlite(self, db, monkeypatch):
+        """An existing WAL DB must not run a reset-capable checkpoint on SQLite 3.51.2 and older."""
+        monkeypatch.setattr("hermes_state.is_sqlite_wal_reset_vulnerable", lambda: True)
+        mock_conn = MagicMock()
+        db._conn = mock_conn
+
+        db.close()
+
+        mock_conn.execute.assert_not_called()
+        mock_conn.close.assert_called_once()
+
     def test_close_logs_debug_on_failure(self, db, caplog):
         """Failed TRUNCATE at close logs debug (not warning — close is best-effort)."""
         mock_conn = MagicMock()
@@ -106,9 +127,8 @@ class TestCloseUsesTruncate:
             db.close()
 
         assert any("WAL checkpoint (TRUNCATE) at close failed" in r.message for r in caplog.records), (
-            f"Expected debug log about TRUNCATE failure at close, got: {caplog.text}"
+            f"Expected debug log about TRUNCATE failure, got: {caplog.text}"
         )
-
 
 class TestCheckpointFrequency:
     """Checkpoint triggers every N writes."""
