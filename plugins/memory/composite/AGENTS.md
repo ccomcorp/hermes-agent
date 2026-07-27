@@ -25,6 +25,25 @@ register anything; the config key does.
   - `core/__init__.py` — public re-exports.
   - `core/tests/` — 29 B1 tests (ported from AIOS), all green.  B1 tests use a native
     `FakeStore` (M0-B1R — zero AIOS dependency).  Real store behavior belongs to B2.
+- **`experience_store/`** — M0-B2A: vendor-native experience engine (ported from AIOS
+  `packages/memory/experience-store/`). Zero `sys.path` hacks, zero AIOS dependency.
+  Self-contained SQLite + FTS5 store with schema, embedder, receipts, and the native
+  `ExperienceStore` class.
+  - `experience_store/store.py` — `ExperienceStore`: SQLite-backed engine with append,
+    recall (FTS5/BM25 + embedder re-rank), signal (non-constant by construction),
+    forget (tombstone), aggregate/circulation/valence-window health primitives.
+    Thread-safe (check_same_thread=False + RLock).
+  - `experience_store/schema.sql` — SQLite schema (lessons, lessons_fts, signals,
+    receipts tables). Idempotent `CREATE TABLE IF NOT EXISTS`.
+  - `experience_store/receipts.py` — `Receipt` dataclass + insert/get/mark_consumed.
+  - `experience_store/embed.py` — `Embedder` Protocol + `LexicalEmbedder` (hashing-
+    trick, zero numpy/third-party deps).
+  - `experience_store/fixture_harness.py` — Fail-closed bundle validation harness.
+    Requires an explicit operator-provided bundle with `manifest.json` (SHA-256 hashes
+    of all fixture files). Fails with `BACKUP_MISSING` / `FIXTURE_INVALID` /
+    `MANIFEST_PARSE_ERROR` BEFORE opening SQLite — never silent.
+  - `experience_store/tests/` — B2A preparation tests (4 native import + 7 fixture
+    harness = 11 tests), all green.
 - **`brain_http.py`** — `HttpBrainClient`, blocking-HTTP brain adapter.
 - **`__init__.py`** — plugin entry point.
 - **`tests/`** — chassis-side integration tests (brain staging, outcome signals, etc.).
