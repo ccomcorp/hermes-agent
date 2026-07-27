@@ -16,6 +16,7 @@ from .store import (
 )
 from .embed import Embedder, LexicalEmbedder
 from .receipts import Receipt, insert_receipt, get_receipt, mark_consumed
+from .health import ExperienceHealth, Flag, build_full_report, constraint_events_report
 
 __all__ = [
     "ExperienceStore",
@@ -30,4 +31,8 @@ __all__ = [
     "VALID_SOURCES",
     "VALID_DERIVATIONS",
     "RECALL_BUDGET_MS",
+    "ExperienceHealth",
+    "Flag",
+    "build_full_report",
+    "constraint_events_report",
 ]

@@ -63,14 +63,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-_HEALTH_DIR = os.environ.get("AIOS_HEALTH_DIR") or str(
-    _REPO_ROOT.parent / "aios" / "packages" / "health"
-)
-if os.path.isdir(_HEALTH_DIR) and _HEALTH_DIR not in sys.path:
-    sys.path.insert(0, _HEALTH_DIR)
-
 from agent.background_review import record_fork_authored_lessons  # noqa: E402
-from experience_health import ExperienceHealth  # noqa: E402
+from plugins.memory.composite.experience_store import ExperienceHealth  # noqa: E402
 from plugins.memory.composite.provider import (  # noqa: E402  (inserts AIOS pkgs)
     ExperienceStore,
     HermesCompositeProvider,
