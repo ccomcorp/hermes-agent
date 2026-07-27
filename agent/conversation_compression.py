@@ -1713,22 +1713,50 @@ def compress_context(
         # compacted=1), stay searchable and recoverable, so snapshot/durable
         # drift cannot lose data there and must not abort compaction.
         if not in_place and _lock_db is not None and _lock_sid:
-            durable_loader = getattr(
-                type(_lock_db), "get_messages_as_conversation", None
+            # A restored live history carries the greatest SQLite row id that
+            # contributed to its repaired snapshot.  Row id is the DB's actual
+            # insertion order (timestamps are explicitly non-monotonic); unlike
+            # a length comparison it still detects an appended same-role row that
+            # repair would merge back into the snapshot's length.
+            snapshot_row_id = max(
+                (
+                    row_id
+                    for message in messages
+                    if isinstance(message, dict)
+                    for row_id in [message.get("_db_row_id")]
+                    if isinstance(row_id, int) and not isinstance(row_id, bool) and row_id > 0
+                ),
+                default=0,
             )
-            if callable(durable_loader):
+            durable_newer = False
+            latest_row_id = getattr(type(_lock_db), "get_latest_active_message_row_id", None)
+            if snapshot_row_id and callable(latest_row_id):
+                durable_row_id = latest_row_id(_lock_db, _lock_sid)
+                durable_newer = isinstance(durable_row_id, int) and durable_row_id > snapshot_row_id
+
+            durable_loader = getattr(type(_lock_db), "get_messages_as_conversation", None)
+            if not durable_newer and callable(durable_loader):
                 durable_parent = durable_loader(_lock_db, _lock_sid)
-                if isinstance(durable_parent, list) and len(durable_parent) > len(messages):
-                    logger.warning(
-                        "compression aborted: session=%s changed before lease "
-                        "acquisition; preserving newer durable messages",
-                        _lock_sid,
-                    )
-                    _release_lock()
-                    existing_prompt = getattr(agent, "_cached_system_prompt", None)
-                    if not existing_prompt:
-                        existing_prompt = agent._build_system_prompt(system_message)
-                    return messages, existing_prompt
+                if isinstance(durable_parent, list):
+                    # Older restoration paths lack the private row-id watermark.
+                    # Preserve their existing repaired-length fallback.
+                    import copy as _copy
+                    from agent.agent_runtime_helpers import repair_message_sequence
+                    durable_repaired = _copy.deepcopy(durable_parent)
+                    repair_message_sequence(agent, durable_repaired)
+                    durable_newer = len(durable_repaired) > len(messages)
+
+            if durable_newer:
+                logger.warning(
+                    "compression aborted: session=%s changed before lease "
+                    "acquisition; preserving newer durable messages",
+                    _lock_sid,
+                )
+                _release_lock()
+                existing_prompt = getattr(agent, "_cached_system_prompt", None)
+                if not existing_prompt:
+                    existing_prompt = agent._build_system_prompt(system_message)
+                return messages, existing_prompt
 
         # Notify external memory provider before compression discards context.
         # The provider's on_pre_compress() may return a string of insights it

@@ -1696,3 +1696,188 @@ def test_lease_refresher_stops_on_persistent_raise() -> None:
     _no_sleep(refresher)
     refresher._run()  # must not propagate
     assert db.calls == refresher._max_consecutive_failures
+
+
+def test_repaired_snapshot_mismatch_does_not_abort_rotation(
+    tmp_path: Path,
+) -> None:
+    """A legitimately repaired resumed snapshot MUST NOT abort compression.
+
+    When a session resumes, the raw durable rows in state.db may contain
+    consecutive user messages and orphan tool rows that
+    ``repair_message_sequence`` merges/drops at runtime.  The runtime
+    snapshot (``messages``) is already repaired, so ``len(messages)`` is
+    smaller than the raw durable row count.  The pre-lease drift guard
+    must apply the same canonical repair to the durable parent before
+    comparing lengths — otherwise a harmless repair discrepancy
+    permanently wedges compression on every legitimately resumed session
+    (#RESUME-BUG live evidence: 20260726_134603_24b111 raw 321 → repaired
+    315, all compression aborted).
+    """
+    from agent.agent_runtime_helpers import repair_message_sequence
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    parent_sid = "REPAIRED_SNAPSHOT_OK"
+    db.create_session(parent_sid, source="webui")
+
+    # Build a durable transcript that repair will shrink: consecutive user
+    # rows that get merged, and an orphan tool that gets dropped.
+    db.append_message(parent_sid, "user", "first user message")
+    db.append_message(parent_sid, "user", "second user — will be merged")
+    db.append_message(
+        parent_sid, "assistant", "assistant reply",
+        tool_calls=[{"id": "tc_1", "type": "function",
+                     "function": {"name": "lookup", "arguments": "{}"}}],
+    )
+    db.append_message(parent_sid, "tool", "tool result", tool_call_id="tc_1")
+
+    # Now add an orphan tool that repair drops.
+    db.append_message(parent_sid, "assistant", "ok done")
+    db.append_message(parent_sid, "tool", "orphan — no matching tool_call",
+                      tool_call_id="orphan_id")
+
+    # Raw durable: 6 rows
+    raw_all = db.get_messages_as_conversation(parent_sid)
+    assert len(raw_all) == 6, f"expected 6 raw rows, got {len(raw_all)}"
+
+    # Build the runtime snapshot — already repaired by the agent's
+    # resume path.  repair_message_sequence merges consecutive users and
+    # drops the orphan tool, producing 4 messages.
+    snapshot = [
+        {"role": "user", "content": "first user message\nsecond user — will be merged"},
+        {"role": "assistant", "content": "assistant reply",
+         "tool_calls": [{"id": "tc_1", "type": "function",
+                         "function": {"name": "lookup", "arguments": "{}"}}]},
+        {"role": "tool", "content": "tool result", "tool_call_id": "tc_1"},
+        {"role": "assistant", "content": "ok done"},
+    ]
+
+    # Sanity: the snapshot IS the repaired form of the durable (4 vs 6).
+    durable_copy = [dict(m) for m in raw_all]
+    repair_message_sequence(None, durable_copy)
+    assert len(durable_copy) == len(snapshot) == 4, (
+        f"repaired durable {len(durable_copy)} != snapshot {len(snapshot)}"
+    )
+
+    agent = _build_agent_with_db(db, parent_sid)
+
+    returned, _system_prompt = agent._compress_context(
+        snapshot, "sys", approx_tokens=120_000
+    )
+
+    # Must NOT be the input snapshot — compression must have run.
+    assert returned is not snapshot, (
+        "compression incorrectly aborted on repair-driven length mismatch"
+    )
+    # A child session must have been created (rotation happened).
+    child = db.find_live_compression_child(parent_sid)
+    assert child is not None, "no compression child — rotation was blocked"
+    # The compressor must have been called.
+    agent.context_compressor.compress.assert_called_once()
+
+
+def test_genuinely_new_row_after_repair_still_aborts(tmp_path: Path) -> None:
+    """A genuinely new durable row that survives repair MUST still abort.
+
+    When the raw durable has MORE messages AND the repaired durable
+    still exceeds the snapshot, a real concurrent write happened — the
+    compressor must NOT publish from the stale snapshot.
+    """
+    from agent.agent_runtime_helpers import repair_message_sequence
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    parent_sid = "GENUINELY_NEW_ROW"
+    db.create_session(parent_sid, source="webui")
+
+    # Durable: 4 clean alternating messages.
+    db.append_message(parent_sid, "user", "msg 1")
+    db.append_message(parent_sid, "assistant", "reply 1")
+    db.append_message(parent_sid, "user", "msg 2")
+    db.append_message(parent_sid, "assistant", "reply 2")
+
+    raw_before = db.get_messages_as_conversation(parent_sid)
+    assert len(raw_before) == 4
+
+    # Snapshot taken NOW (4 messages — no repair discrepancy).
+    snapshot = [
+        {"role": "user", "content": "msg 1"},
+        {"role": "assistant", "content": "reply 1"},
+        {"role": "user", "content": "msg 2"},
+        {"role": "assistant", "content": "reply 2"},
+    ]
+
+    # After snapshot, a concurrent writer appends a genuinely new row.
+    db.append_message(parent_sid, "user", "concurrent write after snapshot")
+
+    raw_after = db.get_messages_as_conversation(parent_sid)
+    assert len(raw_after) == 5  # 4 + 1 new
+
+    # This row survives repair — it's a standalone user.
+    repaired_after = [dict(m) for m in raw_after]
+    repair_message_sequence(None, repaired_after)
+    assert len(repaired_after) == 5, (
+        "concurrent row must survive repair (not merged/dropped)"
+    )
+
+    agent = _build_agent_with_db(db, parent_sid)
+
+    returned, _system_prompt = agent._compress_context(
+        snapshot, "sys", approx_tokens=120_000
+    )
+
+    # Must abort — returned snapshot unchanged.
+    assert returned is snapshot, (
+        "compression must abort when durable has a genuinely new row"
+    )
+    assert agent.session_id == parent_sid
+    assert db.find_live_compression_child(parent_sid) is None
+    agent.context_compressor.compress.assert_not_called()
+
+
+def test_new_same_role_row_after_repair_still_aborts(tmp_path: Path) -> None:
+    """A later same-role durable row must not be hidden by canonical repair.
+
+    The repair step merges adjacent assistant rows.  A concurrent assistant
+    write therefore leaves the repaired durable transcript with the same
+    *length* as the stale snapshot, even though its SQLite row id is newer
+    and its content includes a turn the compressor never saw.  Rotation
+    must preserve that newer durable turn rather than treating the equal
+    repaired lengths as proof that the snapshot is current.
+    """
+    from agent.agent_runtime_helpers import repair_message_sequence
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    parent_sid = "NEW_SAME_ROLE_ROW"
+    db.create_session(parent_sid, source="webui")
+    db.append_message(parent_sid, "user", "msg 1", timestamp=1.0)
+    db.append_message(parent_sid, "assistant", "reply 1", timestamp=2.0)
+
+    # The runtime captured this clean snapshot with its private durable
+    # high-water mark before the writer appended another assistant row.
+    snapshot = db.get_messages_as_conversation(parent_sid, include_internal_row_ids=True)
+    assert [message["_db_row_id"] for message in snapshot] == [1, 2]
+
+    # A concurrent writer adds a same-role turn after the snapshot.  Canonical
+    # repair merges it into the preceding assistant turn, hiding the appended
+    # row from a length-only post-repair comparison.
+    db.append_message(parent_sid, "assistant", "concurrent reply", timestamp=3.0)
+    raw_after = db.get_messages_as_conversation(parent_sid)
+    repaired_after = [dict(message) for message in raw_after]
+    repair_message_sequence(None, repaired_after)
+    assert len(raw_after) == 3
+    assert len(repaired_after) == len(snapshot) == 2
+    assert repaired_after[-1]["content"] == "reply 1\nconcurrent reply"
+    assert db.get_latest_active_message_row_id(parent_sid) > snapshot[-1]["_db_row_id"]
+
+    agent = _build_agent_with_db(db, parent_sid)
+    returned, _system_prompt = agent._compress_context(
+        snapshot, "sys", approx_tokens=120_000
+    )
+
+    assert returned is snapshot, (
+        "compression must abort when a newer same-role durable row is merged "
+        "by repair"
+    )
+    assert agent.session_id == parent_sid
+    assert db.find_live_compression_child(parent_sid) is None
+    agent.context_compressor.compress.assert_not_called()

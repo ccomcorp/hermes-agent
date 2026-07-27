@@ -509,6 +509,16 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
 
     repairs = 0
 
+    def _carry_max_db_row_id(target: Dict, source: Dict) -> None:
+        """Keep the private durable high-water mark across a repaired merge."""
+        ids = [
+            value
+            for value in (target.get("_db_row_id"), source.get("_db_row_id"))
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ]
+        if ids:
+            target["_db_row_id"] = max(ids)
+
     # Pass 0: merge consecutive assistant messages. Runs BEFORE Pass 1 so
     # the merged turn's union of tool_call ids is known when Pass 1
     # validates which tool-result messages are orphans. Two assistant
@@ -548,6 +558,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             and not _is_codex_interim(collapsed[-1])
         ):
             prev = collapsed[-1]
+            _carry_max_db_row_id(prev, msg)
             # Verification candidate collapsing: when the earlier assistant
             # message is a provisional candidate (finish_reason =
             # verification_required / verify_hook_continue), the later
@@ -555,6 +566,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             # union. Both remain durable in state.db; this only affects the
             # in-memory sequence sent to the model. (#65919 §7)
             if _is_verification_candidate(prev):
+                _carry_max_db_row_id(msg, prev)
                 collapsed[-1] = msg
                 repairs += 1
                 continue
@@ -654,6 +666,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             and merged[-1].get("role") == "user"
         ):
             prev = merged[-1]
+            _carry_max_db_row_id(prev, msg)
             prev_content = prev.get("content", "")
             new_content = msg.get("content", "")
             # Only merge plain-text content; leave multimodal (list)

@@ -7193,12 +7193,23 @@ class SessionDB:
 
             return best if best is not None else session_id
 
+    def get_latest_active_message_row_id(self, session_id: str) -> int:
+        """Return the monotonic SQLite id of the newest active row for a session."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(id) AS row_id FROM messages WHERE session_id = ? AND active = 1",
+                (session_id,),
+            ).fetchone()
+        value = row["row_id"] if row is not None else None
+        return int(value) if isinstance(value, int) and value > 0 else 0
+
     def get_messages_as_conversation(
         self,
         session_id: str,
         include_ancestors: bool = False,
         include_inactive: bool = False,
         repair_alternation: bool = False,
+        include_internal_row_ids: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Load messages in the OpenAI conversation format (role + content dicts).
@@ -7226,7 +7237,7 @@ class SessionDB:
         with self._lock:
             placeholders = ",".join("?" for _ in session_ids)
             rows = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_calls, tool_name, effect_disposition, "
+                "SELECT id, role, content, tool_call_id, tool_calls, tool_name, effect_disposition, "
                 "finish_reason, reasoning, reasoning_content, reasoning_details, "
                 "codex_reasoning_items, codex_message_items, platform_message_id, observed, timestamp, "
                 "api_content, display_kind, display_metadata "
@@ -7248,6 +7259,7 @@ class SessionDB:
             session_id=session_id,
             include_ancestors=include_ancestors,
             repair_alternation=repair_alternation,
+            include_internal_row_ids=include_internal_row_ids,
         )
 
     # Columns every conversation projection decodes. Shared by
@@ -7267,6 +7279,7 @@ class SessionDB:
         session_id: str,
         include_ancestors: bool,
         repair_alternation: bool,
+        include_internal_row_ids: bool = False,
     ) -> List[Dict[str, Any]]:
         """Decode fetched message rows into the OpenAI conversation format.
 
@@ -7281,6 +7294,11 @@ class SessionDB:
             if row["role"] in {"user", "assistant"} and isinstance(content, str):
                 content = sanitize_context(content).strip()
             msg = {"role": row["role"], "content": content}
+            # The SQLite row id is a private optimistic-concurrency watermark,
+            # never a provider-facing message field.  It is opt-in because
+            # inspection/export callers expect the OpenAI-shaped projection.
+            if include_internal_row_ids:
+                msg["_db_row_id"] = row["id"]
             # api_content is the byte-fidelity sidecar: the exact string sent
             # to the API when it differed from the clean content. Returned
             # VERBATIM — no sanitize_context, no strip — because the replay
@@ -7400,7 +7418,7 @@ class SessionDB:
         with self._lock:
             placeholders = ",".join("?" for _ in session_ids)
             rows = self._conn.execute(
-                f"SELECT session_id, {self._CONVERSATION_ROW_COLUMNS} "
+                f"SELECT session_id, id, {self._CONVERSATION_ROW_COLUMNS} "
                 f"FROM messages WHERE session_id IN ({placeholders}) AND active = 1 "
                 # ORDER BY id (insertion order) — see get_messages_as_conversation
                 # for why timestamp ordering is unsafe.
@@ -7417,6 +7435,7 @@ class SessionDB:
             session_id=session_id,
             include_ancestors=False,
             repair_alternation=True,
+            include_internal_row_ids=True,
         )
         display_history = self._rows_to_conversation(
             rows,
