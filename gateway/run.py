@@ -21810,7 +21810,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # timeout. Returns the user's response, an internal session-cancel
             # control value, or explanatory text when no response arrives.
             # ------------------------------------------------------------------
-            def _clarify_callback_sync(question: str, choices) -> object:
+            def _clarify_callback_sync(question: str, choices, multi_select: bool = False) -> object:
                 from tools import clarify_gateway as _clarify_mod
                 import uuid as _uuid
 

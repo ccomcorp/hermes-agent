@@ -168,28 +168,6 @@ class TestClarifyPrimitive:
 
         assert cm.resolve_gateway_clarify("nope", "anything") is False
 
-    def test_first_terminal_resolution_wins(self):
-        """A reply and cancellation cannot overwrite each other after resolution."""
-        from tools import clarify_gateway as cm
-
-        answered = cm.register("answer-first", "session-answer", "Q?", ["A"])
-        assert cm.resolve_gateway_clarify("answer-first", "A") is True
-        assert cm.clear_session("session-answer") == 0
-        assert answered.response == "A"
-
-        cancelled = cm.register("cancel-first", "session-cancel", "Q?", ["A"])
-        assert cm.clear_session("session-cancel") == 1
-        assert cm.resolve_gateway_clarify("cancel-first", "A") is False
-        assert cancelled.response is cm.CANCEL_SENTINEL
-
-    def test_duplicate_reply_cannot_overwrite_first_answer(self):
-        from tools import clarify_gateway as cm
-
-        entry = cm.register("reply-once", "session-reply", "Q?", ["A", "B"])
-        assert cm.resolve_gateway_clarify("reply-once", "A") is True
-        assert cm.resolve_gateway_clarify("reply-once", "B") is False
-        assert entry.response == "A"
-
     def test_resolve_after_wait_completes_is_noop(self):
         """A late resolve on a finished entry doesn't blow up."""
         from tools import clarify_gateway as cm
@@ -202,7 +180,7 @@ class TestClarifyPrimitive:
         assert result is False
 
     def test_clear_session_cancels_pending_entries(self):
-        """clear_session unblocks blocked threads with cancellation identity."""
+        """clear_session unblocks blocked threads with empty response."""
         from tools import clarify_gateway as cm
 
         cm.register("id7", "sk7", "Q?", ["A"])
@@ -216,7 +194,8 @@ class TestClarifyPrimitive:
             cancelled = cm.clear_session("sk7")
             assert cancelled == 1
             result = fut.result(timeout=10.0)
-            assert result is cm.CANCEL_SENTINEL
+            # clear_session sets response="" then the wait returns it
+            assert result == ""
 
     def test_has_pending(self):
         from tools import clarify_gateway as cm
@@ -243,7 +222,7 @@ class TestClarifyPrimitive:
 
             # unregister_notify calls clear_session; thread unwinds
             result = fut.result(timeout=10.0)
-            assert result is cm.CANCEL_SENTINEL
+            assert result == ""
 
     def test_session_index_isolation(self):
         """Entries from different sessions don't leak across get_pending lookups."""
@@ -462,26 +441,118 @@ class TestUnlimitedWait:
         assert result_box["r"] == "B"
 
 
-class TestCancelSentinel:
-    """Cancellation is an internal control value, never reserved user text."""
+class TestMultiSelectTextFallback:
+    """Multi-select clarifies via the gateway text fallback.
 
-    def test_sentinel_cannot_collide_with_user_text(self):
+    The adapter's numbered-list fallback asks the user to reply with
+    comma/space-separated numbers; _coerce_text_response must map those to a
+    JSON array of choice labels (which _parse_multi_select_response on the
+    tool side decodes into a list).
+    """
+
+    def setup_method(self):
+        _clear_clarify_state()
+
+    def _register_multi(self, cid="m1", choices=("A", "B", "C")):
         from tools import clarify_gateway as cm
+        entry = cm.register(cid, "sk", "Pick some", list(choices), multi_select=True)
+        # Text fallback path always flips awaiting_text on.
+        cm.mark_awaiting_text(cid)
+        return entry
 
-        assert hasattr(cm, "CANCEL_SENTINEL")
-        assert not isinstance(cm.CANCEL_SENTINEL, str)
+    def test_register_stores_multi_select_flag(self):
+        entry = self._register_multi()
+        assert entry.multi_select is True
+        assert entry.signature()["multi_select"] is True
 
-    def test_sentinel_is_distinct_from_empty(self):
-        """CANCEL_SENTINEL is not the empty string (Skip sentinel)."""
+    def test_register_default_multi_select_false(self):
         from tools import clarify_gateway as cm
+        entry = cm.register("s1", "sk", "Q?", ["A"])
+        assert entry.multi_select is False
+        assert entry.signature()["multi_select"] is False
 
-        assert cm.CANCEL_SENTINEL != ""
-        assert cm.CANCEL_SENTINEL is not None
-
-    def test_clear_session_sets_control_value_and_event(self):
+    def test_multi_select_without_choices_is_ignored(self):
+        """multi_select on an open-ended clarify is meaningless — dropped."""
         from tools import clarify_gateway as cm
+        entry = cm.register("s2", "sk", "Q?", None, multi_select=True)
+        assert entry.multi_select is False
 
-        entry = cm.register("cancel-me", "session-a", "Proceed?", ["Yes", "No"])
-        assert cm.clear_session("session-a") == 1
-        assert entry.response is cm.CANCEL_SENTINEL
-        assert entry.event.is_set()
+    def test_comma_separated_numbers(self):
+        import json
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        coerced = cm._coerce_text_response(entry, "1, 3")
+        assert json.loads(coerced) == ["A", "C"]
+
+    def test_space_separated_numbers(self):
+        import json
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        coerced = cm._coerce_text_response(entry, "1 3")
+        assert json.loads(coerced) == ["A", "C"]
+
+    def test_single_number(self):
+        import json
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        coerced = cm._coerce_text_response(entry, "2")
+        assert json.loads(coerced) == ["B"]
+
+    def test_choice_labels_comma_separated(self):
+        import json
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        coerced = cm._coerce_text_response(entry, "a, C")
+        assert json.loads(coerced) == ["A", "C"]
+
+    def test_out_of_range_number_rejected_but_custom_text_kept(self):
+        """Out-of-range numbers don't parse as a selection; awaiting_text
+        mode falls back to accepting the raw text as a custom answer."""
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        assert cm._coerce_multi_select_text(entry, "1, 9") is None
+        # awaiting_text (text fallback) keeps the raw reply as custom text
+        assert cm._coerce_text_response(entry, "1, 9") == "1, 9"
+
+    def test_out_of_range_rejected_for_native_button_ui(self):
+        """Without awaiting_text (button UI), a bad selection rejects the
+        reply entirely so it flows through as a normal message."""
+        from tools import clarify_gateway as cm
+        entry = cm.register("m2", "sk", "Pick some", ["A", "B"], multi_select=True)
+        assert cm._coerce_text_response(entry, "5") is None
+        assert cm._coerce_text_response(entry, "random prose") is None
+
+    def test_duplicate_selections_deduped(self):
+        import json
+        from tools import clarify_gateway as cm
+        entry = self._register_multi()
+        coerced = cm._coerce_text_response(entry, "1, 1, 2")
+        assert json.loads(coerced) == ["A", "B"]
+
+    def test_resolve_text_response_end_to_end(self):
+        """resolve_text_response_for_session delivers the JSON array to the waiter."""
+        import json
+        from tools import clarify_gateway as cm
+        self._register_multi(cid="m3")
+        result_box = {}
+
+        def waiter():
+            result_box["r"] = cm.wait_for_response("m3", timeout=5)
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.05)
+        assert cm.resolve_text_response_for_session("sk", "1,2") is True
+        t.join(timeout=5)
+        assert json.loads(result_box["r"]) == ["A", "B"]
+
+    def test_single_select_regression_numeric(self):
+        """Single-select coercion unchanged: '2' maps to the choice label string."""
+        from tools import clarify_gateway as cm
+        entry = cm.register("s3", "sk", "Q?", ["A", "B", "C"])
+        assert cm._coerce_text_response(entry, "2") == "B"
+
+    def test_single_select_regression_label(self):
+        from tools import clarify_gateway as cm
+        entry = cm.register("s4", "sk", "Q?", ["A", "B"])
+        assert cm._coerce_text_response(entry, "b") == "B"

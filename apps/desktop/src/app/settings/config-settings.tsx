@@ -23,6 +23,7 @@ import { ProviderConfigPanel } from './memory/provider-config-panel'
 import { ModelSettings, ModelSettingsSkeleton } from './model-settings'
 import { RouteAdvisorControls } from './route-advisor-controls'
 import { EmptyState, SettingsContent, SettingsSkeleton, ToggleRow } from './primitives'
+import { QuickEntrySettings } from './quick-entry-settings'
 
 // On the Voice page, only surface the sub-fields of the *selected* TTS/STT
 // provider — otherwise every provider's options render at once (the "totally
@@ -298,8 +299,19 @@ export function ConfigSettings({
       )}
       {/* Device-local desktop pref (not config.yaml) — lives here since keeping
           the machine awake is a power-user knob. */}
+      {/* Device-local desktop prefs (not config.yaml) — they live here since
+          keeping the machine awake and the global Quick Entry chord are both
+          power-user, this-computer-only knobs. */}
       {activeSectionId === 'advanced' && (
-        <ToggleRow checked={keepAwake} description={c.keepAwakeDesc} label={c.keepAwakeTitle} onChange={setKeepAwake} />
+        <>
+          <ToggleRow
+            checked={keepAwake}
+            description={c.keepAwakeDesc}
+            label={c.keepAwakeTitle}
+            onChange={setKeepAwake}
+          />
+          <QuickEntrySettings />
+        </>
       )}
       {visibleFields.length === 0 ? (
         <EmptyState description={c.emptyDesc} title={c.emptyTitle} />

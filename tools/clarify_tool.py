@@ -56,19 +56,26 @@ def _flatten_choice(c) -> str:
 def clarify_tool(
     question: str,
     choices: Optional[List[str]] = None,
+    multi_select: bool = False,
     callback: Optional[Callable[[str, Optional[List[str]]], object]] = None,
 ) -> str:
     """
     Ask the user a question, optionally with multiple-choice options.
 
     Args:
-        question: The question text to present.
-        choices:  Up to 4 predefined answer choices. When omitted the
-                  question is purely open-ended.
-        callback: Platform-provided function that handles the actual UI
-                  interaction. It returns user text or an internal session-
-                  cancellation control value and is injected by the agent
-                  runner (cli.py / gateway).
+        question:     The question text to present.
+        choices:      Up to 4 predefined answer choices. When omitted the
+                      question is purely open-ended.
+        multi_select: When True, the user can select multiple choices
+                      (checkboxes).  The ``user_response`` in the output JSON
+                      will be a list of strings instead of a single string.
+                      Has no effect when ``choices`` is omitted.
+        callback:     Platform-provided function that handles the actual UI
+                      interaction.  Signature:
+                      ``callback(question, choices, multi_select=False) -> str``.
+                      The optional ``multi_select`` keyword is passed so the
+                      platform can render checkboxes instead of radio buttons.
+                      Injected by the agent runner (cli.py / gateway).
 
     Returns:
         JSON string with the user's response.
