@@ -23,8 +23,8 @@ register anything; the config key does.
   - `core/backends.py` — `BrainClient` + `VaultCache` Protocol interfaces, plus
     `BRAIN_OK`/`BRAIN_DEGRADED`/`BRAIN_FAIL` status constants.
   - `core/__init__.py` — public re-exports.
-  - `core/tests/` — 29 B1 tests (ported from AIOS), all green. Store leg is still
-    the AIOS experience-store (B2-to-port).
+  - `core/tests/` — 29 B1 tests (ported from AIOS), all green.  B1 tests use a native
+    `FakeStore` (M0-B1R — zero AIOS dependency).  Real store behavior belongs to B2.
 - **`brain_http.py`** — `HttpBrainClient`, blocking-HTTP brain adapter.
 - **`__init__.py`** — plugin entry point.
 - **`tests/`** — chassis-side integration tests (brain staging, outcome signals, etc.).
